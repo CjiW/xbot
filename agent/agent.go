@@ -207,6 +207,8 @@ type Agent struct {
 	sandboxIdleTimeout time.Duration    // 沙箱空闲超时（0 禁用）
 	directWorkspace    string           // 非空时 workspaceRoot() 直接返回此值（CLI 模式使用，取代 singleUser 的 workspace 短路）
 	maxConcurrency     int              // 最大并发会话处理数
+	globalSem          chan struct{}    // 全局并发信号量（SetMaxConcurrency 动态重建）
+	globalSemMu        sync.Mutex       // 保护 globalSem 替换
 	globalSkillDirs    []string         // 全局 skill 目录（宿主机路径）
 	agentsDir          string
 	xbotHome           string // global xbot config dir (e.g. ~/.xbot), used for mcp.json etc.
@@ -899,6 +901,10 @@ func (a *Agent) SetMaxConcurrency(n int) {
 	a.contextManagerMu.Lock()
 	a.maxConcurrency = n
 	a.contextManagerMu.Unlock()
+	// Rebuild global semaphore with new capacity
+	a.globalSemMu.Lock()
+	a.globalSem = make(chan struct{}, n)
+	a.globalSemMu.Unlock()
 }
 func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerMu.Lock()
@@ -920,6 +926,15 @@ func (a *Agent) getMaxConcurrency() int {
 	a.contextManagerMu.RLock()
 	defer a.contextManagerMu.RUnlock()
 	return a.maxConcurrency
+}
+
+// getGlobalSem returns the current global semaphore channel.
+// Must be called each time a semaphore is needed (not cached) so that
+// SetMaxConcurrency rebuilds take effect immediately.
+func (a *Agent) getGlobalSem() chan struct{} {
+	a.globalSemMu.Lock()
+	defer a.globalSemMu.Unlock()
+	return a.globalSem
 }
 
 func (a *Agent) getMaxContextTokens() int {
@@ -1100,6 +1115,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 
 	sem := make(chan struct{}, a.getMaxConcurrency())
+	a.globalSemMu.Lock()
+	a.globalSem = sem
+	a.globalSemMu.Unlock()
 
 	var mu sync.Mutex
 	chatQueues := make(map[string]chan bus.InboundMessage)
@@ -1116,9 +1134,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		q := make(chan bus.InboundMessage, 32)
 		chatQueues[key] = q
 
-		// 始终传入全局信号量，实际信号量在 chatWorker 内部动态选择
 		wg.Go(func() {
-			a.chatWorker(ctx, key, q, sem)
+			a.chatWorker(ctx, key, q)
 			mu.Lock()
 			delete(chatQueues, key)
 			mu.Unlock()
@@ -1261,7 +1278,8 @@ func (a *Agent) isGroupChat(msg bus.InboundMessage) bool {
 // getSemaphoreForMessage 获取消息应该使用的信号量
 // 私聊：用户有自定义 LLM 则使用独立信号量
 // 群聊：始终使用全局信号量（因为群里有多人，使用独立信号量会导致其他人的消息也被阻塞）
-func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan struct{}) chan struct{} {
+func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage) chan struct{} {
+	globalSem := a.getGlobalSem()
 	senderID := msg.SenderID
 	if senderID == "" {
 		return globalSem
@@ -1289,7 +1307,7 @@ func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan st
 //   - 普通消息：发送到内部 msgCh，由专门的 goroutine 串行处理（带信号量 + cancel）
 //
 // 这样即使普通消息正在长时间处理（LLM 推理），主循环仍能取出并执行命令消息。
-func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage) {
 	// 内部普通消息队列：主循环写入，processLoop 消费
 	msgCh := make(chan bus.InboundMessage, 32)
 
@@ -1297,7 +1315,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		a.chatProcessLoop(ctx, chatKey, msgCh, globalSem)
+		a.chatProcessLoop(ctx, chatKey, msgCh)
 	}()
 
 	for msg := range ch {
@@ -1358,7 +1376,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 }
 
 // chatProcessLoop 串行处理普通消息（非命令），带信号量控制和 per-request cancel 支持。
-func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage) {
 	var idleTimer *time.Timer
 	defer func() {
 		if idleTimer != nil {
@@ -1383,7 +1401,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			}
 		}
 
-		sem := a.getSemaphoreForMessage(msg, globalSem)
+		sem := a.getSemaphoreForMessage(msg)
 
 		select {
 		case sem <- struct{}{}:

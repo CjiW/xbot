@@ -504,6 +504,10 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 	if c.config.AgentMessages != nil {
 		c.model.agentMessagesFn = c.config.AgentMessages
 	}
+	// Wire sessions list callback
+	if c.config.SessionsList != nil {
+		c.model.sessionsListFn = c.config.SessionsList
+	}
 	// Wire usage query callback
 	if c.config.UsageQuery != nil {
 		c.model.usageQueryFn = c.config.UsageQuery

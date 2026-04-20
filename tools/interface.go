@@ -634,7 +634,7 @@ func DefaultRegistry(memoryProvider string) *Registry {
 	r.RegisterCore(&FileCreateTool{})
 	r.RegisterCore(&FileReplaceTool{})
 	r.RegisterCore(&SubAgentTool{})
-	// CreateChatTool — registered but returns "not implemented" for future use.
+	// CreateChatTool — creates agent private chats and moderated group chats.
 	r.RegisterCore(&CreateChatTool{})
 	r.RegisterCore(&SendMessageTool{})
 	r.RegisterCore(&SkillTool{})

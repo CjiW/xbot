@@ -624,6 +624,10 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 	if model != "" {
 		metadata["model"] = model
 	}
+	// Propagate parent's CWD so SubAgent inherits working directory
+	if parentCtx.CurrentDir != "" {
+		metadata["parent_cwd"] = parentCtx.CurrentDir
+	}
 
 	return bus.InboundMessage{
 		From: bus.NewIMAddress(a.channel, a.senderID),

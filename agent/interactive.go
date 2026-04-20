@@ -841,7 +841,7 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		workspaceRoot = "" // remote: no host paths
 	}
 
-	return &tools.ToolContext{
+	tc := &tools.ToolContext{
 		Ctx:                 ctx,
 		WorkingDir:          workspaceRoot, // empty for remote
 		WorkspaceRoot:       workspaceRoot,
@@ -861,6 +861,13 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		OriginUserID:        senderID,          // 原始用户 ID
 		SenderName:          msg.SenderName,
 	}
+	// Restore parent's CWD for SubAgent directory inheritance
+	if msg.Metadata != nil {
+		if cwd, ok := msg.Metadata["parent_cwd"]; ok && cwd != "" {
+			tc.CurrentDir = cwd
+		}
+	}
+	return tc
 }
 
 // GetActiveInteractiveRoles 返回当前 session 下所有活跃的 interactive SubAgent role 名（含 instance 标识）。

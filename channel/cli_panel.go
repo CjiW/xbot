@@ -16,41 +16,6 @@ import (
 
 // --- §12 Interactive Panel ---
 
-// getMainChatroomMessages returns recent messages from the main conversation
-// as formatted lines for the panel viewer.
-func (m *cliModel) getMainChatroomMessages() []string {
-	var lines []string
-	// Show last N messages from cached history
-	showCount := 20
-	start := len(m.messages) - showCount
-	if start < 0 {
-		start = 0
-	}
-	for i := start; i < len(m.messages); i++ {
-		msg := m.messages[i]
-		switch msg.role {
-		case "user":
-			content := msg.content
-			if runes := []rune(content); len(runes) > 80 {
-				content = string(runes[:77]) + "..."
-			}
-			content = strings.ReplaceAll(content, "\n", " ")
-			lines = append(lines, "👤 You: "+content)
-		case "assistant":
-			content := msg.content
-			if runes := []rune(content); len(runes) > 80 {
-				content = string(runes[:77]) + "..."
-			}
-			content = strings.ReplaceAll(content, "\n", " ")
-			lines = append(lines, "🤖 Agent: "+content)
-		}
-	}
-	if len(lines) == 0 {
-		lines = []string{"(no messages yet)"}
-	}
-	return lines
-}
-
 // formatSessionMessages formats SubAgent conversation messages for panel display.
 func (m *cliModel) formatSessionMessages(msgs []SessionChatMessage) []string {
 	var lines []string
@@ -516,7 +481,7 @@ func (m *cliModel) applyRewind() {
 	m.updateViewportContent()
 }
 
-// openBgTasksPanel opens the unified tasks & agents management panel.
+// openBgTasksPanel opens the background tasks management panel.
 func (m *cliModel) openBgTasksPanel() {
 	m.panelMode = "bgtasks"
 	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
@@ -528,19 +493,12 @@ func (m *cliModel) openBgTasksPanel() {
 		m.panelBgTasks = nil
 	}
 
-	// Fetch agents
-	if m.agentListFn != nil {
-		m.panelBgAgents = m.agentListFn()
-	} else {
-		m.panelBgAgents = nil
-	}
-
 	m.panelBgCursor = 0
 	m.panelBgViewing = false
 	m.panelScrollY = 0
 	m.panelBgLogLines = nil
 	// Clamp cursor
-	totalItems := len(m.panelBgTasks) + len(m.panelBgAgents)
+	totalItems := len(m.panelBgTasks)
 	if totalItems == 0 {
 		m.panelBgCursor = -1
 	} else if m.panelBgCursor >= totalItems {
@@ -555,12 +513,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	if m.channel != nil && m.channel.bgTaskMgr != nil {
 		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 	}
-	// Refresh agent list
-	if m.agentListFn != nil {
-		m.panelBgAgents = m.agentListFn()
-	}
-	// Total: 1 (main chatroom) + bg tasks + agents
-	totalItems := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
+	totalItems := len(m.panelBgTasks)
 
 	// Log viewing sub-mode
 	if m.panelBgViewing {
@@ -615,67 +568,22 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, nil
 
 	case msg.Code == tea.KeyEnter:
-		if m.panelBgCursor == 0 {
-			// Main ChatRoom: show recent messages from history
-			m.panelBgLogLines = m.getMainChatroomMessages()
-			m.panelBgViewing = true
-			m.panelScrollY = 0
-		} else if m.panelBgCursor > 0 && m.panelBgCursor <= len(m.panelBgTasks) {
+		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 			// Task entry: view output log
-			task := m.panelBgTasks[m.panelBgCursor-1]
+			task := m.panelBgTasks[m.panelBgCursor]
 			m.panelBgLogLines = splitLines(task.Output)
 			if len(m.panelBgLogLines) == 0 {
 				m.panelBgLogLines = []string{"(no output)"}
 			}
 			m.panelBgViewing = true
 			m.panelScrollY = 0
-		} else if m.panelBgAgents != nil {
-			// Agent entry: view conversation messages
-			agentIdx := m.panelBgCursor - 1 - len(m.panelBgTasks)
-			if agentIdx >= 0 && agentIdx < len(m.panelBgAgents) {
-				ag := m.panelBgAgents[agentIdx]
-				if m.agentMessagesFn != nil {
-					msgs := m.agentMessagesFn(ag.Role, ag.Instance)
-					if len(msgs) == 0 {
-						// Fallback to inspect
-						if m.agentInspectFn != nil {
-							result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
-							if err != nil {
-								m.panelBgLogLines = []string{"Error: " + err.Error()}
-							} else if result == "" {
-								m.panelBgLogLines = []string{"(no activity yet)"}
-							} else {
-								m.panelBgLogLines = splitLines(result)
-							}
-						} else {
-							m.panelBgLogLines = []string{"(no messages yet)"}
-						}
-					} else {
-						m.panelBgLogLines = m.formatSessionMessages(msgs)
-					}
-					m.panelBgViewing = true
-					m.panelScrollY = 0
-				} else if m.agentInspectFn != nil {
-					// Fallback to inspect
-					result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
-					if err != nil {
-						m.panelBgLogLines = []string{"Error: " + err.Error()}
-					} else if result == "" {
-						m.panelBgLogLines = []string{"(no activity yet)"}
-					} else {
-						m.panelBgLogLines = splitLines(result)
-					}
-					m.panelBgViewing = true
-					m.panelScrollY = 0
-				}
-			}
 		}
 		return true, m, nil
 
 	case msg.Code == tea.KeyDelete || msg.String() == "ctrl+d":
-		// Kill selected running task (skip index 0 = main chatroom)
-		if m.panelBgCursor > 0 && m.panelBgCursor <= len(m.panelBgTasks) {
-			task := m.panelBgTasks[m.panelBgCursor-1]
+		// Kill selected running task
+		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+			task := m.panelBgTasks[m.panelBgCursor]
 			if task.Status == tools.BgTaskRunning {
 				if m.channel != nil && m.channel.bgTaskMgr != nil {
 					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
@@ -684,18 +592,13 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 					}
 					// Refresh list after kill
 					m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
-					newTotal := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
+					newTotal := len(m.panelBgTasks)
 					if m.panelBgCursor >= newTotal {
-						m.panelBgCursor = newTotal - 1
+						m.panelBgCursor = max(0, newTotal-1)
 					}
 					return true, m, nil
 				}
 			}
-		}
-		// Agent entries: Del shows hint — agents are managed via SubAgent tool
-		if m.panelBgCursor >= len(m.panelBgTasks) {
-			m.showTempStatus("Use SubAgent action=\"unload\" or \"interrupt\" to control agents")
-			return true, m, m.clearTempStatusCmd()
 		}
 		return true, m, nil
 	}
@@ -711,8 +614,7 @@ func (m *cliModel) viewBgTasksPanel() string {
 	return m.viewBgTaskList()
 }
 
-// viewBgTaskList renders the unified ChatRoom list view.
-// Layout: [1 main chatroom] + [bg tasks] + [agent chatrooms]
+// viewBgTaskList renders the background task list view.
 func (m *cliModel) viewBgTaskList() string {
 	// §20 使用缓存样式
 	s := &m.styles
@@ -732,31 +634,13 @@ func (m *cliModel) viewBgTaskList() string {
 		contentW = 20
 	}
 
-	// Count: 1 (main) + bg tasks + agents
-	totalItems := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
-	idx := 0
+	totalItems := len(m.panelBgTasks)
 
 	if totalItems == 0 {
 		sb.WriteString(s.PanelEmpty.Render(m.locale.BgTasksEmpty))
 	} else {
-		// --- Main ChatRoom ---
-		{
-			prefix := "  "
-			if idx == m.panelBgCursor {
-				prefix = cursorStyle.Render("▸")
-			}
-			mainLabel := "👤 主会话  You ↔ Agent"
-			line := fmt.Sprintf("%s %s  %s",
-				prefix,
-				lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render("●"),
-				lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render(mainLabel),
-			)
-			sb.WriteString(truncateToWidth(line, contentW))
-			sb.WriteString("\n")
-			idx++
-		}
-
-		// --- Background Tasks ---
+		idx := 0
+		// Render tasks
 		for _, task := range m.panelBgTasks {
 			elapsed := time.Since(task.StartedAt).Round(time.Second)
 			if task.FinishedAt != nil {
@@ -797,65 +681,6 @@ func (m *cliModel) viewBgTaskList() string {
 			sb.WriteString("\n")
 			idx++
 		}
-
-		// --- Agent ChatRooms ---
-		for _, ag := range m.panelBgAgents {
-			statusIcon := "●"
-			roleColor := lipgloss.Color(RoleColor(ag.Role))
-			statusStyle := lipgloss.NewStyle().Foreground(roleColor)
-			if !ag.Running {
-				statusIcon = "◦"
-				statusStyle = statusStyle.Faint(true)
-			}
-
-			prefix := "  "
-			if idx == m.panelBgCursor {
-				prefix = cursorStyle.Render("▸")
-			}
-
-			label := fmt.Sprintf("🤖 %s/%s", ag.Role, ag.Instance)
-			if ag.Task != "" {
-				taskPreview := ag.Task
-				if runes := []rune(taskPreview); len(runes) > 35 {
-					taskPreview = string(runes[:32]) + "..."
-				}
-				taskPreview = strings.ReplaceAll(taskPreview, "\n", " ")
-				label = fmt.Sprintf("🤖 %s: %s", ag.Role, taskPreview)
-			}
-			labelW := contentW - 5
-			if labelW < 10 {
-				labelW = 10
-			}
-			label = truncateToWidth(label, labelW)
-
-			labelStyle := lipgloss.NewStyle().Foreground(roleColor)
-			if !ag.Running {
-				labelStyle = labelStyle.Faint(true)
-			}
-
-			line := fmt.Sprintf("%s %s  %s",
-				prefix,
-				statusStyle.Render(statusIcon),
-				labelStyle.Render(label),
-			)
-			sb.WriteString(truncateToWidth(line, contentW))
-			sb.WriteString("\n")
-			if ag.Preview != "" {
-				preview := strings.ReplaceAll(ag.Preview, "\n", " ")
-				preview = strings.TrimSpace(preview)
-				previewW := contentW - 4
-				if previewW < 10 {
-					previewW = 10
-				}
-				preview = truncateToWidth(preview, previewW)
-				previewStyle := s.PanelDesc
-				if !ag.Running {
-					previewStyle = previewStyle.Faint(true)
-				}
-				fmt.Fprintf(&sb, "    %s\n", previewStyle.Render(preview))
-			}
-			idx++
-		}
 	}
 
 	return sb.String()
@@ -873,18 +698,10 @@ func (m *cliModel) viewBgTaskLog() string {
 	}
 
 	var title string
-	if m.panelBgCursor == 0 {
-		title = "👤 主会话 You ↔ Agent"
-	} else if m.panelBgCursor > 0 && m.panelBgCursor <= len(m.panelBgTasks) {
-		task := m.panelBgTasks[m.panelBgCursor-1]
+	if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+		task := m.panelBgTasks[m.panelBgCursor]
 		cmd := truncateToWidth(task.Command, contentW-12)
 		title = fmt.Sprintf(m.locale.BgTaskLogTitle, task.ID, cmd)
-	} else if m.panelBgAgents != nil {
-		agentIdx := m.panelBgCursor - 1 - len(m.panelBgTasks)
-		if agentIdx >= 0 && agentIdx < len(m.panelBgAgents) {
-			ag := m.panelBgAgents[agentIdx]
-			title = fmt.Sprintf("🤖 %s/%s", ag.Role, ag.Instance)
-		}
 	}
 	help := s.PanelDesc.Render(m.locale.BgTaskLogHelp)
 
@@ -896,6 +713,242 @@ func (m *cliModel) viewBgTaskLog() string {
 
 	for _, line := range m.panelBgLogLines {
 		sb.WriteString(truncateToWidth(line, contentW))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// openSessionsPanel opens the sessions management panel.
+func (m *cliModel) openSessionsPanel() {
+	m.panelMode = "sessions"
+	m.relayoutViewport()
+
+	if m.sessionsListFn != nil {
+		m.panelSessionItems = m.sessionsListFn()
+	} else {
+		m.panelSessionItems = nil
+	}
+	m.panelSessionCursor = 0
+	m.panelSessionViewing = false
+	m.panelScrollY = 0
+}
+
+// updateSessionsPanel handles key events for the sessions panel.
+// Returns (handled, model, cmd).
+func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, tea.Cmd) {
+	switch {
+	case msg.Code == tea.KeyEsc:
+		if m.panelSessionViewing {
+			m.panelSessionViewing = false
+			m.panelScrollY = 0
+			return true, m, nil
+		}
+		m.panelMode = ""
+		m.panelSessionItems = nil
+		m.relayoutViewport()
+		return true, m, nil
+
+	case msg.Code == tea.KeyUp:
+		if !m.panelSessionViewing && m.panelSessionCursor > 0 {
+			m.panelSessionCursor--
+		}
+		return true, m, nil
+
+	case msg.Code == tea.KeyDown:
+		if !m.panelSessionViewing && m.panelSessionCursor < len(m.panelSessionItems)-1 {
+			m.panelSessionCursor++
+		}
+		return true, m, nil
+
+	case msg.Code == tea.KeyEnter:
+		if m.panelSessionViewing {
+			return true, m, nil
+		}
+		if m.panelSessionCursor >= 0 && m.panelSessionCursor < len(m.panelSessionItems) {
+			entry := m.panelSessionItems[m.panelSessionCursor]
+			switch entry.Type {
+			case "main":
+				// Switch to this chatroom
+				if entry.ID != m.chatID {
+					m.chatID = entry.ID
+					m.messages = nil
+					m.invalidateAllCache(false)
+					if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
+						m.suLoading = true
+						m.splashFrame = 0
+						return true, m, tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
+					}
+					m.showSystemMsg(fmt.Sprintf("✅ 已切换到会话: %s", entry.Label), feedbackInfo)
+				}
+			case "agent":
+				// View agent conversation messages
+				if m.agentMessagesFn != nil {
+					msgs := m.agentMessagesFn(entry.Role, entry.Instance)
+					if len(msgs) > 0 {
+						m.panelBgLogLines = m.formatSessionMessages(msgs)
+					} else if m.agentInspectFn != nil {
+						result, err := m.agentInspectFn(entry.Role, entry.Instance, 5)
+						if err != nil {
+							m.panelBgLogLines = []string{"Error: " + err.Error()}
+						} else if result == "" {
+							m.panelBgLogLines = []string{"(no activity yet)"}
+						} else {
+							m.panelBgLogLines = splitLines(result)
+						}
+					} else {
+						m.panelBgLogLines = []string{"(no messages yet)"}
+					}
+				} else {
+					m.panelBgLogLines = []string{"(agent messages not available)"}
+				}
+				m.panelSessionViewing = true
+				m.panelScrollY = 0
+			}
+		}
+		return true, m, nil
+
+	case msg.String() == "r":
+		// Refresh sessions list
+		if m.sessionsListFn != nil {
+			m.panelSessionItems = m.sessionsListFn()
+		}
+		return true, m, nil
+
+	case msg.String() == "x":
+		// Switch to selected session and close panel
+		if m.panelSessionCursor >= 0 && m.panelSessionCursor < len(m.panelSessionItems) {
+			entry := m.panelSessionItems[m.panelSessionCursor]
+			if entry.Type == "main" && entry.ID != m.chatID {
+				m.chatID = entry.ID
+				m.messages = nil
+				m.invalidateAllCache(false)
+			}
+		}
+		m.panelMode = ""
+		m.panelSessionItems = nil
+		m.relayoutViewport()
+		return true, m, nil
+	}
+	return false, m, nil
+}
+
+// viewSessionsPanel renders the sessions management panel.
+func (m *cliModel) viewSessionsPanel() string {
+	if m.panelSessionViewing {
+		return m.viewSessionsDetail()
+	}
+	return m.viewSessionsList()
+}
+
+// viewSessionsList renders the session list.
+func (m *cliModel) viewSessionsList() string {
+	s := &m.styles
+	cursorStyle := s.PanelCursor
+	header := s.PanelHeader.Render("Sessions")
+	help := s.PanelDesc.Render("↑↓ Navigate  Enter View/Switch  x Switch+Close  r Refresh  Esc Close")
+
+	var sb strings.Builder
+	sb.WriteString(header)
+	sb.WriteString("  ")
+	sb.WriteString(help)
+	sb.WriteString("\n")
+
+	contentW := m.width - 4
+	if contentW < 20 {
+		contentW = 20
+	}
+
+	if len(m.panelSessionItems) == 0 {
+		sb.WriteString(s.PanelEmpty.Render("(no active sessions)"))
+		return sb.String()
+	}
+
+	for i, entry := range m.panelSessionItems {
+		prefix := "  "
+		if i == m.panelSessionCursor {
+			prefix = cursorStyle.Render("▸")
+		}
+
+		var icon, line string
+		switch entry.Type {
+		case "main":
+			activeMark := ""
+			if entry.ID == m.chatID {
+				activeMark = " ✓"
+			}
+			icon = lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render("●")
+			label := entry.Label
+			if label == "" {
+				label = entry.ID
+			}
+			labelW := contentW - 6
+			if labelW < 10 {
+				labelW = 10
+			}
+			label = truncateToWidth(label, labelW)
+			line = fmt.Sprintf("%s %s  %s%s", prefix, icon, label, activeMark)
+		case "agent":
+			roleColor := lipgloss.Color(RoleColor(entry.Role))
+			statusIcon := "●"
+			statusStyle := lipgloss.NewStyle().Foreground(roleColor)
+			if !entry.Running {
+				statusIcon = "◦"
+				statusStyle = statusStyle.Faint(true)
+			}
+			label := fmt.Sprintf("🤖 %s/%s", entry.Role, entry.Instance)
+			if entry.MessageHint != "" {
+				hint := entry.MessageHint
+				if runes := []rune(hint); len(runes) > 35 {
+					hint = string(runes[:32]) + "..."
+				}
+				hint = strings.ReplaceAll(hint, "\n", " ")
+				label = fmt.Sprintf("🤖 %s: %s", entry.Role, hint)
+			}
+			labelW := contentW - 5
+			if labelW < 10 {
+				labelW = 10
+			}
+			label = truncateToWidth(label, labelW)
+			labelStyle := lipgloss.NewStyle().Foreground(roleColor)
+			if !entry.Running {
+				labelStyle = labelStyle.Faint(true)
+			}
+			line = fmt.Sprintf("%s %s  %s", prefix, statusStyle.Render(statusIcon), labelStyle.Render(label))
+		default:
+			line = fmt.Sprintf("%s   %s", prefix, entry.Label)
+		}
+		sb.WriteString(truncateToWidth(line, contentW))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// viewSessionsDetail renders the detail/log view for a selected session.
+func (m *cliModel) viewSessionsDetail() string {
+	s := &m.styles
+
+	var title string
+	if m.panelSessionCursor >= 0 && m.panelSessionCursor < len(m.panelSessionItems) {
+		entry := m.panelSessionItems[m.panelSessionCursor]
+		switch entry.Type {
+		case "main":
+			title = "👤 " + entry.Label
+		case "agent":
+			title = fmt.Sprintf("🤖 %s/%s", entry.Role, entry.Instance)
+		}
+	}
+	help := s.PanelDesc.Render("Esc Back")
+
+	var sb strings.Builder
+	sb.WriteString(s.PanelHeader.Render(title))
+	sb.WriteString("  ")
+	sb.WriteString(help)
+	sb.WriteString("\n")
+
+	for _, line := range m.panelBgLogLines {
+		sb.WriteString(line)
 		sb.WriteString("\n")
 	}
 
@@ -972,6 +1025,8 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 			return m.updateAskUserPanel(msg)
 		case "bgtasks":
 			return m.updateBgTasksPanel(msg)
+		case "sessions":
+			return m.updateSessionsPanel(msg)
 		case "danger":
 			return m.updateDangerPanel(msg)
 		case "runner":
@@ -1602,6 +1657,8 @@ func (m *cliModel) viewPanel() string {
 		raw = m.viewAskUserPanel()
 	case "bgtasks":
 		raw = m.viewBgTasksPanel()
+	case "sessions":
+		raw = m.viewSessionsPanel()
 	case "danger":
 		raw = m.viewDangerPanel()
 	case "runner":

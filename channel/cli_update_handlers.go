@@ -80,6 +80,13 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			return m, nil, true
 		}
 
+	case msg.String() == "ctrl+s":
+		// Ctrl+S: Open Sessions panel
+		if m.panelMode == "" && !m.typing {
+			m.openSessionsPanel()
+			return m, nil, true
+		}
+
 	case msg.String() == "ctrl+n":
 		// Cycle model (next in list)
 		// Uses Ctrl+N instead of Ctrl+M because Ctrl+M is indistinguishable
@@ -97,7 +104,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Text == "^":
-		if m.panelMode == "" && (m.bgTaskCount > 0 || m.agentCount > 0) && m.inputHistoryIdx == -1 {
+		if m.panelMode == "" && m.inputHistoryIdx == -1 {
 			m.openBgTasksPanel()
 			return m, nil, true
 		}

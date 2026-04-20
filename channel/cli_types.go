@@ -454,6 +454,7 @@ type CLIChannelConfig struct {
 	AgentInspect         func(roleName, instance string, tailCount int) (string, error)                                                 // 窥探 interactive agent 的最近活动（tail 风格）
 	AgentMessages        func(roleName, instance string) []SessionChatMessage                                                           // 获取 interactive agent 的对话消息
 	ChatCreateFn         func(channelName, senderID, label string) (string, error)                                                      // 创建新 ChatRoom（返回 chatID）
+	SessionsList         func() []SessionPanelEntry                                                                                     // 列出所有 session（main + subagent）
 }
 
 // AgentPanelEntry is the channel-layer representation of an interactive agent session for panel display.
@@ -464,6 +465,18 @@ type AgentPanelEntry struct {
 	Background bool
 	Task       string // one-shot subagent task (empty for interactive)
 	Preview    string // latest progress/last reply summary for panel display
+}
+
+// SessionPanelEntry represents a session item in the Sessions panel.
+type SessionPanelEntry struct {
+	ID          string // chatID or "agent:role/instance"
+	Type        string // "main" = main chatroom, "agent" = SubAgent session
+	Label       string // display label
+	Role        string // agent role (for agent type)
+	Instance    string // agent instance (for agent type)
+	ParentID    string // parent chatID (for agent type)
+	Running     bool   // true = currently active
+	MessageHint string // preview of last message
 }
 
 // ---------------------------------------------------------------------------

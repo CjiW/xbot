@@ -59,13 +59,25 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 				m.subGeneration++ // subscription actually changed
 				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
 			}
-			m.refreshCachedModelName()
+			// Update cached model name directly from the switch result
+			// (same pattern as model-switch case — avoids stale config/RPC reads)
+			if done.subModel != "" {
+				m.cachedModelName = done.subModel
+			} else {
+				m.refreshCachedModelName()
+			}
 		}
 		// If we came from the settings panel, re-open it so the user can continue editing
 		if returnToSettings {
 			m.openSettingsFromQuickSwitch()
 		}
-		return m, nil
+		// Drain pendingCmds (e.g. showTempStatus timer) — must not return nil cmds
+		var cmd tea.Cmd
+		if len(m.pendingCmds) > 0 {
+			cmd = tea.Batch(m.pendingCmds...)
+			m.pendingCmds = nil
+		}
+		return m, cmd
 	}
 
 	// Runner status change notification

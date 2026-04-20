@@ -618,20 +618,32 @@ func main() {
 			}
 			if v, ok := values["context_mode"]; ok && v != "" {
 				app.cfg.Agent.ContextMode = v
+				if app.backend != nil {
+					app.backend.SetContextMode(v)
+				}
 			}
 			if v, ok := values["max_iterations"]; ok {
 				if n, err := strconv.Atoi(v); err == nil && n > 0 {
 					app.cfg.Agent.MaxIterations = n
+					if app.backend != nil {
+						app.backend.SetMaxIterations(n)
+					}
 				}
 			}
 			if v, ok := values["max_concurrency"]; ok {
 				if n, err := strconv.Atoi(v); err == nil && n > 0 {
 					app.cfg.Agent.MaxConcurrency = n
+					if app.backend != nil {
+						app.backend.SetMaxConcurrency(n)
+					}
 				}
 			}
 			if v, ok := values["max_context_tokens"]; ok {
 				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 					app.cfg.Agent.MaxContextTokens = n
+					if app.backend != nil {
+						app.backend.SetMaxContextTokens(n)
+					}
 				}
 			}
 			if v, ok := values["max_output_tokens"]; ok {
@@ -844,6 +856,32 @@ func main() {
 				result[i] = channel.SessionChatMessage{Role: m.Role, Content: m.Content}
 			}
 			return result
+		},
+		SessionsList: func() []channel.SessionPanelEntry {
+			if app.backend == nil {
+				return nil
+			}
+			var entries []channel.SessionPanelEntry
+			// Main chatroom
+			entries = append(entries, channel.SessionPanelEntry{
+				ID:    absWorkDir,
+				Type:  "main",
+				Label: "主会话  You ↔ Agent",
+			})
+			// SubAgent sessions
+			sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
+			for _, s := range sessions {
+				entries = append(entries, channel.SessionPanelEntry{
+					ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
+					Type:        "agent",
+					Role:        s.Role,
+					Instance:    s.Instance,
+					ParentID:    absWorkDir,
+					Running:     s.Running,
+					MessageHint: s.Preview,
+				})
+			}
+			return entries
 		},
 	}
 

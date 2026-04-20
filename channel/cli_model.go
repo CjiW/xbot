@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"time"
 	"xbot/bus"
-	log "xbot/logger"
 	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
@@ -185,49 +184,13 @@ func (m *cliModel) updatePlaceholder() {
 	}
 }
 
-// cycleModel switches to the next active subscription.
-// If only one subscription exists, falls back to cycling models within it.
+// cycleModel switches to the next model within the current subscription.
 func (m *cliModel) cycleModel() {
 	if m.channel == nil {
 		return
 	}
 
-	// Prefer cycling through active subscriptions
-	if m.subscriptionMgr != nil && m.llmSubscriber != nil {
-		subs, err := m.subscriptionMgr.List(m.senderID)
-		if err == nil && len(subs) >= 2 {
-			// Find current default
-			def, _ := m.subscriptionMgr.GetDefault(m.senderID)
-			currentID := ""
-			if def != nil {
-				currentID = def.ID
-			}
-			// Cycle to next
-			nextIdx := 0
-			for i, s := range subs {
-				if s.ID == currentID {
-					nextIdx = (i + 1) % len(subs)
-					break
-				}
-			}
-			next := subs[nextIdx]
-			if err := m.llmSubscriber.SwitchSubscription(m.senderID, &next); err != nil {
-				m.showTempStatus(fmt.Sprintf("Switch failed: %v", err))
-				return
-			}
-			m.cachedModelName = next.Model
-			log.WithField("subscription", next.Name).WithField("model", next.Model).Info("cycleModel: switched subscription")
-			m.showTempStatus(fmt.Sprintf("%s (%s)", next.Name, next.Model))
-			m.updateQuickSwitchModels(next.Model)
-			return
-		}
-	}
-
-	// Fallback: cycle models within current subscription (single-sub setup)
-	if m.channel.modelLister == nil {
-		return
-	}
-	models := m.channel.modelLister.ListAllModels()
+	models := m.channel.modelLister.ListModels()
 	if len(models) < 2 {
 		m.showTempStatus("Only one model available")
 		return
@@ -345,6 +308,7 @@ type cliModel struct {
 	agentListFn     func() []panelAgentEntry                                       // callback to list active agents for panel
 	agentInspectFn  func(roleName, instance string, tailCount int) (string, error) // callback to inspect agent activity
 	agentMessagesFn func(roleName, instance string) []SessionChatMessage           // callback to get agent conversation messages
+	sessionsListFn  func() []SessionPanelEntry                                     // callback to list all sessions for Sessions panel
 
 	// --- Usage query ---
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
@@ -454,6 +418,11 @@ type cliModel struct {
 	panelBgViewing bool                    // true = viewing log of selected task
 
 	panelBgLogLines []string // cached log lines for viewing
+
+	// --- Sessions Panel ---
+	panelSessionItems   []SessionPanelEntry // cached session list
+	panelSessionCursor  int                 // selected item index
+	panelSessionViewing bool                // true = viewing session messages
 
 	// --- Danger Zone Panel ---
 	panelDangerItems   []dangerItem

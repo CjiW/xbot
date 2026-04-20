@@ -135,142 +135,140 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****"
 }
 
-func adminConfigSubscriptions(cfg *config.Config) []channel.Subscription {
-	result := make([]channel.Subscription, len(cfg.Subscriptions))
-	for i, s := range cfg.Subscriptions {
-		result[i] = channel.Subscription{
-			ID:       s.ID,
-			Name:     s.Name,
-			Provider: s.Provider,
-			BaseURL:  s.BaseURL,
-			APIKey:   maskAPIKey(s.APIKey),
-			Model:    s.Model,
-			Active:   s.Active,
-		}
+// createAdminLLM creates a new LLM client from the admin config.
+func createAdminLLM(cfg *config.Config) (llm_pkg.LLM, error) {
+	switch cfg.LLM.Provider {
+	case "openai":
+		return llm_pkg.NewOpenAILLM(llm_pkg.OpenAIConfig{
+			BaseURL:      cfg.LLM.BaseURL,
+			APIKey:       cfg.LLM.APIKey,
+			DefaultModel: cfg.LLM.Model,
+			MaxTokens:    cfg.LLM.MaxOutputTokens,
+		}), nil
+	case "anthropic":
+		return llm_pkg.NewAnthropicLLM(llm_pkg.AnthropicConfig{
+			BaseURL:      cfg.LLM.BaseURL,
+			APIKey:       cfg.LLM.APIKey,
+			DefaultModel: cfg.LLM.Model,
+			MaxTokens:    cfg.LLM.MaxOutputTokens,
+		}), nil
+	default:
+		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.LLM.Provider)
 	}
-	return result
 }
 
-func adminGetDefaultSubscription(cfg *config.Config) *channel.Subscription {
-	for _, s := range cfg.Subscriptions {
-		if s.Active {
-			return &channel.Subscription{
-				ID:       s.ID,
-				Name:     s.Name,
-				Provider: s.Provider,
-				BaseURL:  s.BaseURL,
-				APIKey:   maskAPIKey(s.APIKey),
-				Model:    s.Model,
-				Active:   true,
-			}
+func adminAddSubscription(cfg *config.Config, backend agent.AgentBackend, sub channel.Subscription) error {
+	subSvc := backend.LLMFactory().GetSubscriptionSvc()
+	if subSvc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	return subSvc.Add(&sqlite.LLMSubscription{
+		SenderID:  "admin",
+		Name:      sub.Name,
+		Provider:  sub.Provider,
+		BaseURL:   sub.BaseURL,
+		APIKey:    sub.APIKey,
+		Model:     sub.Model,
+		IsDefault: sub.Active,
+	})
+}
+
+func adminUpdateSubscription(cfg *config.Config, backend agent.AgentBackend, id string, sub channel.Subscription) error {
+	subSvc := backend.LLMFactory().GetSubscriptionSvc()
+	if subSvc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	existing, err := subSvc.Get(id)
+	if err != nil {
+		return fmt.Errorf("subscription %s not found: %w", id, err)
+	}
+	existing.Name = sub.Name
+	existing.Provider = sub.Provider
+	existing.BaseURL = sub.BaseURL
+	if !strings.HasSuffix(sub.APIKey, "****") {
+		existing.APIKey = sub.APIKey
+	}
+	existing.Model = sub.Model
+	if err := subSvc.Update(existing); err != nil {
+		return err
+	}
+	// If this is the default subscription, rebuild LLM client
+	if existing.IsDefault {
+		return rebuildLLMFromSubscription(cfg, backend, existing)
+	}
+	return nil
+}
+
+func adminRemoveSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
+	subSvc := backend.LLMFactory().GetSubscriptionSvc()
+	if subSvc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	return subSvc.Remove(id)
+}
+
+func adminSetDefaultSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
+	subSvc := backend.LLMFactory().GetSubscriptionSvc()
+	if subSvc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	if err := subSvc.SetDefault(id); err != nil {
+		return fmt.Errorf("set default subscription in DB: %w", err)
+	}
+	// Rebuild LLM client from the new default subscription
+	sub, err := subSvc.Get(id)
+	if err != nil {
+		return fmt.Errorf("get subscription: %w", err)
+	}
+	return rebuildLLMFromSubscription(cfg, backend, sub)
+}
+
+func adminRenameSubscription(cfg *config.Config, backend agent.AgentBackend, id, name string) error {
+	subSvc := backend.LLMFactory().GetSubscriptionSvc()
+	if subSvc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	return subSvc.Rename(id, name)
+}
+
+func adminSetSubscriptionModel(cfg *config.Config, backend agent.AgentBackend, id, model string) error {
+	subSvc := backend.LLMFactory().GetSubscriptionSvc()
+	if subSvc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	if err := subSvc.SetModel(id, model); err != nil {
+		return err
+	}
+	// If this is the default subscription, rebuild LLM client
+	def, _ := subSvc.GetDefault("admin")
+	if def != nil && def.ID == id {
+		sub, _ := subSvc.Get(id)
+		if sub != nil {
+			return rebuildLLMFromSubscription(cfg, backend, sub)
 		}
 	}
 	return nil
 }
 
-func syncLLMFromActiveAdminSub(cfg *config.Config) {
-	for _, sc := range cfg.Subscriptions {
-		if sc.Active {
-			cfg.LLM.Provider = sc.Provider
-			cfg.LLM.BaseURL = sc.BaseURL
-			cfg.LLM.APIKey = sc.APIKey
-			cfg.LLM.Model = sc.Model
-			cfg.LLM.MaxOutputTokens = sc.MaxOutputTokens
-			cfg.LLM.ThinkingMode = sc.ThinkingMode
-			return
-		}
+// rebuildLLMFromSubscription creates a new LLM client from a DB subscription
+// and sets it as the factory default.
+func rebuildLLMFromSubscription(cfg *config.Config, backend agent.AgentBackend, sub *sqlite.LLMSubscription) error {
+	// Temporarily set cfg.LLM from subscription for createAdminLLM
+	cfg.LLM.Provider = sub.Provider
+	cfg.LLM.BaseURL = sub.BaseURL
+	cfg.LLM.APIKey = sub.APIKey
+	cfg.LLM.Model = sub.Model
+	cfg.LLM.MaxOutputTokens = sub.MaxOutputTokens
+	newClient, err := createAdminLLM(cfg)
+	if err != nil {
+		return fmt.Errorf("create LLM from subscription: %w", err)
 	}
-}
-
-func persistAdminSubscriptions(cfg *config.Config, backend agent.AgentBackend) error {
-	syncLLMFromActiveAdminSub(cfg)
-	if backend.LLMFactory() != nil {
-		backend.LLMFactory().SetModelTiers(cfg.LLM)
-		backend.LLMFactory().Invalidate(adminSenderID)
+	if factory := backend.LLMFactory(); factory != nil {
+		factory.SetDefaults(newClient, sub.Model)
+		factory.SetModelTiers(cfg.LLM)
+		factory.Invalidate(adminSenderID)
 	}
-	return config.SaveToFile(config.ConfigFilePath(), cfg)
-}
-
-func adminAddSubscription(cfg *config.Config, backend agent.AgentBackend, sub channel.Subscription) error {
-	cfg.Subscriptions = append(cfg.Subscriptions, config.SubscriptionConfig{
-		ID:       sub.ID,
-		Name:     sub.Name,
-		Provider: sub.Provider,
-		BaseURL:  sub.BaseURL,
-		APIKey:   sub.APIKey,
-		Model:    sub.Model,
-		Active:   sub.Active,
-	})
-	return persistAdminSubscriptions(cfg, backend)
-}
-
-func adminUpdateSubscription(cfg *config.Config, backend agent.AgentBackend, id string, sub channel.Subscription) error {
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Name = sub.Name
-			cfg.Subscriptions[i].Provider = sub.Provider
-			cfg.Subscriptions[i].BaseURL = sub.BaseURL
-			if !strings.HasSuffix(sub.APIKey, "****") {
-				cfg.Subscriptions[i].APIKey = sub.APIKey
-			}
-			cfg.Subscriptions[i].Model = sub.Model
-			return persistAdminSubscriptions(cfg, backend)
-		}
-	}
-	return fmt.Errorf("subscription %s not found", id)
-}
-
-func adminRemoveSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
-	filtered := cfg.Subscriptions[:0]
-	removed := false
-	for _, s := range cfg.Subscriptions {
-		if s.ID == id {
-			removed = true
-			continue
-		}
-		filtered = append(filtered, s)
-	}
-	if !removed {
-		return fmt.Errorf("subscription %s not found", id)
-	}
-	cfg.Subscriptions = filtered
-	return persistAdminSubscriptions(cfg, backend)
-}
-
-func adminSetDefaultSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
-	found := false
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Active = true
-			found = true
-		} else {
-			cfg.Subscriptions[i].Active = false
-		}
-	}
-	if !found {
-		return fmt.Errorf("subscription %s not found", id)
-	}
-	return persistAdminSubscriptions(cfg, backend)
-}
-
-func adminRenameSubscription(cfg *config.Config, backend agent.AgentBackend, id, name string) error {
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Name = name
-			return persistAdminSubscriptions(cfg, backend)
-		}
-	}
-	return fmt.Errorf("subscription %s not found", id)
-}
-
-func adminSetSubscriptionModel(cfg *config.Config, backend agent.AgentBackend, id, model string) error {
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Model = model
-			return persistAdminSubscriptions(cfg, backend)
-		}
-	}
-	return fmt.Errorf("subscription %s not found", id)
+	return nil
 }
 
 // handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
@@ -390,7 +388,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 	case "get_default_model":
 		model := ""
 		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
-			if sub, err := subSvc.GetDefault(senderID); err == nil && sub != nil && sub.Model != "" {
+			effectiveSenderID := senderID
+			if isAdmin(senderID) {
+				effectiveSenderID = "admin"
+			}
+			if sub, err := subSvc.GetDefault(effectiveSenderID); err == nil && sub != nil && sub.Model != "" {
 				model = sub.Model
 			}
 		}
@@ -746,9 +748,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 
 		// --- Subscriptions ---
 	case "list_subscriptions":
-		if isAdmin(senderID) {
-			return json.Marshal(adminConfigSubscriptions(cfg))
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -756,7 +755,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return json.Marshal([]channel.Subscription{})
 		}
-		subs, err := svc.List(senderID)
+		effectiveSenderID := senderID
+		if isAdmin(senderID) {
+			effectiveSenderID = "admin"
+		}
+		subs, err := svc.List(effectiveSenderID)
 		if err != nil {
 			return nil, err
 		}
@@ -770,9 +773,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(result)
 	case "get_default_subscription":
-		if isAdmin(senderID) {
-			return json.Marshal(adminGetDefaultSubscription(cfg))
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -780,7 +780,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, nil
 		}
-		sub, err := svc.GetDefault(senderID)
+		effectiveSenderID := senderID
+		if isAdmin(senderID) {
+			effectiveSenderID = "admin"
+		}
+		sub, err := svc.GetDefault(effectiveSenderID)
 		if err != nil || sub == nil {
 			return nil, err
 		}

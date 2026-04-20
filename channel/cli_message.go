@@ -466,14 +466,11 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		}
 
 	case "/su":
-		// /su — Enhanced session switching:
-		//   /su                    — 切回默认身份
-		//   /su <userID>           — 切换到指定用户身份（同 channel）
-		//   /su chat:new           — 创建新 ChatRoom
-		//   /su chat:<chatID>      — 切换到指定 ChatRoom
-		//   /su web:<senderID>:<token> — 切换到 Web 端用户（需凭证）
+		// /su — Switch user identity:
+		//   /su          — 切回默认身份
+		//   /su <userID> — 切换到指定用户身份
+		//   /su web:<senderID>[:<token>] — 切换到 Web 端用户
 		if len(parts) < 2 {
-			// 无参数：切回默认身份
 			if m.senderID == "cli_user" {
 				m.showSystemMsg(m.locale.SuAlreadyDefault, feedbackInfo)
 				return nil
@@ -482,55 +479,17 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			m.chatID = m.defaultChatID
 		} else {
 			arg := strings.TrimSpace(parts[1])
-
-			switch {
-			case arg == "new" || arg == "chat:new":
-				// Create a new ChatRoom
-				if m.channel != nil && m.channel.config.ChatCreateFn != nil {
-					label := ""
-					if len(parts) > 2 {
-						label = strings.Join(parts[2:], " ")
-					}
-					chatID, err := m.channel.config.ChatCreateFn(m.channelName, m.defaultChatID, label)
-					if err != nil {
-						m.showSystemMsg("创建失败: "+err.Error(), feedbackInfo)
-						return nil
-					}
-					m.chatID = chatID
-					m.showSystemMsg(fmt.Sprintf("✅ 新会话已创建: %s", chatID), feedbackInfo)
-				} else {
-					m.showSystemMsg("❌ 当前不支持创建新会话", feedbackInfo)
-					return nil
-				}
-
-			case strings.HasPrefix(arg, "chat:"):
-				// Switch to specific chatID within same channel
-				chatID := strings.TrimPrefix(arg, "chat:")
-				if chatID == "" {
-					m.showSystemMsg("❌ chat: 后需要指定 chatID", feedbackInfo)
-					return nil
-				}
-				m.chatID = chatID
-				m.showSystemMsg(fmt.Sprintf("✅ 已切换到会话: %s", chatID), feedbackInfo)
-
-			case strings.HasPrefix(arg, "web:"):
-				// Cross-channel switch to web user
-				// Format: web:<senderID>:<token> or web:<senderID>
+			if strings.HasPrefix(arg, "web:") {
 				webParts := strings.SplitN(strings.TrimPrefix(arg, "web:"), ":", 2)
 				if len(webParts) == 0 || webParts[0] == "" {
 					m.showSystemMsg("❌ 格式: /su web:<senderID>[:<token>]", feedbackInfo)
 					return nil
 				}
-				targetSenderID := webParts[0]
-				// Note: token verification would go here in production
-				// For now, switch directly (CLI is a trusted client)
 				m.channelName = "web"
-				m.senderID = targetSenderID
-				m.chatID = targetSenderID
-				m.showSystemMsg(fmt.Sprintf("✅ 已切换到 Web 用户: %s", targetSenderID), feedbackInfo)
-
-			default:
-				// Original behavior: switch to userID within cli channel
+				m.senderID = webParts[0]
+				m.chatID = webParts[0]
+				m.showSystemMsg(fmt.Sprintf("✅ 已切换到 Web 用户: %s", webParts[0]), feedbackInfo)
+			} else {
 				newID := arg
 				if newID == "cli_user" || newID == "" {
 					m.senderID = "cli_user"
@@ -541,7 +500,6 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 				}
 			}
 		}
-		// 清空当前消息列表，异步加载目标用户历史
 		m.messages = nil
 		m.invalidateAllCache(false)
 		if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
@@ -550,6 +508,80 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			return tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
 		} else {
 			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitched, m.chatID), feedbackInfo)
+		}
+
+	case "/ss", "/sessions":
+		// /ss — Open Sessions panel
+		m.openSessionsPanel()
+
+	case "/chat":
+		// /chat — Chat room management:
+		//   /chat new [label] — 创建新会话
+		//   /chat <id>        — 切换到指定会话
+		//   /chat ls          — 列出所有会话（文字版）
+		if len(parts) < 2 {
+			m.showSystemMsg("用法: /chat new [label] | /chat <id> | /chat ls", feedbackInfo)
+			return nil
+		}
+		arg := strings.TrimSpace(parts[1])
+		switch arg {
+		case "new":
+			if m.channel != nil && m.channel.config.ChatCreateFn != nil {
+				label := ""
+				if len(parts) > 2 {
+					label = strings.Join(parts[2:], " ")
+				}
+				chatID, err := m.channel.config.ChatCreateFn(m.channelName, m.defaultChatID, label)
+				if err != nil {
+					m.showSystemMsg("创建失败: "+err.Error(), feedbackInfo)
+					return nil
+				}
+				m.chatID = chatID
+				m.messages = nil
+				m.invalidateAllCache(false)
+				m.showSystemMsg(fmt.Sprintf("✅ 新会话已创建: %s", chatID), feedbackInfo)
+			} else {
+				m.showSystemMsg("❌ 当前不支持创建新会话", feedbackInfo)
+			}
+		case "ls":
+			if m.sessionsListFn != nil {
+				entries := m.sessionsListFn()
+				if len(entries) == 0 {
+					m.showSystemMsg("(no active sessions)", feedbackInfo)
+				} else {
+					var lines []string
+					for _, e := range entries {
+						switch e.Type {
+						case "main":
+							active := ""
+							if e.ID == m.chatID {
+								active = " ←"
+							}
+							lines = append(lines, fmt.Sprintf("  ● %s%s", e.Label, active))
+						case "agent":
+							status := "●"
+							if !e.Running {
+								status = "◦"
+							}
+							lines = append(lines, fmt.Sprintf("  %s 🤖 %s/%s", status, e.Role, e.Instance))
+						}
+					}
+					m.showSystemMsg("Sessions:\n"+strings.Join(lines, "\n"), feedbackInfo)
+				}
+			} else {
+				m.showSystemMsg("❌ Sessions list not available", feedbackInfo)
+			}
+		default:
+			// Switch to specific chatID
+			m.chatID = arg
+			m.messages = nil
+			m.invalidateAllCache(false)
+			if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
+				m.suLoading = true
+				m.splashFrame = 0
+				return tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
+			}
+			m.showSystemMsg(fmt.Sprintf("✅ 已切换到会话: %s", arg), feedbackInfo)
 		}
 
 	case "/usage":

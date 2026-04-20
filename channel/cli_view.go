@@ -681,10 +681,8 @@ func (m *cliModel) renderFooter() string {
 			if m.subscriptionMgr != nil {
 				hints = append(hints, m.ctrlKey("p", "Subs"))
 			}
-			if len(m.inputHistory) > 0 && len(m.messageQueue) > 0 {
-				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
-			}
-			if m.bgTaskCount > 0 || m.agentCount > 0 {
+			hints = append(hints, m.ctrlKey("s", "Sessions"))
+			if m.bgTaskCount > 0 {
 				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
 			}
 		} else {

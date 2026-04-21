@@ -82,7 +82,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 
 	case msg.String() == "ctrl+t":
 		// Ctrl+T: Open Sessions panel (T = Tabs/Sessions)
-		if m.panelMode == "" && !m.typing {
+		if m.panelMode == "" {
 			m.openSessionsPanel()
 			return m, nil, true
 		}

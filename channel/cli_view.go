@@ -269,15 +269,24 @@ func (m *cliModel) View() tea.View {
 				status = hint
 			}
 		}
-		// Background task + agent indicator
-		totalItems := m.bgTaskCount + m.agentCount
-		if totalItems > 0 {
+		// Background task indicator
+		if m.bgTaskCount > 0 {
 			bgHint := m.styles.WarningSt.Render(
-				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, m.agentCount))
+				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount))
 			if status != "" {
 				status += "  " + bgHint
 			} else {
 				status = bgHint
+			}
+		}
+		// Agent indicator
+		if m.agentCount > 0 {
+			agentHint := m.styles.WarningSt.Render(
+				fmt.Sprintf(m.locale.AgentRunning, m.agentCount))
+			if status != "" {
+				status += "  " + agentHint
+			} else {
+				status = agentHint
 			}
 		}
 		// Message queue indicator (persistent, not temp status)

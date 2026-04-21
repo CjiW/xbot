@@ -547,7 +547,11 @@ type CLIChannel struct {
 	pendingResetTokenStateFn func()
 	pendingHistory           []HistoryMessage // remote mode: cached history before model is ready
 	pendingCheckpointHook    *tools.CheckpointHook
-	pendingSendInboundFn     func(bus.InboundMessage) bool // remote mode: forward to server
+	pendingSendInboundFn     func(bus.InboundMessage) bool
+	// Pending remote bg task callbacks (set before model exists in remote mode)
+	pendingBgTaskCountFn func() int
+	pendingBgTaskListFn  func() []*tools.BackgroundTask
+	pendingBgTaskKillFn  func(taskID string) error // remote mode: forward to server
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

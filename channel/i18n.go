@@ -35,7 +35,7 @@ type UILocale struct {
 	PanelAskNewline string // "Ctrl+J newline"
 	PanelAskCancel  string // "Esc cancel"
 
-	BgTasksTitle       string // "ChatRooms"
+	BgTasksTitle       string // "Tasks"
 	BgTasksHelp        string // "↑↓ navigate  Enter view log  Del kill  Esc close"
 	BgTasksEmpty       string // "No background tasks running"
 	BgTasksUnsupported string // "Background tasks not supported."
@@ -56,7 +56,8 @@ type UILocale struct {
 	StatusRetrying        string // "retrying"
 	StatusDone            string // "done"
 	NewContentHint        string // "v new content"
-	BgTaskRunning         string // "[%d task(s) %d agent(s) -- ^ to manage]"
+	BgTaskRunning         string // "[^ %dt]"
+	AgentRunning          string // "[Ctrl+T %da]"
 	TabNoMatch            string // "[Tab] no matching files"
 
 	// --- D. Temp status ---
@@ -223,7 +224,7 @@ func localeZH() *UILocale {
 		PanelAskNewline: "Ctrl+J 换行",
 		PanelAskCancel:  "Esc 取消",
 
-		BgTasksTitle:       "💬 ChatRooms",
+		BgTasksTitle:       "📋 Tasks",
 		BgTasksHelp:        "↑↓ 导航  Enter 查看日志  Del 终止  Esc 关闭",
 		BgTasksEmpty:       "没有正在运行的任务或代理",
 		BgTasksUnsupported: "不支持后台任务。",
@@ -244,7 +245,8 @@ func localeZH() *UILocale {
 		StatusRetrying:        "重试中",
 		StatusDone:            "完成",
 		NewContentHint:        "↓ 新内容",
-		BgTaskRunning:         "[^ %dt %da]",
+		BgTaskRunning:         "[^ %dt]",
+		AgentRunning:          "[Ctrl+T %da]",
 		TabNoMatch:            "[Tab] 无匹配文件",
 
 		// --- D. Temp status ---
@@ -608,7 +610,7 @@ func localeEN() *UILocale {
 		PanelAskNewline: "Ctrl+J newline",
 		PanelAskCancel:  "Esc cancel",
 
-		BgTasksTitle:       "💬 ChatRooms",
+		BgTasksTitle:       "📋 Tasks",
 		BgTasksHelp:        "↑↓ navigate  Enter view log  Del kill  Esc close",
 		BgTasksEmpty:       "No running tasks or agents",
 		BgTasksUnsupported: "Background tasks not supported.",
@@ -629,7 +631,8 @@ func localeEN() *UILocale {
 		StatusRetrying:        "retrying",
 		StatusDone:            "done",
 		NewContentHint:        "v new content",
-		BgTaskRunning:         "[^ %dt %da]",
+		BgTaskRunning:         "[^ %dt]",
+		AgentRunning:          "[Ctrl+T %da]",
 		TabNoMatch:            "[Tab] no matching files",
 
 		// --- D. Temp status ---
@@ -993,7 +996,7 @@ func localeJA() *UILocale {
 		PanelAskNewline: "Ctrl+J 改行",
 		PanelAskCancel:  "Esc キャンセル",
 
-		BgTasksTitle:       "💬 ChatRooms",
+		BgTasksTitle:       "📋 Tasks",
 		BgTasksHelp:        "↑↓ 移動  Enter ログ表示  Del 終了  Esc 閉じる",
 		BgTasksEmpty:       "実行中のタスクやエージェントはありません",
 		BgTasksUnsupported: "バックグラウンドタスクは未対応です。",
@@ -1014,7 +1017,8 @@ func localeJA() *UILocale {
 		StatusRetrying:        "リトライ中",
 		StatusDone:            "完了",
 		NewContentHint:        "↓ 新着",
-		BgTaskRunning:         "[^ %dタ %dエ]",
+		BgTaskRunning:         "[^ %dタ]",
+		AgentRunning:          "[Ctrl+T %dエ]",
 		TabNoMatch:            "[Tab] 一致するファイルなし",
 
 		// --- D. Temp status ---

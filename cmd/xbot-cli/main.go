@@ -1333,8 +1333,8 @@ func main() {
 					if app.backend == nil {
 						return
 					}
-					count := app.backend.CountInteractiveSessions("web", "")
-					sessions := app.backend.ListInteractiveSessions("web", "")
+					count := app.backend.CountInteractiveSessions("cli", remoteChatID)
+					sessions := app.backend.ListInteractiveSessions("cli", remoteChatID)
 					entries := make([]channel.AgentPanelEntry, len(sessions))
 					for i, s := range sessions {
 						entries[i] = channel.AgentPanelEntry{

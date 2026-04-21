@@ -98,6 +98,16 @@ func (c *CLIChannel) Start() error {
 	if c.pendingSendInboundFn != nil {
 		c.model.sendInboundFn = c.pendingSendInboundFn
 	}
+	// Apply pending remote bg task callbacks (remote mode: set before Start)
+	if c.pendingBgTaskCountFn != nil {
+		c.model.bgTaskCountFn = c.pendingBgTaskCountFn
+	}
+	if c.pendingBgTaskListFn != nil {
+		c.model.bgTaskListFn = c.pendingBgTaskListFn
+	}
+	if c.pendingBgTaskKillFn != nil {
+		c.model.bgTaskKillFn = c.pendingBgTaskKillFn
+	}
 	if c.pendingHistory != nil {
 		c.LoadHistory(c.pendingHistory)
 		c.pendingHistory = nil
@@ -384,6 +394,11 @@ func (c *CLIChannel) SetBgTaskRemoteCallbacks(sessionKey string, countFn func() 
 		c.model.bgTaskCountFn = countFn
 		c.model.bgTaskListFn = listFn
 		c.model.bgTaskKillFn = killFn
+	} else {
+		// Model not created yet (Start() not called) — save as pending
+		c.pendingBgTaskCountFn = countFn
+		c.pendingBgTaskListFn = listFn
+		c.pendingBgTaskKillFn = killFn
 	}
 }
 

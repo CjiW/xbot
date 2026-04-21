@@ -676,6 +676,10 @@ func main() {
 	if rb, ok := app.backend.(*agent.RemoteBackend); ok {
 		remoteServerURL = rb.ServerURL()
 	}
+	// Pre-declare tenantSvc so SessionsList closure can capture it.
+	// Assigned later after backend checks. Closure reads at invocation time.
+	var tenantSvc *sqlite.TenantService
+
 	cliCfg := channel.CLIChannelConfig{
 		WorkDir:         app.workDir,
 		ChatID:          absWorkDir,
@@ -981,24 +985,61 @@ func main() {
 				return nil
 			}
 			var entries []channel.SessionPanelEntry
-			// Main chatroom
-			entries = append(entries, channel.SessionPanelEntry{
-				ID:    absWorkDir,
-				Type:  "main",
-				Label: "主会话  You ↔ Agent",
-			})
-			// SubAgent sessions
-			sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
-			for _, s := range sessions {
+			// List all tenant sessions (from DB in local mode, RPC in remote mode)
+			if tenantSvc != nil {
+				tenants, err := tenantSvc.ListTenants()
+				if err == nil {
+					for _, t := range tenants {
+						if t.Channel != "cli" {
+							continue
+						}
+						isActive := t.ChatID == absWorkDir
+						label := t.ChatID
+						if isActive {
+							label = "主会话  You ↔ Agent"
+						}
+						entries = append(entries, channel.SessionPanelEntry{
+							ID:     t.ChatID,
+							Type:   "main",
+							Label:  label,
+							Active: isActive,
+						})
+						// SubAgent sessions for this tenant
+						sessions := app.backend.ListInteractiveSessions("cli", t.ChatID)
+						for _, s := range sessions {
+							entries = append(entries, channel.SessionPanelEntry{
+								ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
+								Type:        "agent",
+								Role:        s.Role,
+								Instance:    s.Instance,
+								ParentID:    t.ChatID,
+								Running:     s.Running,
+								MessageHint: s.Preview,
+							})
+						}
+					}
+				}
+			} else {
+				// Fallback: no DB (remote mode without local tenantSvc)
+				// Show current session + its subagents
 				entries = append(entries, channel.SessionPanelEntry{
-					ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
-					Type:        "agent",
-					Role:        s.Role,
-					Instance:    s.Instance,
-					ParentID:    absWorkDir,
-					Running:     s.Running,
-					MessageHint: s.Preview,
+					ID:     absWorkDir,
+					Type:   "main",
+					Label:  "主会话  You ↔ Agent",
+					Active: true,
 				})
+				sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
+				for _, s := range sessions {
+					entries = append(entries, channel.SessionPanelEntry{
+						ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
+						Type:        "agent",
+						Role:        s.Role,
+						Instance:    s.Instance,
+						ParentID:    absWorkDir,
+						Running:     s.Running,
+						MessageHint: s.Preview,
+					})
+				}
 			}
 			return entries
 		},
@@ -1007,7 +1048,6 @@ func main() {
 	// 设置历史消息加载器（会话恢复）
 	var cliTenantID int64
 	var cliSessionSvc *sqlite.SessionService
-	var tenantSvc *sqlite.TenantService
 	if !app.backend.IsRemote() && app.db != nil {
 		tenantSvc = sqlite.NewTenantService(app.db)
 		cliSessionSvc = sqlite.NewSessionService(app.db)

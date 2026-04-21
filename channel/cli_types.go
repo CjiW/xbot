@@ -180,9 +180,9 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
-	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/new", "/quit", "/rewind", "/search", "/settings", "/setup", "/tasks", "/update",
-	"/usage",
+	"/cancel", "/chat", "/clear", "/compact", "/context", "/exit", "/help",
+	"/new", "/quit", "/rewind", "/search", "/sessions", "/settings", "/setup",
+	"/ss", "/su", "/tasks", "/update", "/usage",
 }
 
 // §19 长消息折叠阈值
@@ -478,6 +478,7 @@ type SessionPanelEntry struct {
 	Instance    string // agent instance (for agent type)
 	ParentID    string // parent chatID (for agent type)
 	Running     bool   // true = currently active
+	Active      bool   // true = currently selected (main session only)
 	MessageHint string // preview of last message
 }
 

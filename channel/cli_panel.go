@@ -902,7 +902,7 @@ func (m *cliModel) viewSessionsList() string {
 		switch entry.Type {
 		case "main":
 			activeMark := ""
-			if entry.ID == m.chatID {
+			if entry.Active {
 				activeMark = " ✓"
 			}
 			icon = lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render("●")

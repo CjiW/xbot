@@ -719,9 +719,18 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, nil
 		}
 		sub, err := svc.GetDefault(bizID)
-		if err != nil || sub == nil {
+		if err != nil {
+			log.WithError(err).WithField("biz_id", bizID).Error("[RPC] get_default_subscription: GetDefault error")
 			return nil, err
 		}
+		if sub == nil {
+			log.WithField("biz_id", bizID).Warn("[RPC] get_default_subscription: no default subscription")
+			return nil, nil
+		}
+		log.WithFields(log.Fields{
+			"biz_id": bizID, "id": sub.ID, "name": sub.Name, "model": sub.Model,
+			"provider": sub.Provider, "is_default": sub.IsDefault,
+		}).Info("[RPC] get_default_subscription")
 		return json.Marshal(channel.Subscription{
 			ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
 			BaseURL: sub.BaseURL, APIKey: maskAPIKey(sub.APIKey),
@@ -1398,7 +1407,16 @@ func Run(args []string) error {
 		}
 		// Sync LLM client from DB's active subscription (not config.json).
 		// After migration, DB is the source of truth.
-		if defSub, err := subSvc.GetDefault(cliSenderID); err == nil && defSub != nil {
+		defSub, errDef := subSvc.GetDefault(cliSenderID)
+		if errDef != nil {
+			log.WithError(errDef).Error("[STARTUP] GetDefault failed")
+		} else if defSub == nil {
+			log.Warn("[STARTUP] GetDefault returned nil — no default subscription in DB")
+		} else {
+			log.WithFields(log.Fields{
+				"id": defSub.ID, "name": defSub.Name, "model": defSub.Model,
+				"provider": defSub.Provider, "max_output_tokens": defSub.MaxOutputTokens,
+			}).Info("[STARTUP] Default subscription from DB")
 			cfg.LLM.Provider = defSub.Provider
 			cfg.LLM.BaseURL = defSub.BaseURL
 			cfg.LLM.APIKey = defSub.APIKey

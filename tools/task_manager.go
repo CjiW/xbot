@@ -257,6 +257,7 @@ func (m *BackgroundTaskManager) Adopt(
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
 
+		loop:
 			select {
 			case code := <-exitCodeCh:
 				exitCode = code
@@ -271,20 +272,32 @@ func (m *BackgroundTaskManager) Adopt(
 						default:
 							exitCode = 0 // heuristic fallback
 						}
-						break
+						break loop
 					}
-					<-ticker.C
+					select {
+					case <-ticker.C:
+					case <-safetyCtx.Done():
+						break loop
+					}
 				}
+			case <-safetyCtx.Done():
+				// Context cancelled (Kill/CleanupSession) — break out
 			}
 		} else {
 			// No channel provided — use isProcessAlive polling heuristic.
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
 
-			for range ticker.C {
-				if !isProcessAlive(proc.Pid) {
-					exitCode = 0
-					break
+		loop2:
+			for {
+				select {
+				case <-ticker.C:
+					if !isProcessAlive(proc.Pid) {
+						exitCode = 0
+						break loop2
+					}
+				case <-safetyCtx.Done():
+					break loop2
 				}
 			}
 		}

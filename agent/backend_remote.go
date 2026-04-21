@@ -161,10 +161,13 @@ func (b *RemoteBackend) Stop() {
 			b.conn = nil
 		}
 		b.connMu.Unlock()
-		// Unblock all pending RPC calls
+		// Unblock all pending RPC calls (non-blocking write, consistent with readPump)
 		b.rpcMu.Lock()
 		for id, ch := range b.pending {
-			close(ch)
+			select {
+			case ch <- &rpcResponse{Error: "connection closed"}:
+			default:
+			}
 			delete(b.pending, id)
 		}
 		b.rpcMu.Unlock()

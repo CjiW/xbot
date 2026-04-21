@@ -217,7 +217,7 @@ func toAnthropicMessages(messages []ChatMessage) []anthropicMessage {
 				}
 				for _, tc := range msg.ToolCalls {
 					input := json.RawMessage(tc.Arguments)
-					if len(input) == 0 {
+					if len(input) == 0 || !json.Valid(input) {
 						input = json.RawMessage("{}")
 					}
 					blocks = append(blocks, anthropicToolUseBlock{
@@ -662,7 +662,7 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					tc := &ToolCall{
 						ID:        ev.ContentBlock.ID,
 						Name:      ev.ContentBlock.Name,
-						Arguments: string(ev.ContentBlock.Input),
+						Arguments: "", // input_json_delta events will build up the arguments
 					}
 					toolCallsByIndex[ev.Index] = tc
 					eventChan <- StreamEvent{

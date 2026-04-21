@@ -375,7 +375,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		return json.Marshal(backend.LLMFactory().ListModels())
+		client, _, _, _ := backend.LLMFactory().GetLLM(bizID)
+		return json.Marshal(client.ListModels())
 	case "list_all_models":
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")

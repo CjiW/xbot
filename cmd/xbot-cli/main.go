@@ -1493,7 +1493,8 @@ type cliModelLister struct {
 }
 
 func (l *cliModelLister) ListModels() []string {
-	return l.factory.ListModels()
+	client, _, _, _ := l.factory.GetLLM(l.senderID)
+	return client.ListModels()
 }
 
 func (l *cliModelLister) ListAllModels() []string {

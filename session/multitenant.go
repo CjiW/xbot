@@ -823,7 +823,8 @@ func (m *MultiTenantSession) GetMemoryStats(ctx context.Context, channel, chatID
 }
 
 // TrimHistory deletes messages newer than or equal to the given cutoff timestamp
-// for the tenant identified by channel and chatID.
+// for the tenant identified by channel and chatID, and clears the cached token
+// state so maybeCompress doesn't use stale values from before the rewind.
 func (m *MultiTenantSession) TrimHistory(channel, chatID string, cutoff time.Time) error {
 	if cutoff.IsZero() {
 		return nil
@@ -833,5 +834,13 @@ func (m *MultiTenantSession) TrimHistory(channel, chatID string, cutoff time.Tim
 		return fmt.Errorf("get tenant: %w", err)
 	}
 	_, err = m.sessionSvc.PurgeNewerThanOrEqual(tenantID, cutoff)
-	return err
+	if err != nil {
+		return err
+	}
+	// Clear token state so maybeCompress doesn't use stale values from before
+	// the rewind (would otherwise trigger incorrect compression on next Run).
+	if err := m.memorySvc.SetTokenState(context.Background(), tenantID, 0, 0); err != nil {
+		log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to clear token state after trim")
+	}
+	return nil
 }

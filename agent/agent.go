@@ -302,15 +302,6 @@ type Agent struct {
 	// 0 when idle. Used by bgNotifyLoop to decide routing.
 	bgRunActive int32
 
-	// lastPromptTokens stores the prompt_tokens from the most recent LLM API call.
-	// This is the authoritative token count for the full input (messages + tool defs).
-	// Updated after each Run() completes. Used by /context info and maybeCompress.
-	lastPromptTokens atomic.Int64
-
-	// lastCompletionTokens stores the completion_tokens from the most recent LLM API call.
-	// Updated after each Run() completes. Used to restore token tracking across Run() calls.
-	lastCompletionTokens atomic.Int64
-
 	// bgRunPending buffers bg notifications that arrived during an active Run.
 	// The Run loop drains these between iterations.
 	bgRunPending   []tools.BgNotification
@@ -1686,18 +1677,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
-	// 恢复上次 Run() 的 token 计数，确保 maybeCompress 在重启后仍能使用 API 精确值
-	// 优先使用内存值（同进程内多次 Run），回退到 DB 值（进程重启后）
-	if promptTokens := a.lastPromptTokens.Load(); promptTokens > 0 {
-		cfg.LastPromptTokens = promptTokens
-		cfg.LastCompletionTokens = a.lastCompletionTokens.Load()
-	} else if extras := cfg.ToolContextExtras; extras != nil && extras.MemorySvc != nil && extras.TenantID != 0 {
+	// 恢复上次 Run() 的 token 计数，确保 maybeCompress 在重启后仍能使用 API 精确值。
+	// 必须从当前 tenant 的 DB 读取 — Agent 级别的 lastPromptTokens 是全局共享的，
+	// 跨 chat 会导致新窗口误用其他 chat 的 token 计数而触发压缩。
+	if extras := cfg.ToolContextExtras; extras != nil && extras.MemorySvc != nil && extras.TenantID != 0 {
 		if pt, ct, err := extras.MemorySvc.GetTokenState(ctx, extras.TenantID); err == nil && pt > 0 {
 			cfg.LastPromptTokens = pt
 			cfg.LastCompletionTokens = ct
-			// 恢复到内存中供后续 Run() 直接使用
-			a.lastPromptTokens.Store(pt)
-			a.lastCompletionTokens.Store(ct)
 		}
 	}
 	// Mark Run as active so bgNotifyLoop buffers notifications instead of processing idle
@@ -1781,8 +1767,6 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)
-	a.lastPromptTokens.Store(out.LastPromptTokens)
-	a.lastCompletionTokens.Store(out.LastCompletionTokens)
 	// Drain any bg notifications that arrived after Run's last iteration.
 	// Process them as user messages (idle path).
 	a.bgRunPendingMu.Lock()

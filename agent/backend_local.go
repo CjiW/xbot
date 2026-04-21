@@ -601,8 +601,9 @@ func (b *LocalBackend) Close() error {
 }
 
 func (b *LocalBackend) ResetTokenState() {
-	b.agent.lastPromptTokens.Store(0)
-	b.agent.lastCompletionTokens.Store(0)
+	// No-op: token state is per-tenant in DB (tenant_state table), not a
+	// global variable. Clearing it would require knowing the current tenant.
+	// /rewind already clears token state via TrimHistory → SetTokenState(0,0).
 }
 
 func (b *LocalBackend) Run(ctx context.Context) error {

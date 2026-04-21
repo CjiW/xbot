@@ -728,10 +728,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			log.WithField("biz_id", bizID).Warn("[RPC] get_default_subscription: no default subscription")
 			return nil, nil
 		}
-		log.WithFields(log.Fields{
-			"biz_id": bizID, "id": sub.ID, "name": sub.Name, "model": sub.Model,
-			"provider": sub.Provider, "is_default": sub.IsDefault,
-		}).Info("RPC get_default_subscription")
 		return json.Marshal(channel.Subscription{
 			ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
 			BaseURL: sub.BaseURL, APIKey: maskAPIKey(sub.APIKey),

@@ -229,9 +229,6 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			return NewResult(fmt.Sprintf("Interactive session for role %q (instance=%q) interrupted.", params.Role, params.Instance)), nil
 
 		default:
-			if params.Background && !params.Interactive {
-				return nil, fmt.Errorf("background=true requires interactive=true")
-			}
 			// Propagate background flag via ToolContext metadata
 			if params.Background {
 				if ctx.Metadata == nil {

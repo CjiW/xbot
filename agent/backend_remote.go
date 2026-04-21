@@ -390,9 +390,15 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 				log.WithError(err).Info("WS connection closed")
 			}
 			// Unblock all pending RPC callers so they don't hang until timeout.
+			// Use non-blocking write instead of close(ch) to avoid double-close
+			// panic if Stop() runs concurrently (both hold rpcMu but close on
+			// buffered-chan can still race if channel is already drained).
 			b.rpcMu.Lock()
 			for id, ch := range b.pending {
-				close(ch)
+				select {
+				case ch <- &rpcResponse{Error: "connection lost"}:
+				default:
+				}
 				delete(b.pending, id)
 			}
 			b.rpcMu.Unlock()

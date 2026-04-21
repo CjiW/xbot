@@ -250,9 +250,12 @@ func (s *runState) notifyProgress(extra string) {
 	if !s.autoNotify {
 		return
 	}
-	lines := s.progressLines
+	s.progressMu.Lock()
+	lines := make([]string, len(s.progressLines))
+	copy(lines, s.progressLines)
+	s.progressMu.Unlock()
 	if extra != "" {
-		lines = append(append([]string{}, s.progressLines...), extra)
+		lines = append(lines, extra)
 	}
 	var flatLines []string
 	for _, line := range lines {
@@ -275,13 +278,12 @@ func (s *runState) notifyProgress(extra string) {
 	}
 	s.cfg.ProgressNotifier([]string{buf.String()})
 	if s.cfg.ProgressEventHandler != nil && s.structuredProgress != nil {
-		copyLines := func(src []string) []string {
-			cp := make([]string, len(src))
-			copy(cp, src)
-			return cp
-		}
+		s.progressMu.Lock()
+		snapshot := make([]string, len(s.progressLines))
+		copy(snapshot, s.progressLines)
+		s.progressMu.Unlock()
 		s.cfg.ProgressEventHandler(&ProgressEvent{
-			Lines:      copyLines(s.progressLines),
+			Lines:      snapshot,
 			Structured: s.structuredProgress,
 			Timestamp:  time.Now(),
 		})

@@ -362,6 +362,9 @@ type cliApp struct {
 	// Remote-mode async cache for GetCurrentValues (avoid RPC from Update loop → 30s freeze)
 	valuesCacheMu sync.RWMutex
 	valuesCache   map[string]string
+
+	// Remote-mode background goroutine cancel
+	valuesCancel context.CancelFunc
 }
 
 // isFirstRun 检测是否是首次运行（config.json 不存在或 API Key 未配置）
@@ -503,6 +506,9 @@ func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 
 // Close 释放资源。
 func (app *cliApp) Close() {
+	if app.valuesCancel != nil {
+		app.valuesCancel()
+	}
 	if app.backend != nil {
 		app.backend.Stop()
 	}
@@ -1088,10 +1094,8 @@ func main() {
 				go func() {
 					if err := app.backend.SendInbound(msg); err != nil {
 						log.WithError(err).Warn("Failed to forward message to remote server")
-						// For /cancel specifically, show a toast so the user knows it failed.
-						if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
-							cliCh.SendToast("Failed to cancel: "+err.Error(), "✗")
-						}
+						// Show a toast so the user knows the message failed to send.
+						cliCh.SendToast("Failed to send message: "+err.Error(), "✗")
 					}
 				}()
 				return true
@@ -1407,7 +1411,7 @@ func main() {
 				}
 			}
 		}()
-		_ = valuesCancel // cleanup on app exit if needed
+		app.valuesCancel = valuesCancel
 	}
 
 	if newSession {

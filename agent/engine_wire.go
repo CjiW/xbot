@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"xbot/bus"
@@ -963,14 +964,19 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 	cfg.HookChain = a.hookChain
 	cfg.SettingsSvc = a.settingsSvc
 
+	var sessionOnce sync.Once
+
 	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		// Lazy-inject session so buildToolContext can persist CWD across tool calls.
 		// Without this, Cd stores CWD in a ToolContext that is discarded on next call.
-		if cfg.Session == nil {
-			if sess, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
-				cfg.Session = sess
+		// Use sync.Once to prevent concurrent goroutines from racing on cfg.Session.
+		sessionOnce.Do(func() {
+			if cfg.Session == nil {
+				if sess, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
+					cfg.Session = sess
+				}
 			}
-		}
+		})
 
 		// 1. 工具查找：session MCP 优先，然后全局注册表
 		var tool tools.Tool

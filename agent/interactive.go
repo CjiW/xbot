@@ -353,7 +353,9 @@ func (a *Agent) SpawnInteractiveSession(
 				newMsgs = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
 			}
 			placeholder.messages = newMsgs
-			placeholder.systemPrompt = cfg.Messages[0]
+			if len(cfg.Messages) > 0 {
+				placeholder.systemPrompt = cfg.Messages[0]
+			}
 			placeholder.cfg = &cfg
 			placeholder.cfg.Messages = nil
 		}()
@@ -395,10 +397,12 @@ func (a *Agent) SpawnInteractiveSession(
 		instance:         instance,
 		messages:         newMessages,
 		iterationHistory: out.IterationHistory,
-		systemPrompt:     cfg.Messages[0],
 		cfg:              &cfg,
 		lastUsed:         time.Now(),
 		lastReply:        out.Content,
+	}
+	if len(cfg.Messages) > 0 {
+		ia.systemPrompt = cfg.Messages[0]
 	}
 	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
 	a.interactiveSubAgents.Store(key, ia)

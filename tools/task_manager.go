@@ -223,8 +223,21 @@ func (m *BackgroundTaskManager) Adopt(
 		StartedAt:  time.Now(),
 		ExitCode:   -1,
 		Output:     partialOutput,
+		sessionKey: sessionKey,
 		process:    proc,
 		exitCodeCh: exitCodeCh,
+	}
+
+	// Safety timeout context (24h max lifetime)
+	safetyCtx, safetyCancel := context.WithTimeout(context.Background(), maxBgTaskLifetime)
+	// User-facing cancel context
+	_, cancel := context.WithCancel(safetyCtx)
+	task.cancel = func() {
+		task.mu.Lock()
+		task.killed = true
+		task.mu.Unlock()
+		cancel()
+		safetyCancel()
 	}
 
 	m.mu.Lock()
@@ -233,6 +246,9 @@ func (m *BackgroundTaskManager) Adopt(
 	m.mu.Unlock()
 
 	go func() {
+		defer cancel()
+		defer safetyCancel()
+
 		var exitCode int
 
 		if exitCodeCh != nil {

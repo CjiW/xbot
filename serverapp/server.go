@@ -628,7 +628,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// Other channels: only show tenants where chatID matches the user.
 		var filtered []sqlite.TenantInfo
 		for _, t := range tenants {
-			if t.Channel == "cli" || t.ChatID == bizID {
+			if (t.Channel == "cli" && isAdmin(senderID)) || t.ChatID == bizID {
 				filtered = append(filtered, t)
 			}
 		}
@@ -1738,7 +1738,7 @@ func Run(args []string) error {
 				for i, s := range subs {
 					result[i] = channel.Subscription{
 						ID: s.ID, Name: s.Name, Provider: s.Provider,
-						BaseURL: s.BaseURL, APIKey: s.APIKey,
+						BaseURL: s.BaseURL, APIKey: maskAPIKey(s.APIKey),
 						Model: s.Model, Active: s.IsDefault,
 						MaxOutputTokens: s.MaxOutputTokens, ThinkingMode: s.ThinkingMode,
 					}

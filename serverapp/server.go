@@ -1406,7 +1406,13 @@ func Run(args []string) error {
 			cfg.LLM.MaxOutputTokens = defSub.MaxOutputTokens
 			if newClient, err := createAdminLLM(cfg); err == nil {
 				backend.LLMFactory().SetDefaults(newClient, defSub.Model)
-				log.WithFields(log.Fields{"provider": defSub.Provider, "model": defSub.Model}).Info("LLM client synced from DB default subscription")
+				// SetDefaults clears all per-user caches. Re-populate them from
+				// the default subscription so that GetMaxOutputTokens/GetLLM
+				// return correct values for cli_user without waiting for a
+				// SwitchSubscription call.
+				backend.LLMFactory().SetUserMaxOutputTokens(cliSenderID, defSub.MaxOutputTokens)
+				backend.LLMFactory().SetUserThinkingMode(cliSenderID, defSub.ThinkingMode)
+				log.WithFields(log.Fields{"provider": defSub.Provider, "model": defSub.Model, "max_output_tokens": defSub.MaxOutputTokens}).Info("LLM client synced from DB default subscription")
 			}
 		}
 	}

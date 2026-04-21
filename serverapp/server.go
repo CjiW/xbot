@@ -546,7 +546,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.BgTaskManager() == nil {
 			return json.Marshal(0)
 		}
-		return json.Marshal(len(backend.BgTaskManager().List(p.SessionKey)))
+		return json.Marshal(len(backend.BgTaskManager().ListRunning(p.SessionKey)))
 	case "list_bg_tasks":
 		var p struct {
 			SessionKey string `json:"session_key"`
@@ -598,6 +598,17 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("background tasks not available")
 		}
 		return nil, backend.BgTaskManager().Kill(p.TaskID)
+	case "cleanup_completed_bg_tasks":
+		var p struct {
+			SessionKey string `json:"session_key"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.BgTaskManager() != nil {
+			backend.BgTaskManager().RemoveCompletedTasks(p.SessionKey)
+		}
+		return json.Marshal(true)
 
 	// --- History ---
 	case "get_history":

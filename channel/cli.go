@@ -108,6 +108,9 @@ func (c *CLIChannel) Start() error {
 	if c.pendingBgTaskKillFn != nil {
 		c.model.bgTaskKillFn = c.pendingBgTaskKillFn
 	}
+	if c.pendingBgTaskCleanupFn != nil {
+		c.model.bgTaskCleanupFn = c.pendingBgTaskCleanupFn
+	}
 	if c.pendingHistory != nil {
 		c.LoadHistory(c.pendingHistory)
 		c.pendingHistory = nil
@@ -387,18 +390,20 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 // SetBgTaskRemoteCallbacks configures remote-mode background task callbacks.
 // Used when BgTaskManager is not available (remote CLI mode) to enable
 // background task display and management via RPC.
-func (c *CLIChannel) SetBgTaskRemoteCallbacks(sessionKey string, countFn func() int, listFn func() []*tools.BackgroundTask, killFn func(taskID string) error) {
+func (c *CLIChannel) SetBgTaskRemoteCallbacks(sessionKey string, countFn func() int, listFn func() []*tools.BackgroundTask, killFn func(taskID string) error, cleanupFn func()) {
 	c.bgSessionKey = sessionKey
 	c.bgTaskKill = killFn
 	if c.model != nil {
 		c.model.bgTaskCountFn = countFn
 		c.model.bgTaskListFn = listFn
 		c.model.bgTaskKillFn = killFn
+		c.model.bgTaskCleanupFn = cleanupFn
 	} else {
 		// Model not created yet (Start() not called) — save as pending
 		c.pendingBgTaskCountFn = countFn
 		c.pendingBgTaskListFn = listFn
 		c.pendingBgTaskKillFn = killFn
+		c.pendingBgTaskCleanupFn = cleanupFn
 	}
 }
 

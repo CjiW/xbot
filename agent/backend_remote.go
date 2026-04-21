@@ -1099,6 +1099,10 @@ func (b *RemoteBackend) KillBgTask(taskID string) error {
 	return b.callRPCVoid("kill_bg_task", map[string]string{"task_id": taskID})
 }
 
+func (b *RemoteBackend) CleanupCompletedBgTasks(sessionKey string) {
+	_ = b.callRPCVoid("cleanup_completed_bg_tasks", map[string]string{"session_key": sessionKey})
+}
+
 func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
 	raw, err := b.callRPC("list_subscriptions", map[string]string{"sender_id": senderID})
 	if err != nil {

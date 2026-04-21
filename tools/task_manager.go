@@ -421,6 +421,32 @@ func (m *BackgroundTaskManager) ListAllForSession(sessionKey string) []*Backgrou
 	return tasks
 }
 
+// RemoveCompletedTasks removes all non-running tasks for a session.
+// Called when the bg tasks panel closes to prevent stale completed tasks from
+// accumulating indefinitely. Running tasks are preserved.
+func (m *BackgroundTaskManager) RemoveCompletedTasks(sessionKey string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ids := m.sessions[sessionKey]
+	var running []string
+	for _, id := range ids {
+		if t, ok := m.tasks[id]; ok {
+			t.mu.Lock()
+			status := t.Status
+			t.mu.Unlock()
+			if status == BgTaskRunning {
+				running = append(running, id)
+			} else {
+				delete(m.tasks, id)
+			}
+		}
+	}
+	if len(running) < len(ids) {
+		m.sessions[sessionKey] = running
+	}
+}
+
 // OnComplete registers a callback for task completion in a session.
 // Only one callback per session is kept — subsequent calls replace the previous one.
 func (m *BackgroundTaskManager) OnComplete(sessionKey string, callback func(task *BackgroundTask)) {

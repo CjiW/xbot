@@ -390,7 +390,7 @@ func (b *LocalBackend) GetBgTaskCount(sessionKey string) int {
 	if b.agent.bgTaskMgr == nil {
 		return 0
 	}
-	return len(b.agent.bgTaskMgr.List(sessionKey))
+	return len(b.agent.bgTaskMgr.ListRunning(sessionKey))
 }
 
 func (b *LocalBackend) ListBgTasks(sessionKey string) ([]BgTaskJSON, error) {
@@ -422,6 +422,12 @@ func (b *LocalBackend) KillBgTask(taskID string) error {
 		return fmt.Errorf("background tasks not available")
 	}
 	return b.agent.bgTaskMgr.Kill(taskID)
+}
+
+func (b *LocalBackend) CleanupCompletedBgTasks(sessionKey string) {
+	if b.agent.bgTaskMgr != nil {
+		b.agent.bgTaskMgr.RemoveCompletedTasks(sessionKey)
+	}
 }
 
 func (b *LocalBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {

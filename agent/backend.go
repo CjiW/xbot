@@ -217,6 +217,9 @@ type AgentBackend interface {
 	// KillBgTask terminates a background task by ID (remote: RPC-backed).
 	KillBgTask(taskID string) error
 
+	// CleanupCompletedBgTasks removes completed/errored tasks from the task manager.
+	CleanupCompletedBgTasks(sessionKey string)
+
 	// ListSubscriptions lists LLM subscriptions.
 	ListSubscriptions(senderID string) ([]channel.Subscription, error)
 

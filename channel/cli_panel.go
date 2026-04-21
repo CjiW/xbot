@@ -238,6 +238,7 @@ func (m *cliModel) closePanel() {
 	m.panelOptSel = nil
 	m.panelOptCursor = nil
 	// Bg tasks/agents panel cleanup
+	m.cleanupCompletedBgTasks()
 	m.panelBgTasks = nil
 	m.panelBgAgents = nil
 	m.panelBgViewing = false
@@ -512,6 +513,18 @@ func (m *cliModel) listBgTasks() []*tools.BackgroundTask {
 		return m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 	}
 	return nil
+}
+
+// cleanupCompletedBgTasks removes completed/errored tasks from the task manager
+// so they don't accumulate indefinitely. Running tasks are preserved.
+func (m *cliModel) cleanupCompletedBgTasks() {
+	if m.bgTaskCleanupFn != nil {
+		m.bgTaskCleanupFn()
+		return
+	}
+	if m.channel != nil && m.channel.bgTaskMgr != nil {
+		m.channel.bgTaskMgr.RemoveCompletedTasks(m.channel.bgSessionKey)
+	}
 }
 
 // killBgTask kills a background task via callback or direct access.

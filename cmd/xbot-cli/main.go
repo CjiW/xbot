@@ -1104,6 +1104,7 @@ func main() {
 					return result
 				},
 				func(taskID string) error { return app.backend.KillBgTask(taskID) },
+				func() { app.backend.CleanupCompletedBgTasks(bgSessionKey) },
 			)
 			// Inject TrimHistoryFn for Ctrl+K session truncation (RPC-backed)
 			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {

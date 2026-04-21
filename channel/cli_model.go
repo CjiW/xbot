@@ -306,10 +306,11 @@ type cliModel struct {
 	needFlushQueue bool     // true = handleAgentMessage 后需要刷新队列
 
 	// --- Background tasks ---
-	bgTaskCount   int                            // running background tasks (0 = no indicator)
-	bgTaskCountFn func() int                     // callback to get current bg task count (set by channel)
-	bgTaskListFn  func() []*tools.BackgroundTask // callback to list running tasks (remote mode)
-	bgTaskKillFn  func(taskID string) error      // callback to kill a task (remote mode)
+	bgTaskCount     int                            // running background tasks (0 = no indicator)
+	bgTaskCountFn   func() int                     // callback to get current bg task count (set by channel)
+	bgTaskListFn    func() []*tools.BackgroundTask // callback to list running tasks (remote mode)
+	bgTaskKillFn    func(taskID string) error      // callback to kill a task (remote mode)
+	bgTaskCleanupFn func()                         // callback to cleanup completed tasks (remote mode)
 
 	// --- Interactive agents ---
 	agentCount      int                                                            // active interactive agent sessions (0 = no indicator)

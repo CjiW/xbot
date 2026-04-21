@@ -24,10 +24,6 @@ var cliUserScopedSettingKeys = map[string]struct{}{
 }
 
 var cliGlobalScopedSettingKeys = map[string]struct{}{
-	"llm_provider":      {},
-	"llm_api_key":       {},
-	"llm_model":         {},
-	"llm_base_url":      {},
 	"vanguard_model":    {},
 	"balance_model":     {},
 	"swift_model":       {},
@@ -51,10 +47,6 @@ var cliGlobalScopedSettingKeys = map[string]struct{}{
 //  2. Add a handler to settingHandlerRegistry (serverapp) AND cliRuntimeHandlers (cmd/xbot-cli)
 //  3. That's it. The test TestAllRuntimeKeysHaveHandlers will catch omissions.
 var CLIRuntimeSettingKeys = []string{
-	"llm_provider",
-	"llm_api_key",
-	"llm_model",
-	"llm_base_url",
 	"vanguard_model",
 	"balance_model",
 	"swift_model",
@@ -127,6 +119,9 @@ func cliSettingScope(key string) string {
 	if isGlobalScopedSettingKey(key) {
 		return "global"
 	}
+	if isSubscriptionScopedSettingKey(key) {
+		return "subscription"
+	}
 	if isActionSettingKey(key) {
 		return "action"
 	}
@@ -138,11 +133,24 @@ func (m *cliModel) mergeCLISettingsValues() map[string]string {
 	if m.channel == nil {
 		return values
 	}
+	// Non-LLM settings from GetCurrentValues (theme, language, tiers, etc.)
 	if m.channel.config.GetCurrentValues != nil {
 		for k, v := range m.channel.config.GetCurrentValues() {
 			values[k] = v
 		}
 	}
+	// LLM fields come exclusively from the active subscription (single source of truth).
+	// This replaces the old path where LLM values came from GetCurrentValues / user_settings.
+	if m.channel.subscriptionMgr != nil {
+		if sub, err := m.channel.subscriptionMgr.GetDefault(m.senderID); err == nil && sub != nil {
+			values["llm_provider"] = sub.Provider
+			values["llm_base_url"] = sub.BaseURL
+			values["llm_model"] = sub.Model
+			// Don't overwrite api_key if GetCurrentValues already set it
+			// ( GetCurrentValues may have the unmasked key from backend)
+		}
+	}
+	// User-scoped settings (theme, language, context_mode, etc.) override GetCurrentValues
 	if m.channel.settingsSvc != nil {
 		vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
 		if err == nil {

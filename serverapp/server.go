@@ -209,22 +209,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		// Inject current subscription's LLM values to override any stale DB values.
-		// This ensures Settings panel always shows the active subscription's endpoint,
-		// regardless of which user is asking (admin, cli_user, web user).
-		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
-			var sub *sqlite.LLMSubscription
-			if s, err := subSvc.GetDefault(bizID); err == nil && s != nil {
-				sub = s
-			} else if s, err := subSvc.GetDefault(cliSenderID); err == nil && s != nil {
-				sub = s
-			}
-			if sub != nil {
-				result["llm_provider"] = sub.Provider
-				result["llm_base_url"] = sub.BaseURL
-				result["llm_model"] = sub.Model
-			}
-		}
+		// Remove LLM keys from settings response — they come from user_llm_subscriptions.
+		// The CLI mergeCLISettingsValues() reads LLM fields from subscriptionMgr.GetDefault().
+		delete(result, "llm_provider")
+		delete(result, "llm_api_key")
+		delete(result, "llm_model")
+		delete(result, "llm_base_url")
 		return json.Marshal(result)
 	case "set_setting":
 		var p struct {
@@ -238,6 +228,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, bizID); err != nil {
 			return nil, err
+		}
+		// LLM fields are managed exclusively via update_subscription RPC.
+		// Silently ignore them here for backward compatibility.
+		switch p.Key {
+		case "llm_provider", "llm_api_key", "llm_model", "llm_base_url":
+			return nil, nil
 		}
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
@@ -375,15 +371,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		client, model, _, _ := backend.LLMFactory().GetLLM(bizID)
+		client, _, _, _ := backend.LLMFactory().GetLLM(bizID)
 		models := client.ListModels()
-		log.WithFields(log.Fields{
-			"biz_id":       bizID,
-			"client_type":  fmt.Sprintf("%T", client),
-			"cached_model": model,
-			"model_count":  len(models),
-			"models":       models,
-		}).Info("RPC list_models")
 		return json.Marshal(models)
 	case "list_all_models":
 		if backend.LLMFactory() == nil {
@@ -846,20 +835,10 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// cache key for GetLLM(bizID). SwitchSubscription must use the same key
 		// that list_models / generate uses, otherwise the cache holds a stale
 		// client and the user keeps seeing the old subscription's models.
-		log.WithFields(log.Fields{
-			"biz_id":      bizID,
-			"sub_id":      sub.ID,
-			"sub_sender":  sub.SenderID,
-			"sub_name":    sub.Name,
-			"sub_model":   sub.Model,
-			"sub_baseurl": sub.BaseURL,
-		}).Info("RPC set_default_subscription: invalidating and switching")
 		backend.LLMFactory().Invalidate(bizID)
 		if err := backend.LLMFactory().SwitchSubscription(bizID, sub); err != nil {
-			log.WithError(err).WithField("biz_id", bizID).Error("RPC set_default_subscription: SwitchSubscription failed")
 			return nil, err
 		}
-		log.WithField("biz_id", bizID).Info("RPC set_default_subscription: switched OK")
 		return nil, nil
 	case "rename_subscription":
 		var p struct {

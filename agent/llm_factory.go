@@ -82,53 +82,23 @@ func (f *LLMFactory) SetRetryConfig(cfg llm.RetryConfig) {
 // 返回: (LLM客户端, 模型名, maxContext, thinkingMode)
 //
 // 查找优先级:
-//  1. 缓存 (configSvc 或 subscriptionSvc 建立的)
-//  2. configSvc (user_llm_configs 表，旧的单配置系统)
-//  3. subscriptionSvc (user_llm_subscriptions 表，新的多订阅系统，取 default)
-//  4. 全局默认 LLM
+// GetLLM returns the LLM client for the given user. Lookup order:
+//  1. In-memory cache (from a previous GetLLM/SwitchSubscription call)
+//  2. subscriptionSvc (user_llm_subscriptions table, default subscription)
+//  3. Global default LLM (from config/startup)
 func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
-	// 先检查缓存
+	// Check cache first
 	f.mu.RLock()
 	if client, ok := f.clients[senderID]; ok {
 		model := f.models[senderID]
 		maxCtx := f.maxContexts[senderID]
 		thinkingMode := f.thinkingModes[senderID]
 		f.mu.RUnlock()
-		log.WithFields(log.Fields{
-			"sender_id":   senderID,
-			"path":        "cache",
-			"model":       model,
-			"client_type": fmt.Sprintf("%T", client),
-		}).Info("[LLM] GetLLM")
 		return client, model, maxCtx, thinkingMode
 	}
 	f.mu.RUnlock()
 
-	// 从 configSvc 加载 (旧的单配置系统)
-	if f.configSvc != nil {
-		cfg, err := f.configSvc.GetConfig(senderID)
-		if err == nil && cfg != nil && cfg.BaseURL != "" && cfg.APIKey != "" {
-			client, model := f.createClient(cfg)
-			if client != nil {
-				f.mu.Lock()
-				f.clients[senderID] = client
-				f.models[senderID] = model
-				f.maxContexts[senderID] = cfg.MaxContext
-				f.maxOutputTokens[senderID] = cfg.MaxOutputTokens
-				f.thinkingModes[senderID] = cfg.ThinkingMode
-				f.mu.Unlock()
-				log.WithFields(log.Fields{
-					"sender_id":   senderID,
-					"path":        "configSvc",
-					"model":       model,
-					"client_type": fmt.Sprintf("%T", client),
-				}).Info("[LLM] GetLLM")
-				return client, model, cfg.MaxContext, cfg.ThinkingMode
-			}
-		}
-	}
-
-	// Fallback 到 subscriptionSvc (新的多订阅系统)
+	// Load from subscription service (single source of truth for per-user LLM config)
 	if f.subscriptionSvc != nil {
 		sub, err := f.subscriptionSvc.GetDefault(senderID)
 		if err == nil && sub != nil && sub.BaseURL != "" && sub.APIKey != "" {
@@ -145,39 +115,12 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 				f.maxOutputTokens[senderID] = sub.MaxOutputTokens
 				f.thinkingModes[senderID] = sub.ThinkingMode
 				f.mu.Unlock()
-				log.WithFields(log.Fields{
-					"sender_id":   senderID,
-					"path":        "subscriptionSvc",
-					"sub_id":      sub.ID,
-					"sub_name":    sub.Name,
-					"sub_baseurl": sub.BaseURL,
-					"model":       model,
-					"client_type": fmt.Sprintf("%T", client),
-				}).Info("[LLM] GetLLM")
 				return client, model, sub.MaxContext, sub.ThinkingMode
 			}
 		}
-		if err != nil {
-			log.WithError(err).WithField("sender_id", senderID).Warn("[LLM] GetLLM subscriptionSvc.GetDefault error")
-		} else if sub == nil {
-			log.WithField("sender_id", senderID).Warn("[LLM] GetLLM subscriptionSvc.GetDefault returned nil")
-		} else {
-			log.WithFields(log.Fields{
-				"sender_id":   senderID,
-				"sub_id":      sub.ID,
-				"sub_baseurl": sub.BaseURL,
-				"sub_apikey":  sub.APIKey != "",
-			}).Warn("[LLM] GetLLM subscriptionSvc.GetDefault sub missing baseURL or apiKey")
-		}
 	}
 
-	// 无配置或出错，使用默认客户端
-	log.WithFields(log.Fields{
-		"sender_id":   senderID,
-		"path":        "defaultLLM",
-		"model":       f.defaultModel,
-		"client_type": fmt.Sprintf("%T", f.defaultLLM),
-	}).Info("[LLM] GetLLM")
+	// Fallback: global default LLM
 	return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
 }
 
@@ -289,13 +232,11 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 	f.mu.Unlock()
 
 	log.WithFields(log.Fields{
-		"sender_id":   senderID,
-		"sub_id":      sub.ID,
-		"sub_name":    sub.Name,
-		"sub_baseurl": sub.BaseURL,
-		"model":       model,
-		"client_type": fmt.Sprintf("%T", client),
-	}).Info("[LLM] SwitchSubscription: client created and cached")
+		"sender_id": senderID,
+		"sub_id":    sub.ID,
+		"sub_name":  sub.Name,
+		"model":     model,
+	}).Debug("[LLM] SwitchSubscription: client created and cached")
 
 	f.hasCustomLLMCache.Store(senderID, true)
 	return nil

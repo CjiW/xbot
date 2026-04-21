@@ -29,27 +29,7 @@ type cliSettingHandler struct {
 //  2. Add a handler here (and in serverapp/setting_handlers.go)
 //  3. Done.
 var cliSettingHandlers = map[string]cliSettingHandler{
-	// --- LLM settings (config-only, LLM rebuild handled by caller) ---
-	"llm_provider": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.Provider = strings.TrimSpace(value)
-		},
-	},
-	"llm_api_key": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.APIKey = strings.TrimSpace(value)
-		},
-	},
-	"llm_model": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.Model = strings.TrimSpace(value)
-		},
-	},
-	"llm_base_url": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.BaseURL = strings.TrimSpace(value)
-		},
-	},
+	// --- LLM tier settings (config-only, LLM rebuild handled by caller) ---
 	"vanguard_model": {
 		ApplyConfig: func(cfg *config.Config, value string) {
 			cfg.LLM.VanguardModel = strings.TrimSpace(value)

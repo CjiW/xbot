@@ -64,7 +64,17 @@ func (app *cliApp) refreshRemoteValuesCache() {
 			vals[k] = v
 		}
 	}
-	vals["llm_model"] = app.backend.GetDefaultModel()
+	// LLM values come from the active subscription (single source of truth).
+	// This replaces the old path where llm_model was read from GetSettings
+	// (which stored stale LLM values in user_settings).
+	if sub, err := app.backend.GetDefaultSubscription(cliSenderID); err == nil && sub != nil {
+		vals["llm_provider"] = sub.Provider
+		vals["llm_base_url"] = sub.BaseURL
+		vals["llm_model"] = sub.Model
+		if sub.APIKey != "" {
+			vals["llm_api_key"] = sub.APIKey
+		}
+	}
 	vals["context_mode"] = app.backend.GetContextMode()
 	if _, ok := vals["sandbox_mode"]; !ok {
 		vals["sandbox_mode"] = "none"
@@ -268,47 +278,43 @@ func currentActiveSubscription(backend agent.AgentBackend, cfg *config.Config) *
 	return nil
 }
 
-func persistActiveSubscription(backend agent.AgentBackend, cfg *config.Config, values map[string]string) error {
+// updateActiveSubscription updates the current default subscription with LLM field
+// changes from the Settings panel. This is the ONLY path for LLM config changes —
+// user_llm_subscriptions is the single source of truth.
+//
+// When only llm_model changes (no provider/key/url), it checks if the target model
+// belongs to a different subscription and switches to it instead of overwriting.
+func updateActiveSubscription(backend agent.AgentBackend, cfg *config.Config, values map[string]string) error {
 	if backend == nil {
 		return nil
 	}
 
-	// When only llm_model changes (no provider/key/url change), check if the
-	// target model belongs to a different subscription. If so, switch to that
-	// subscription instead of overwriting the current one's model field.
+	// Smart model switch: if only llm_model changed, find a matching subscription.
 	if v, ok := values["llm_model"]; ok && strings.TrimSpace(v) != "" {
 		targetModel := strings.TrimSpace(v)
 		_, providerChanged := values["llm_provider"]
 		_, keyChanged := values["llm_api_key"]
 		_, urlChanged := values["llm_base_url"]
 		if !providerChanged && !keyChanged && !urlChanged {
-			if sub := findSubscriptionByModel(backend, cfg, targetModel); sub != nil {
-				// Found a subscription with this model — switch to it.
-				// SetDefaultSubscription already handles LLM cache invalidation.
-				if sub.ID != "" {
-					return backend.SetDefaultSubscription(sub.ID)
+			if subs, err := backend.ListSubscriptions(cliSenderID); err == nil {
+				for _, sub := range subs {
+					if sub.Model == targetModel && sub.ID != "" {
+						return backend.SetDefaultSubscription(sub.ID)
+					}
 				}
-				return nil
 			}
 		}
 	}
 
-	sub := currentActiveSubscription(backend, cfg)
-	if sub == nil {
-		sub = &channel.Subscription{
-			ID:       "default",
-			Name:     "default",
-			Provider: "openai",
-			Active:   true,
-		}
+	// Get current default subscription
+	sub, err := backend.GetDefaultSubscription(cliSenderID)
+	if err != nil || sub == nil {
+		return fmt.Errorf("no active subscription: %v", err)
 	}
 
-	oldProvider := sub.Provider
+	// Apply changed fields
 	if v, ok := values["llm_provider"]; ok && strings.TrimSpace(v) != "" {
 		sub.Provider = strings.TrimSpace(v)
-		if sub.Name == "" || sub.Name == oldProvider {
-			sub.Name = sub.Provider
-		}
 	}
 	if v, ok := values["llm_api_key"]; ok && strings.TrimSpace(v) != "" {
 		sub.APIKey = strings.TrimSpace(v)
@@ -318,55 +324,9 @@ func persistActiveSubscription(backend agent.AgentBackend, cfg *config.Config, v
 	}
 	if v, ok := values["llm_base_url"]; ok && strings.TrimSpace(v) != "" {
 		sub.BaseURL = strings.TrimSpace(v)
-	} else if provider, ok := values["llm_provider"]; ok && strings.TrimSpace(provider) != "" {
-		switch strings.TrimSpace(provider) {
-		case "anthropic":
-			if sub.BaseURL == "" || sub.BaseURL == "https://api.openai.com/v1" {
-				sub.BaseURL = "https://api.anthropic.com"
-			}
-		case "openai":
-			if sub.BaseURL == "" || sub.BaseURL == "https://api.anthropic.com" {
-				sub.BaseURL = "https://api.openai.com/v1"
-			}
-		}
 	}
-	sub.Active = true
 
-	if sub.ID == "" {
-		sub.ID = "default"
-		return backend.AddSubscription(cliSenderID, *sub)
-	}
 	return backend.UpdateSubscription(sub.ID, *sub)
-}
-
-// findSubscriptionByModel searches all subscriptions (DB + config) for one whose
-// Model field matches the target model. Returns nil if not found.
-func findSubscriptionByModel(backend agent.AgentBackend, cfg *config.Config, targetModel string) *channel.Subscription {
-	// Check DB subscriptions first (remote + local with DB)
-	if backend != nil {
-		if subs, err := backend.ListSubscriptions(cliSenderID); err == nil {
-			for _, sub := range subs {
-				if sub.Model == targetModel {
-					return &sub
-				}
-			}
-		}
-	}
-	// Check config subscriptions (local-only fallback)
-	for _, sub := range localSeedSourceSubscriptions(cfg) {
-		if sub.Model == targetModel {
-			return &channel.Subscription{
-				ID:       sub.ID,
-				Name:     sub.Name,
-				Provider: sub.Provider,
-				BaseURL:  sub.BaseURL,
-				APIKey:   sub.APIKey,
-				Model:    sub.Model,
-				Active:   sub.Active,
-			}
-		}
-	}
-	return nil
 }
 
 // cliApp 封装 CLI 的公共初始化逻辑，供交互和非交互模式共享。
@@ -805,60 +765,47 @@ func main() {
 			_, maxOutputChanged := values["max_output_tokens"]
 			_, thinkingChanged := values["thinking_mode"]
 
-			// ── Remote mode: all settings go to server, skip config.json ──
-			if app.backend.IsRemote() {
-				if llmChanged || keyChanged || modelChanged || urlChanged {
-					if err := persistActiveSubscription(app.backend, app.cfg, values); err != nil {
-						log.Warnf("Failed to update active subscription: %v", err)
-					}
-				}
-				// Persist every setting to server via RPC
-				for k, v := range values {
-					if isCLISubscriptionSettingKey(k) {
-						continue
-					}
-					_ = app.backend.SetSetting("cli", "cli_user", k, v)
-				}
-				// Push runtime state to server via handler map
-				applyCLISettingsToBackend(app.backend, "cli_user", values)
-				return
-			}
+			llmFieldChanged := llmChanged || keyChanged || modelChanged || urlChanged
 
-			// ── Local mode: write config.json + apply runtime ──
-			if llmChanged || keyChanged || modelChanged || urlChanged {
-				if err := persistActiveSubscription(app.backend, app.cfg, values); err != nil {
+			// ── LLM fields: update via subscription manager (single source of truth) ──
+			if llmFieldChanged {
+				if err := updateActiveSubscription(app.backend, app.cfg, values); err != nil {
 					log.Warnf("Failed to update active subscription: %v", err)
 				}
-				loadLLMFromDBSubscription(app.backend, app.cfg)
 			}
-			// Apply all config field updates via handler map
-			applyCLISettingsToConfig(app.cfg, values)
-			// Model tiers (needs explicit check since config-only)
-			if app.backend != nil && (vanguardChanged || balanceChanged || swiftChanged) {
-				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
+
+			// ── Non-LLM settings: persist and apply runtime ──
+			for k, v := range values {
+				if isCLISubscriptionSettingKey(k) {
+					continue // LLM fields handled above
+				}
+				_ = app.backend.SetSetting("cli", "cli_user", k, v)
 			}
-			// Sandbox reinit (local-only, needs app.workDir closure)
-			if v, ok := values["sandbox_mode"]; ok && v != "" {
-				tools.ReinitSandbox(app.cfg.Sandbox, app.workDir)
-				if app.backend != nil {
+			applyCLISettingsToBackend(app.backend, "cli_user", values)
+
+			// ── Local-mode extras ──
+			if !app.backend.IsRemote() {
+				applyCLISettingsToConfig(app.cfg, values)
+				// Model tiers (needs explicit check since config-only)
+				if vanguardChanged || balanceChanged || swiftChanged {
+					app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
+				}
+				// Sandbox reinit (local-only, needs app.workDir closure)
+				if v, ok := values["sandbox_mode"]; ok && v != "" {
+					tools.ReinitSandbox(app.cfg.Sandbox, app.workDir)
 					app.backend.SetSandbox(tools.GetSandbox(), v)
 				}
-			}
-			// Apply all backend runtime effects via handler map
-			if app.backend != nil {
 				applyCLISettingsToBackend(app.backend, cliSenderID, values)
-			}
-			loadLLMFromDBSubscription(app.backend, app.cfg)
-			if err := saveCLIConfig(app.cfg); err != nil {
-				log.Warnf("Failed to save config.json: %v", err)
-			}
-			if theme, ok := values["theme"]; ok && theme != "" && app.backend != nil {
-				if ss := app.backend.SettingsService(); ss != nil {
-					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
+				loadLLMFromDBSubscription(app.backend, app.cfg)
+				if err := saveCLIConfig(app.cfg); err != nil {
+					log.Warnf("Failed to save config.json: %v", err)
 				}
-			}
-			if llmChanged || keyChanged || modelChanged || urlChanged || maxOutputChanged || thinkingChanged {
-				if app.backend != nil {
+				if theme, ok := values["theme"]; ok && theme != "" {
+					if ss := app.backend.SettingsService(); ss != nil {
+						_ = ss.SetSetting("cli", "cli_user", "theme", theme)
+					}
+				}
+				if llmFieldChanged || maxOutputChanged || thinkingChanged {
 					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 						app.llmClient = newClient
 						app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
@@ -868,6 +815,11 @@ func main() {
 						log.Warnf("Failed to rebuild LLM client: %v", err)
 					}
 				}
+			}
+
+			// ── Remote mode: immediately refresh cache so UI shows new values ──
+			if app.backend.IsRemote() {
+				app.refreshRemoteValuesCache()
 			}
 		},
 		ClearMemory: func(targetType string) error {

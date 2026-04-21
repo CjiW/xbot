@@ -242,15 +242,10 @@ func TestMigrateCLIUserSettingsFromGlobalIfNeeded_SkipsWhenUserAlreadyHasSetting
 func TestApplyRuntimeSetting_UpdatesConfig(t *testing.T) {
 	cfg := newTestConfig()
 	var backend agent.AgentBackend // nil is fine — we only test cfg mutation
-	applyRuntimeSetting(cfg, backend, "cli_user", "llm_model", "new-model")
-	applyRuntimeSetting(cfg, backend, "cli_user", "llm_base_url", "https://new.url")
+	// LLM fields (llm_model, llm_base_url) are no longer handled by
+	// applyRuntimeSetting — they go through update_subscription RPC.
+	// Test a non-LLM config mutation instead.
 	applyRuntimeSetting(cfg, backend, "cli_user", "max_concurrency", "99")
-	if cfg.LLM.Model != "new-model" {
-		t.Fatalf("llm_model = %q, want %q", cfg.LLM.Model, "new-model")
-	}
-	if cfg.LLM.BaseURL != "https://new.url" {
-		t.Fatalf("llm_base_url = %q, want %q", cfg.LLM.BaseURL, "https://new.url")
-	}
 	if cfg.Agent.MaxConcurrency != 99 {
 		t.Fatalf("max_concurrency = %d, want %d", cfg.Agent.MaxConcurrency, 99)
 	}

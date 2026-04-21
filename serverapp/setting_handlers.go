@@ -32,27 +32,7 @@ type settingHandler struct {
 // If a key appears in channel.CLIRuntimeSettingKeys but is missing here,
 // TestAllRuntimeKeysHaveHandlers will fail at CI time.
 var settingHandlerRegistry = map[string]settingHandler{
-	// --- LLM settings (config-only, backend effects applied by caller via SetModelTiers) ---
-	"llm_provider": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.Provider = strings.TrimSpace(value)
-		},
-	},
-	"llm_api_key": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.APIKey = strings.TrimSpace(value)
-		},
-	},
-	"llm_model": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.Model = strings.TrimSpace(value)
-		},
-	},
-	"llm_base_url": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			cfg.LLM.BaseURL = strings.TrimSpace(value)
-		},
-	},
+	// --- LLM tier settings (config-only, backend effects applied by caller via SetModelTiers) ---
 	"vanguard_model": {
 		ApplyConfig: func(cfg *config.Config, value string) {
 			cfg.LLM.VanguardModel = strings.TrimSpace(value)

@@ -292,16 +292,17 @@ func TestHandleCLIRPCSetDefaultSubscriptionRefreshesSenderCache(t *testing.T) {
 	factory := agent.NewLLMFactory(sqlite.NewUserLLMConfigService(db), &llm.MockLLM{}, "default-model")
 	subSvc := sqlite.NewLLMSubscriptionService(db)
 	factory.SetSubscriptionSvc(subSvc)
-	if err := subSvc.Add(&sqlite.LLMSubscription{ID: "sub-gpt", SenderID: "admin", Name: "gpt", Provider: "openai", BaseURL: "https://gpt.example/v1", APIKey: "sk-gpt", Model: "gpt-4.1", IsDefault: true}); err != nil {
+	// Admin's subscriptions are stored under cliSenderID ("cli_user") in production.
+	if err := subSvc.Add(&sqlite.LLMSubscription{ID: "sub-gpt", SenderID: "cli_user", Name: "gpt", Provider: "openai", BaseURL: "https://gpt.example/v1", APIKey: "sk-gpt", Model: "gpt-4.1", IsDefault: true}); err != nil {
 		t.Fatalf("add gpt: %v", err)
 	}
-	if err := subSvc.Add(&sqlite.LLMSubscription{ID: "sub-glm", SenderID: "admin", Name: "glm", Provider: "openai", BaseURL: "https://glm.example/v1", APIKey: "sk-glm", Model: "glm-5.1", IsDefault: false}); err != nil {
+	if err := subSvc.Add(&sqlite.LLMSubscription{ID: "sub-glm", SenderID: "cli_user", Name: "glm", Provider: "openai", BaseURL: "https://glm.example/v1", APIKey: "sk-glm", Model: "glm-5.1", IsDefault: false}); err != nil {
 		t.Fatalf("add glm: %v", err)
 	}
 
 	aCfg := &config.Config{}
 	lb := fakeBackend{factory: factory}
-	_, model, _, _ := factory.GetLLM("admin")
+	_, model, _, _ := factory.GetLLM("cli_user")
 	if model != "gpt-4.1" {
 		t.Fatalf("expected initial gpt model, got %q", model)
 	}
@@ -310,7 +311,7 @@ func TestHandleCLIRPCSetDefaultSubscriptionRefreshesSenderCache(t *testing.T) {
 	if _, err := handleCLIRPC(aCfg, lb, "set_default_subscription", params, "admin"); err != nil {
 		t.Fatalf("handleCLIRPC set_default_subscription: %v", err)
 	}
-	_, model, _, _ = factory.GetLLM("admin")
+	_, model, _, _ = factory.GetLLM("cli_user")
 	if model != "glm-5.1" {
 		t.Fatalf("expected switched glm model, got %q", model)
 	}

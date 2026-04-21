@@ -828,14 +828,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := svc.SetDefault(p.ID); err != nil {
 			return nil, err
 		}
-		// Use sub.SenderID (not senderIDFromParams) for LLM factory operations.
-		// The subscription's SenderID is the authoritative business identity,
-		// matching LocalBackend.SetDefaultSubscription behavior. The WS auth
-		// identity ("admin") must not be used as the LLM cache key — it would
-		// cache under the wrong user and the agent's GetLLM("cli_user") would
-		// keep returning the stale client.
-		backend.LLMFactory().Invalidate(sub.SenderID)
-		if err := backend.LLMFactory().SwitchSubscription(sub.SenderID, sub); err != nil {
+		// Use bizID for LLM factory operations. The business identity is the
+		// cache key for GetLLM(bizID). SwitchSubscription must use the same key
+		// that list_models / generate uses, otherwise the cache holds a stale
+		// client and the user keeps seeing the old subscription's models.
+		backend.LLMFactory().Invalidate(bizID)
+		if err := backend.LLMFactory().SwitchSubscription(bizID, sub); err != nil {
 			return nil, err
 		}
 		return nil, nil

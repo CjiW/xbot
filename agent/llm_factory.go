@@ -233,6 +233,13 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 	f.models[senderID] = model
 	f.maxContexts[senderID] = 0
 	f.thinkingModes[senderID] = ""
+	// For the CLI identity, also update defaultLLM so that GetLLM fallback
+	// (when cache miss and no DB default) returns the currently active
+	// subscription's client, not the stale startup client.
+	if senderID == "cli_user" {
+		f.defaultLLM = client
+		f.defaultModel = model
+	}
 	f.mu.Unlock()
 
 	f.hasCustomLLMCache.Store(senderID, true)

@@ -433,6 +433,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// If ctx was cancelled during tool execution, exit after preserving results
 		if ctx.Err() != nil {
+			// Strip trailing unpaired tool_calls so they don't get persisted
+			// to DB and cause API errors on the next Run.
+			s.messages = llm.FixupTrailingToolCalls(s.messages)
 			out := s.buildOutput(&bus.OutboundMessage{
 				Channel: s.cfg.Channel,
 				ChatID:  s.cfg.ChatID,

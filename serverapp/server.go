@@ -707,6 +707,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 				ID: s.ID, Name: s.Name, Provider: s.Provider,
 				BaseURL: s.BaseURL, APIKey: maskAPIKey(s.APIKey),
 				Model: s.Model, Active: s.IsDefault,
+				MaxOutputTokens: s.MaxOutputTokens, ThinkingMode: s.ThinkingMode,
 			}
 		}
 		return json.Marshal(result)
@@ -730,11 +731,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		log.WithFields(log.Fields{
 			"biz_id": bizID, "id": sub.ID, "name": sub.Name, "model": sub.Model,
 			"provider": sub.Provider, "is_default": sub.IsDefault,
-		}).Info("[RPC] get_default_subscription")
+		}).Info("RPC get_default_subscription")
 		return json.Marshal(channel.Subscription{
 			ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
 			BaseURL: sub.BaseURL, APIKey: maskAPIKey(sub.APIKey),
 			Model: sub.Model, Active: sub.IsDefault,
+			MaxOutputTokens: sub.MaxOutputTokens, ThinkingMode: sub.ThinkingMode,
 		})
 	case "add_subscription":
 		var p struct {
@@ -1409,14 +1411,14 @@ func Run(args []string) error {
 		// After migration, DB is the source of truth.
 		defSub, errDef := subSvc.GetDefault(cliSenderID)
 		if errDef != nil {
-			log.WithError(errDef).Error("[STARTUP] GetDefault failed")
+			log.WithError(errDef).Error("GetDefault failed")
 		} else if defSub == nil {
-			log.Warn("[STARTUP] GetDefault returned nil — no default subscription in DB")
+			log.Warn("GetDefault returned nil — no default subscription in DB")
 		} else {
 			log.WithFields(log.Fields{
 				"id": defSub.ID, "name": defSub.Name, "model": defSub.Model,
 				"provider": defSub.Provider, "max_output_tokens": defSub.MaxOutputTokens,
-			}).Info("[STARTUP] Default subscription from DB")
+			}).Info("Default subscription from DB")
 			cfg.LLM.Provider = defSub.Provider
 			cfg.LLM.BaseURL = defSub.BaseURL
 			cfg.LLM.APIKey = defSub.APIKey
@@ -1432,6 +1434,24 @@ func Run(args []string) error {
 				backend.LLMFactory().SetUserThinkingMode(cliSenderID, defSub.ThinkingMode)
 				log.WithFields(log.Fields{"provider": defSub.Provider, "model": defSub.Model, "max_output_tokens": defSub.MaxOutputTokens}).Info("LLM client synced from DB default subscription")
 			}
+		}
+	}
+
+	// Clean up subscription-scoped keys that were migrated from user_settings
+	// to user_llm_subscriptions. Stale rows in user_settings can overwrite
+	// correct subscription values on startup (e.g. name→provider, max_output_tokens→8192).
+	if ss := backend.SettingsService(); ss != nil {
+		cleaned := 0
+		for _, key := range []string{
+			"llm_provider", "llm_api_key", "llm_model", "llm_base_url",
+			"max_output_tokens", "thinking_mode",
+		} {
+			if err := ss.DeleteSetting("cli", cliSenderID, key); err == nil {
+				cleaned++
+			}
+		}
+		if cleaned > 0 {
+			log.WithField("count", cleaned).Info("Cleaned subscription-scoped keys from user_settings")
 		}
 	}
 
@@ -1668,13 +1688,10 @@ func Run(args []string) error {
 				result := make([]channel.Subscription, len(subs))
 				for i, s := range subs {
 					result[i] = channel.Subscription{
-						ID:       s.ID,
-						Name:     s.Name,
-						Provider: s.Provider,
-						BaseURL:  s.BaseURL,
-						APIKey:   s.APIKey,
-						Model:    s.Model,
-						Active:   s.IsDefault,
+						ID: s.ID, Name: s.Name, Provider: s.Provider,
+						BaseURL: s.BaseURL, APIKey: s.APIKey,
+						Model: s.Model, Active: s.IsDefault,
+						MaxOutputTokens: s.MaxOutputTokens, ThinkingMode: s.ThinkingMode,
 					}
 				}
 				return result, nil
@@ -1685,13 +1702,10 @@ func Run(args []string) error {
 					return nil, err
 				}
 				return &channel.Subscription{
-					ID:       sub.ID,
-					Name:     sub.Name,
-					Provider: sub.Provider,
-					BaseURL:  sub.BaseURL,
-					APIKey:   sub.APIKey,
-					Model:    sub.Model,
-					Active:   sub.IsDefault,
+					ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
+					BaseURL: sub.BaseURL, APIKey: sub.APIKey,
+					Model: sub.Model, Active: sub.IsDefault,
+					MaxOutputTokens: sub.MaxOutputTokens, ThinkingMode: sub.ThinkingMode,
 				}, nil
 			},
 			LLMAddSubscription: func(senderID string, sub *channel.Subscription) error {

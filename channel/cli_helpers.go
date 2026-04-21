@@ -24,18 +24,16 @@ var cliUserScopedSettingKeys = map[string]struct{}{
 }
 
 var cliGlobalScopedSettingKeys = map[string]struct{}{
-	"vanguard_model":    {},
-	"balance_model":     {},
-	"swift_model":       {},
-	"sandbox_mode":      {},
-	"memory_provider":   {},
-	"tavily_api_key":    {},
-	"max_output_tokens": {},
-	"thinking_mode":     {},
-	"enable_stream":     {},
-	"enable_masking":    {},
-	"default_user":      {},
-	"privileged_user":   {},
+	"vanguard_model":  {},
+	"balance_model":   {},
+	"swift_model":     {},
+	"sandbox_mode":    {},
+	"memory_provider": {},
+	"tavily_api_key":  {},
+	"enable_stream":   {},
+	"enable_masking":  {},
+	"default_user":    {},
+	"privileged_user": {},
 }
 
 // CLIRuntimeSettingKeys lists all setting keys that require runtime application
@@ -57,8 +55,6 @@ var CLIRuntimeSettingKeys = []string{
 	"max_iterations",
 	"max_concurrency",
 	"max_context_tokens",
-	"max_output_tokens",
-	"thinking_mode",
 	"enable_auto_compress",
 }
 
@@ -86,10 +82,12 @@ var cliActionSettingKeys = map[string]struct{}{
 }
 
 var cliSubscriptionScopedSettingKeys = map[string]struct{}{
-	"llm_provider": {},
-	"llm_api_key":  {},
-	"llm_model":    {},
-	"llm_base_url": {},
+	"llm_provider":      {},
+	"llm_api_key":       {},
+	"llm_model":         {},
+	"llm_base_url":      {},
+	"max_output_tokens": {},
+	"thinking_mode":     {},
 }
 
 func isUserScopedSettingKey(key string) bool {
@@ -146,6 +144,8 @@ func (m *cliModel) mergeCLISettingsValues() map[string]string {
 			values["llm_provider"] = sub.Provider
 			values["llm_base_url"] = sub.BaseURL
 			values["llm_model"] = sub.Model
+			values["max_output_tokens"] = strconv.Itoa(sub.MaxOutputTokens)
+			values["thinking_mode"] = sub.ThinkingMode
 			// Don't overwrite api_key if GetCurrentValues already set it
 			// ( GetCurrentValues may have the unmasked key from backend)
 		}

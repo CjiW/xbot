@@ -74,6 +74,12 @@ func (app *cliApp) refreshRemoteValuesCache() {
 		if sub.APIKey != "" {
 			vals["llm_api_key"] = sub.APIKey
 		}
+		if sub.MaxOutputTokens > 0 {
+			vals["max_output_tokens"] = fmt.Sprintf("%d", sub.MaxOutputTokens)
+		}
+		if sub.ThinkingMode != "" {
+			vals["thinking_mode"] = sub.ThinkingMode
+		}
 	}
 	vals["context_mode"] = app.backend.GetContextMode()
 	if _, ok := vals["sandbox_mode"]; !ok {
@@ -113,7 +119,8 @@ func saveCLIConfig(cfg *config.Config) error {
 
 func isCLISubscriptionSettingKey(key string) bool {
 	switch key {
-	case "llm_provider", "llm_api_key", "llm_model", "llm_base_url":
+	case "llm_provider", "llm_api_key", "llm_model", "llm_base_url",
+		"max_output_tokens", "thinking_mode":
 		return true
 	default:
 		return false
@@ -324,6 +331,14 @@ func updateActiveSubscription(backend agent.AgentBackend, cfg *config.Config, va
 	}
 	if v, ok := values["llm_base_url"]; ok && strings.TrimSpace(v) != "" {
 		sub.BaseURL = strings.TrimSpace(v)
+	}
+	if v, ok := values["max_output_tokens"]; ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			sub.MaxOutputTokens = n
+		}
+	}
+	if v, ok := values["thinking_mode"]; ok {
+		sub.ThinkingMode = v
 	}
 
 	return backend.UpdateSubscription(sub.ID, *sub)
@@ -712,12 +727,21 @@ func main() {
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
 				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
 				"max_output_tokens": func() string {
+					// Prefer subscription value (single source of truth)
+					if activeSub != nil && activeSub.MaxOutputTokens > 0 {
+						return fmt.Sprintf("%d", activeSub.MaxOutputTokens)
+					}
 					if app.cfg.LLM.MaxOutputTokens > 0 {
 						return fmt.Sprintf("%d", app.cfg.LLM.MaxOutputTokens)
 					}
-					return "8192" // default value used in llm/openai.go
+					return "8192"
 				}(),
-				"thinking_mode": app.cfg.LLM.ThinkingMode,
+				"thinking_mode": func() string {
+					if activeSub != nil && activeSub.ThinkingMode != "" {
+						return activeSub.ThinkingMode
+					}
+					return app.cfg.LLM.ThinkingMode
+				}(),
 				"enable_auto_compress": func() string {
 					if app.cfg.Agent.EnableAutoCompress == nil || *app.cfg.Agent.EnableAutoCompress {
 						return "true"
@@ -765,7 +789,7 @@ func main() {
 			_, maxOutputChanged := values["max_output_tokens"]
 			_, thinkingChanged := values["thinking_mode"]
 
-			llmFieldChanged := llmChanged || keyChanged || modelChanged || urlChanged
+			llmFieldChanged := llmChanged || keyChanged || modelChanged || urlChanged || maxOutputChanged || thinkingChanged
 
 			// ── LLM fields: update via subscription manager (single source of truth) ──
 			if llmFieldChanged {
@@ -1574,6 +1598,7 @@ func (m *configSubscriptionManager) List(_ string) ([]channel.Subscription, erro
 			APIKey:   s.APIKey,
 			Model:    s.Model,
 			Active:   s.Active,
+			// MaxOutputTokens/ThinkingMode not available from config seeds
 		}
 	}
 	return result, nil

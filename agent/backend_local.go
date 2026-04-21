@@ -439,6 +439,7 @@ func (b *LocalBackend) ListSubscriptions(senderID string) ([]channel.Subscriptio
 			ID: s.ID, Name: s.Name, Provider: s.Provider,
 			BaseURL: s.BaseURL, APIKey: s.APIKey,
 			Model: s.Model, Active: s.IsDefault,
+			MaxOutputTokens: s.MaxOutputTokens, ThinkingMode: s.ThinkingMode,
 		}
 	}
 	return result, nil
@@ -457,6 +458,7 @@ func (b *LocalBackend) GetDefaultSubscription(senderID string) (*channel.Subscri
 		ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
 		BaseURL: sub.BaseURL, APIKey: sub.APIKey,
 		Model: sub.Model, Active: sub.IsDefault,
+		MaxOutputTokens: sub.MaxOutputTokens, ThinkingMode: sub.ThinkingMode,
 	}, nil
 }
 

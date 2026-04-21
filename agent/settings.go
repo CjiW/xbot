@@ -33,6 +33,14 @@ func (s *SettingsService) GetSettings(channelName, senderID string) (map[string]
 	return s.store.Get(channelName, senderID)
 }
 
+// DeleteSetting removes a single setting key for a user on a specific channel.
+func (s *SettingsService) DeleteSetting(channelName, senderID, key string) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("settings service not initialized")
+	}
+	return s.store.Delete(channelName, senderID, key)
+}
+
 // GetPermUsers retrieves the permission control user configuration for a user.
 // Returns a PermUsersConfig with DefaultUser and PrivilegedUser from user settings.
 func (s *SettingsService) GetPermUsers(channelName, senderID string) *PermUsersConfig {

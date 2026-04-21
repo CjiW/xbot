@@ -91,10 +91,6 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	}
 
 	now := time.Now()
-	name := cfg.Provider
-	if name == "" {
-		name = "openai"
-	}
 
 	tx, err := conn.Begin()
 	if err != nil {
@@ -107,28 +103,31 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 
 	if cfg.ID != "" {
 		// Update existing subscription by ID (precise match, avoids overwriting
-		// same-provider subscriptions when user has multiple with the same provider)
+		// same-provider subscriptions when user has multiple with the same provider).
+		// Preserve existing name — do NOT derive it from provider (was the source of
+		// bug where "cjw" got overwritten to "openai" on every startup).
 		_, err = tx.Exec(`
 		UPDATE user_llm_subscriptions SET
-		name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
+		provider = ?, base_url = ?, api_key = ?, model = ?,
 		max_context = ?, max_output_tokens = ?, thinking_mode = ?,
 		is_default = 1, updated_at = ?
 		WHERE id = ? AND sender_id = ?
-		`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
+		`, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
 			cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode,
 			now, cfg.ID, cfg.SenderID)
 		if err != nil {
 			return fmt.Errorf("update subscription by id: %w", err)
 		}
 	} else {
-		// Legacy path: no ID available (e.g. /set-llm command), match by sender+provider
+		// Legacy path: no ID available (e.g. /set-llm command), match by sender+provider.
+		// Preserve existing name for UPDATE; for INSERT derive from provider.
 		result, err := tx.Exec(`
 		UPDATE user_llm_subscriptions SET
-		name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
+		provider = ?, base_url = ?, api_key = ?, model = ?,
 		max_context = ?, max_output_tokens = ?, thinking_mode = ?,
 		is_default = 1, updated_at = ?
 		WHERE sender_id = ? AND provider = ?
-		`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
+		`, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
 			cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode,
 			now, cfg.SenderID, cfg.Provider)
 		if err != nil {
@@ -138,10 +137,15 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected == 0 {
 			subID := fmt.Sprintf("sub_%x", now.UnixNano())
+			// New subscription: derive name from provider (only for INSERT, not UPDATE)
+			subName := cfg.Provider
+			if subName == "" {
+				subName = "openai"
+			}
 			_, err = tx.Exec(`
 			INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-		`, subID, cfg.SenderID, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode, now, now)
+		`, subID, cfg.SenderID, subName, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode, now, now)
 			if err != nil {
 				return fmt.Errorf("insert subscription: %w", err)
 			}

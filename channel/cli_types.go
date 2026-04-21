@@ -565,13 +565,15 @@ type ModelLister interface {
 
 // Subscription represents a LLM subscription for display/selection.
 type Subscription struct {
-	ID       string
-	Name     string
-	Provider string
-	BaseURL  string
-	APIKey   string
-	Model    string
-	Active   bool
+	ID              string
+	Name            string
+	Provider        string
+	BaseURL         string
+	APIKey          string
+	Model           string
+	MaxOutputTokens int
+	ThinkingMode    string
+	Active          bool
 }
 
 // SubscriptionManager manages user LLM subscriptions.

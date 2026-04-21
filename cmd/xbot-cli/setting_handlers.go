@@ -95,24 +95,6 @@ var cliSettingHandlers = map[string]cliSettingHandler{
 			}
 		},
 	},
-	"max_output_tokens": {
-		ApplyConfig: func(cfg *config.Config, value string) {
-			if n, err := strconv.Atoi(value); err == nil && n >= 0 {
-				cfg.LLM.MaxOutputTokens = n
-			}
-		},
-		ApplyBackend: func(backend agent.AgentBackend, senderID, value string) {
-			if n, err := strconv.Atoi(value); err == nil && n >= 0 {
-				_ = backend.SetUserMaxOutputTokens(senderID, n)
-			}
-		},
-	},
-	"thinking_mode": {
-		ApplyConfig: func(cfg *config.Config, value string) { cfg.LLM.ThinkingMode = value },
-		ApplyBackend: func(backend agent.AgentBackend, senderID, value string) {
-			_ = backend.SetUserThinkingMode(senderID, value)
-		},
-	},
 	// enable_auto_compress is a legacy alias for context_mode.
 	// Its ApplyBackend calls SetContextMode, so context_mode must be processed LAST
 	// in batch mode to correctly override when both are present.

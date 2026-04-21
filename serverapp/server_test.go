@@ -266,15 +266,6 @@ func TestApplyRuntimeSetting_WarnsOnUnknownKey(t *testing.T) {
 	// Should not panic, just log a warning
 }
 
-func TestApplyRuntimeSetting_ThinkingMode(t *testing.T) {
-	cfg := newTestConfig()
-	var backend agent.AgentBackend
-	applyRuntimeSetting(cfg, backend, "cli_user", "thinking_mode", "enabled")
-	if cfg.LLM.ThinkingMode != "enabled" {
-		t.Fatalf("thinking_mode = %q, want %q", cfg.LLM.ThinkingMode, "enabled")
-	}
-}
-
 func TestHandleCLIRPCSetDefaultSubscriptionRefreshesSenderCache(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XBOT_HOME", dir)

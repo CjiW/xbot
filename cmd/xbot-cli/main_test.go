@@ -517,25 +517,17 @@ func TestCLISettingHandlersCoversAllRuntimeKeys(t *testing.T) {
 func TestApplyCLISettingsToConfig(t *testing.T) {
 	cfg := &config.Config{}
 	handled := applyCLISettingsToConfig(cfg, map[string]string{
-		"max_iterations":    "50",
-		"max_output_tokens": "4096",
-		"thinking_mode":     "enabled",
-		"context_mode":      "auto",
+		"max_iterations": "50",
+		"context_mode":   "auto",
 	})
 	if cfg.Agent.MaxIterations != 50 {
 		t.Errorf("max_iterations = %d, want %d", cfg.Agent.MaxIterations, 50)
-	}
-	if cfg.LLM.MaxOutputTokens != 4096 {
-		t.Errorf("max_output_tokens = %d, want %d", cfg.LLM.MaxOutputTokens, 4096)
-	}
-	if cfg.LLM.ThinkingMode != "enabled" {
-		t.Errorf("thinking_mode = %q, want %q", cfg.LLM.ThinkingMode, "enabled")
 	}
 	if cfg.Agent.ContextMode != "auto" {
 		t.Errorf("context_mode = %q, want %q", cfg.Agent.ContextMode, "auto")
 	}
 	// All keys should be handled
-	for _, k := range []string{"max_iterations", "max_output_tokens", "thinking_mode", "context_mode"} {
+	for _, k := range []string{"max_iterations", "context_mode"} {
 		if !handled[k] {
 			t.Errorf("expected %q to be handled", k)
 		}

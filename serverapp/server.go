@@ -785,7 +785,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// If this is the default subscription, also switch the cached LLM client
 		// so that list_models/generate immediately use the new config.
 		if existing.IsDefault {
-			backend.LLMFactory().SwitchSubscription(bizID, &p.Sub)
+			backend.LLMFactory().SwitchSubscription(bizID, &p.Sub, "")
 		}
 		return nil, nil
 	case "remove_subscription":
@@ -816,7 +816,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		return nil, nil
 	case "set_default_subscription":
 		var p struct {
-			ID string `json:"id"`
+			ID     string `json:"id"`
+			ChatID string `json:"chat_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -843,7 +844,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// that list_models / generate uses, otherwise the cache holds a stale
 		// client and the user keeps seeing the old subscription's models.
 		backend.LLMFactory().Invalidate(bizID)
-		if err := backend.LLMFactory().SwitchSubscription(bizID, sub); err != nil {
+		if err := backend.LLMFactory().SwitchSubscription(bizID, sub, p.ChatID); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -904,7 +905,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			def, _ := svc.GetDefault(updated.SenderID)
 			if def != nil && def.ID == updated.ID {
 				backend.LLMFactory().Invalidate(updated.SenderID)
-				if err := backend.LLMFactory().SwitchSubscription(updated.SenderID, updated); err != nil {
+				if err := backend.LLMFactory().SwitchSubscription(updated.SenderID, updated, ""); err != nil {
 					return nil, err
 				}
 			}

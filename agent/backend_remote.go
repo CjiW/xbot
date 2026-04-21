@@ -1137,8 +1137,8 @@ func (b *RemoteBackend) RemoveSubscription(id string) error {
 	return b.callRPCVoid("remove_subscription", map[string]string{"id": id})
 }
 
-func (b *RemoteBackend) SetDefaultSubscription(id string) error {
-	return b.callRPCVoid("set_default_subscription", map[string]string{"id": id})
+func (b *RemoteBackend) SetDefaultSubscription(id string, chatID string) error {
+	return b.callRPCVoid("set_default_subscription", map[string]string{"id": id, "chat_id": chatID})
 }
 
 func (b *RemoteBackend) RenameSubscription(id, name string) error {

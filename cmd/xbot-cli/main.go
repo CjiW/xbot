@@ -306,7 +306,7 @@ func updateActiveSubscription(backend agent.AgentBackend, cfg *config.Config, va
 			if subs, err := backend.ListSubscriptions(cliSenderID); err == nil {
 				for _, sub := range subs {
 					if sub.Model == targetModel && sub.ID != "" {
-						return backend.SetDefaultSubscription(sub.ID)
+						return backend.SetDefaultSubscription(sub.ID, "")
 					}
 				}
 			}
@@ -872,7 +872,8 @@ func main() {
 			app.llmClient = client
 			if app.backend != nil {
 				if factory := app.backend.LLMFactory(); factory != nil {
-					factory.SetDefaults(client, model)
+					// Only cache for this chat — don't affect other CLI windows
+					factory.SetChatLLM(cliSenderID, absWorkDir, client, model)
 					factory.SetModelTiers(app.cfg.LLM)
 				}
 			}
@@ -1532,8 +1533,8 @@ func (m *localSubscriptionManager) Remove(id string) error {
 	return m.backend.RemoveSubscription(id)
 }
 
-func (m *localSubscriptionManager) SetDefault(id string) error {
-	return m.backend.SetDefaultSubscription(id)
+func (m *localSubscriptionManager) SetDefault(id, chatID string) error {
+	return m.backend.SetDefaultSubscription(id, chatID)
 }
 
 func (m *localSubscriptionManager) SetModel(id, model string) error {
@@ -1556,11 +1557,11 @@ func newLocalLLMSubscriber(backend agent.AgentBackend) *localLLMSubscriber {
 	return &localLLMSubscriber{backend: backend}
 }
 
-func (s *localLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
+func (s *localLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription, chatID string) error {
 	if sub == nil {
 		return nil
 	}
-	return s.backend.SetDefaultSubscription(sub.ID)
+	return s.backend.SetDefaultSubscription(sub.ID, chatID)
 }
 
 func (s *localLLMSubscriber) SwitchModel(senderID, model string) {
@@ -1646,7 +1647,7 @@ func (m *configSubscriptionManager) Remove(id string) error {
 	return m.saveFn()
 }
 
-func (m *configSubscriptionManager) SetDefault(id string) error {
+func (m *configSubscriptionManager) SetDefault(id, chatID string) error {
 	found := false
 	for i := range m.cfg.Subscriptions {
 		if m.cfg.Subscriptions[i].ID == id {
@@ -1873,8 +1874,8 @@ func (m *remoteSubscriptionManager) Remove(id string) error {
 	return m.backend.RemoveSubscription(id)
 }
 
-func (m *remoteSubscriptionManager) SetDefault(id string) error {
-	return m.backend.SetDefaultSubscription(id)
+func (m *remoteSubscriptionManager) SetDefault(id, chatID string) error {
+	return m.backend.SetDefaultSubscription(id, chatID)
 }
 
 func (m *remoteSubscriptionManager) SetModel(id, model string) error {
@@ -1898,7 +1899,7 @@ func newRemoteLLMSubscriber(backend agent.AgentBackend) *remoteLLMSubscriber {
 	return &remoteLLMSubscriber{backend: backend}
 }
 
-func (s *remoteLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
+func (s *remoteLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription, chatID string) error {
 	if sub == nil {
 		return nil
 	}
@@ -1906,7 +1907,7 @@ func (s *remoteLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 	// the next GetLLM call picks up the new subscription's provider/model/credentials.
 	// Do NOT call SetUserModel here — it would create a conflicting LLMConfig
 	// that overrides the subscription's model.
-	return s.backend.SetDefaultSubscription(sub.ID)
+	return s.backend.SetDefaultSubscription(sub.ID, chatID)
 }
 
 func (s *remoteLLMSubscriber) SwitchModel(senderID, model string) {

@@ -60,7 +60,7 @@ func TestSubscriptionPersistence(t *testing.T) {
 
 	// Simulate SetDefault to switch to "default"
 	mgr := newConfigSubscriptionManager(cfg, saveFn, nil)
-	if err := mgr.SetDefault("default"); err != nil {
+	if err := mgr.SetDefault("default", ""); err != nil {
 		t.Fatalf("SetDefault: %v", err)
 	}
 
@@ -453,7 +453,7 @@ func (b *fakeAgentBackend) AddSubscription(senderID string, sub channel.Subscrip
 func (b *fakeAgentBackend) RemoveSubscription(id string) error {
 	return b.factory.GetSubscriptionSvc().Remove(id)
 }
-func (b *fakeAgentBackend) SetDefaultSubscription(id string) error {
+func (b *fakeAgentBackend) SetDefaultSubscription(id string, _ string) error {
 	return b.factory.GetSubscriptionSvc().SetDefault(id)
 }
 func (b *fakeAgentBackend) RenameSubscription(id, name string) error {

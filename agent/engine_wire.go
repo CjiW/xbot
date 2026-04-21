@@ -66,7 +66,7 @@ func (a *Agent) buildBaseRunConfig(
 ) (RunConfig, int) {
 	sessionKey := channel + ":" + chatID
 
-	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(senderID)
+	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLMForChat(senderID, chatID)
 
 	// LLM 并发限流回调（per-tenant）
 	llmSemAcquire := a.llmFactory.LLMSemAcquireForUser(senderID)

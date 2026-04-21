@@ -582,7 +582,7 @@ type SubscriptionManager interface {
 	GetDefault(senderID string) (*Subscription, error)
 	Add(sub *Subscription) error
 	Remove(id string) error
-	SetDefault(id string) error
+	SetDefault(id, chatID string) error
 	SetModel(id, model string) error
 	Rename(id, name string) error
 	Update(id string, sub *Subscription) error
@@ -590,7 +590,7 @@ type SubscriptionManager interface {
 
 // LLMSubscriber switches the active LLM for a user (called when subscription changes).
 type LLMSubscriber interface {
-	SwitchSubscription(senderID string, sub *Subscription) error
+	SwitchSubscription(senderID string, sub *Subscription, chatID string) error
 	SwitchModel(senderID, model string)
 	GetDefaultModel() string
 }

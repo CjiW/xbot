@@ -229,8 +229,8 @@ type AgentBackend interface {
 	// RemoveSubscription removes a subscription by ID.
 	RemoveSubscription(id string) error
 
-	// SetDefaultSubscription sets the default subscription.
-	SetDefaultSubscription(id string) error
+	// SetDefaultSubscription sets the default subscription for a chat.
+	SetDefaultSubscription(id string, chatID string) error
 
 	// RenameSubscription renames a subscription.
 	RenameSubscription(id, name string) error

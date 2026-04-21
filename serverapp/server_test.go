@@ -168,7 +168,7 @@ func (b fakeBackend) ListSubscriptions(_ string) ([]channel.Subscription, error)
 func (b fakeBackend) GetDefaultSubscription(_ string) (*channel.Subscription, error) { return nil, nil }
 func (b fakeBackend) AddSubscription(_ string, _ channel.Subscription) error         { return nil }
 func (b fakeBackend) RemoveSubscription(_ string) error                              { return nil }
-func (b fakeBackend) SetDefaultSubscription(_ string) error                          { return nil }
+func (b fakeBackend) SetDefaultSubscription(_ string, _ string) error                { return nil }
 func (b fakeBackend) RenameSubscription(_, _ string) error                           { return nil }
 func (b fakeBackend) UpdateSubscription(_ string, _ channel.Subscription) error      { return nil }
 func (b fakeBackend) SetSubscriptionModel(_, _ string) error                         { return nil }

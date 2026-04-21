@@ -53,7 +53,7 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 		if done.err != nil {
 			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
 		} else if done.mgr != nil {
-			if err := done.mgr.SetDefault(done.subID); err != nil {
+			if err := done.mgr.SetDefault(done.subID, m.chatID); err != nil {
 				m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
 			} else {
 				m.subGeneration++ // subscription actually changed

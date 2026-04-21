@@ -124,6 +124,34 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
 }
 
+// chatKey returns the per-chat cache key used to isolate LLM clients between
+// different CLI windows (each with a unique chatID/working-directory).
+func chatKey(senderID, chatID string) string {
+	return senderID + ":" + chatID
+}
+
+// GetLLMForChat returns the LLM client for a specific chat session.
+// It first checks the per-chat cache (keyed by senderID:chatID), then falls
+// back to GetLLM(senderID) which checks the user-level cache and DB.
+// This ensures each CLI window can switch subscriptions independently.
+func (f *LLMFactory) GetLLMForChat(senderID, chatID string) (llm.LLM, string, int, string) {
+	if chatID == "" {
+		return f.GetLLM(senderID)
+	}
+	key := chatKey(senderID, chatID)
+	f.mu.RLock()
+	if client, ok := f.clients[key]; ok {
+		model := f.models[key]
+		maxCtx := f.maxContexts[key]
+		thinkingMode := f.thinkingModes[key]
+		f.mu.RUnlock()
+		return client, model, maxCtx, thinkingMode
+	}
+	f.mu.RUnlock()
+	// No per-chat override — fall back to user-level resolution
+	return f.GetLLM(senderID)
+}
+
 // HasCustomLLM 检查用户是否有自定义 LLM 配置
 func (f *LLMFactory) HasCustomLLM(senderID string) bool {
 	// 先检查缓存
@@ -195,8 +223,10 @@ func (f *LLMFactory) GetDefaultModel() string {
 }
 
 // SwitchSubscription switches a user's active LLM to the specified subscription.
-// It creates a new LLM client from the subscription config and caches it.
-func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscription) error {
+// It creates a new LLM client from the subscription config and caches it under
+// both the user-level key (senderID) and the per-chat key (senderID:chatID).
+// The per-chat key ensures other CLI windows keep their own LLM client.
+func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscription, chatID string) error {
 	cfg := &sqlite.UserLLMConfig{
 		Provider:        sub.Provider,
 		BaseURL:         sub.BaseURL,
@@ -219,11 +249,21 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 	}
 
 	f.mu.Lock()
+	// Always update user-level cache so GetLLM(senderID) picks it up
 	f.clients[senderID] = client
 	f.models[senderID] = model
 	f.maxContexts[senderID] = sub.MaxContext
 	f.maxOutputTokens[senderID] = sub.MaxOutputTokens
 	f.thinkingModes[senderID] = sub.ThinkingMode
+	// If chatID provided, also cache under per-chat key for chat isolation
+	if chatID != "" {
+		chatK := chatKey(senderID, chatID)
+		f.clients[chatK] = client
+		f.models[chatK] = model
+		f.maxContexts[chatK] = sub.MaxContext
+		f.maxOutputTokens[chatK] = sub.MaxOutputTokens
+		f.thinkingModes[chatK] = sub.ThinkingMode
+	}
 	// For the CLI identity, also update defaultLLM so that GetLLM fallback
 	// (when cache miss and no DB default) returns the currently active
 	// subscription's client, not the stale startup client.
@@ -235,6 +275,7 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 
 	log.WithFields(log.Fields{
 		"sender_id":         senderID,
+		"chat_id":           chatID,
 		"sub_id":            sub.ID,
 		"sub_name":          sub.Name,
 		"model":             model,
@@ -297,6 +338,25 @@ func (f *LLMFactory) SetDefaultThinkingMode(mode string) {
 	f.defaultThinkingMode = mode
 	// Clear cached thinkingModes so GetLLM picks up the new default
 	f.thinkingModes = make(map[string]string)
+	f.mu.Unlock()
+}
+
+// SetChatLLM caches an LLM client for a specific chat session without affecting
+// other chats or the global default. Used by Ctrl+N subscription switching to
+// ensure each CLI window's model change is isolated.
+func (f *LLMFactory) SetChatLLM(senderID, chatID string, client llm.LLM, model string) {
+	if chatID == "" {
+		// No chat isolation — update user-level cache only
+		f.mu.Lock()
+		f.clients[senderID] = client
+		f.models[senderID] = model
+		f.mu.Unlock()
+		return
+	}
+	key := chatKey(senderID, chatID)
+	f.mu.Lock()
+	f.clients[key] = client
+	f.models[key] = model
 	f.mu.Unlock()
 }
 

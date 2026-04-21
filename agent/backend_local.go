@@ -496,7 +496,7 @@ func (b *LocalBackend) RemoveSubscription(id string) error {
 	return nil
 }
 
-func (b *LocalBackend) SetDefaultSubscription(id string) error {
+func (b *LocalBackend) SetDefaultSubscription(id string, chatID string) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
@@ -507,7 +507,7 @@ func (b *LocalBackend) SetDefaultSubscription(id string) error {
 	sub, err := svc.Get(id)
 	if err == nil && sub != nil {
 		b.agent.llmFactory.Invalidate(sub.SenderID)
-		if err := b.agent.llmFactory.SwitchSubscription(sub.SenderID, sub); err != nil {
+		if err := b.agent.llmFactory.SwitchSubscription(sub.SenderID, sub, chatID); err != nil {
 			return err
 		}
 	}

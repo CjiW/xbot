@@ -35,7 +35,7 @@ func TestLocalBackendSetDefaultSubscriptionRefreshesFactoryCache(t *testing.T) {
 	if model != "model-a" {
 		t.Fatalf("expected initial model-a, got %q", model)
 	}
-	if err := backend.SetDefaultSubscription("sub-b"); err != nil {
+	if err := backend.SetDefaultSubscription("sub-b", ""); err != nil {
 		t.Fatalf("SetDefaultSubscription: %v", err)
 	}
 	_, model, _, _ = factory.GetLLM("cli_user")

@@ -483,6 +483,9 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 			log.WithFields(log.Fields{"count": len(msg.history)}).Info("Applied history load in Update loop")
 		}
 
+	case cliHistoryReloadMsg:
+		m.handleHistoryReload(msg)
+
 	case cliToastClearMsg:
 		cmds = append(cmds, m.handleToastClear(msg)...)
 

@@ -243,6 +243,12 @@ type suHistoryLoadMsg struct {
 	err     error
 }
 
+// cliHistoryReloadMsg context compression 后重新加载历史完成消息
+type cliHistoryReloadMsg struct {
+	history []HistoryMessage
+	err     error
+}
+
 // cliToastItem 单条 Toast 通知数据
 type cliToastItem struct {
 	text string
@@ -769,4 +775,26 @@ func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
 		history, err := loader("", chatID)
 		return suHistoryLoadMsg{history: history, err: err}
 	}
+}
+
+// reloadMessagesFromSession triggers async history reload after context compression.
+// The engine has replaced its internal message list and persisted to session DB;
+// CLI must rebuild m.messages to stay in sync.
+func (m *cliModel) reloadMessagesFromSession() {
+	loader := m.channel.config.DynamicHistoryLoader
+	if loader == nil {
+		return
+	}
+	chatID := m.chatID
+	go func() {
+		history, err := loader("", chatID)
+		// Send result via async channel (goroutine-safe)
+		if m.channel != nil {
+			select {
+			case m.channel.asyncCh <- cliHistoryReloadMsg{history: history, err: err}:
+			default:
+				// channel full, drop — next progress event will retry
+			}
+		}
+	}()
 }

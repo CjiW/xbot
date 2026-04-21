@@ -878,6 +878,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	s.lastCompressIter = s.compressAttempts
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseThinking
+		s.structuredProgress.HistoryCompacted = true
 	}
 	if s.autoNotify {
 		for i := len(s.progressLines) - 1; i >= 0; i-- {

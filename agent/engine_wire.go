@@ -222,10 +222,11 @@ func (a *Agent) buildMainRunConfig(
 					s := event.Structured
 					if cliCh != nil {
 						payload := &channelpkg.CLIProgressPayload{
-							Phase:     string(s.Phase),
-							Iteration: s.Iteration,
-							Thinking:  s.ThinkingContent,
-							Reasoning: s.ReasoningContent,
+							Phase:            string(s.Phase),
+							Iteration:        s.Iteration,
+							Thinking:         s.ThinkingContent,
+							Reasoning:        s.ReasoningContent,
+							HistoryCompacted: s.HistoryCompacted,
 						}
 						for _, t := range s.ActiveTools {
 							payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{

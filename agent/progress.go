@@ -33,6 +33,10 @@ type StructuredProgress struct {
 	ReasoningContent string // model's reasoning/thinking chain (reasoning_content field)
 	TokenUsage       *TokenUsageSnapshot
 	Todos            []TodoProgressItem
+
+	// HistoryCompacted is set to true after context compression completes.
+	// CLI uses this to rebuild its message list from session storage.
+	HistoryCompacted bool
 }
 
 // ProgressPhase Agent 运行阶段。

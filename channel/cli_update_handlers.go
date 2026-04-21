@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	log "xbot/logger"
 )
 
 // handleKeyPress processes key press events in the main update loop.
@@ -435,6 +436,13 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	if m.agentCountFn != nil {
 		m.agentCount = m.agentCountFn()
 	}
+
+	// HistoryCompacted: context compression replaced the engine's message list.
+	// Rebuild m.messages from session storage to stay in sync.
+	if msg.payload != nil && msg.payload.HistoryCompacted {
+		m.reloadMessagesFromSession()
+	}
+
 	if msg.payload != nil {
 		// Sync todo items from progress event
 		if len(msg.payload.Todos) > 0 {
@@ -671,6 +679,39 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 	}
 	m.invalidateAllCache(false)
 	m.viewport.GotoBottom()
+}
+
+// handleHistoryReload rebuilds m.messages from session storage after context compression.
+// Unlike /su which appends, this REPLACES the entire message list because compression
+// may have replaced many old messages with a single [Compacted context] summary.
+func (m *cliModel) handleHistoryReload(msg cliHistoryReloadMsg) {
+	if msg.err != nil {
+		log.WithError(msg.err).Warn("Failed to reload history after compression")
+		return
+	}
+	var newMessages []cliMessage
+	for _, hm := range msg.history {
+		cm := cliMessage{
+			role:      hm.Role,
+			content:   hm.Content,
+			timestamp: hm.Timestamp,
+			isPartial: false,
+			dirty:     true,
+		}
+		if len(hm.Iterations) > 0 {
+			cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
+			for i, hi := range hm.Iterations {
+				cm.iterations[i] = cliIterationSnapshot(hi)
+			}
+		}
+		newMessages = append(newMessages, cm)
+	}
+	m.messages = newMessages
+	m.streamingMsgIdx = -1
+	m.invalidateAllCache(false)
+	m.updateViewportContent()
+	m.viewport.GotoBottom()
+	log.WithField("count", len(newMessages)).Info("History reloaded after compression")
 }
 
 // handleSplashTick processes splash animation frames.

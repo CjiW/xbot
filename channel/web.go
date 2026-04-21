@@ -484,6 +484,8 @@ type WsProgressPayload struct {
 	// StreamContent carries accumulated LLM streaming text (for CLI RemoteBackend).
 	StreamContent          string `json:"stream_content,omitempty"`
 	ReasoningStreamContent string `json:"reasoning_stream_content,omitempty"`
+	// HistoryCompacted is true after context compression — CLI should reload messages.
+	HistoryCompacted bool `json:"history_compacted,omitempty"`
 }
 
 // cliProgressToWS converts CLIProgressPayload to WsProgressPayload for WS delivery.
@@ -498,6 +500,7 @@ func cliProgressToWS(p *CLIProgressPayload) *WsProgressPayload {
 		Reasoning:              p.Reasoning,
 		StreamContent:          p.StreamContent,
 		ReasoningStreamContent: p.ReasoningStreamContent,
+		HistoryCompacted:       p.HistoryCompacted,
 	}
 	for _, t := range p.ActiveTools {
 		wp.ActiveTools = append(wp.ActiveTools, WsToolProgress{

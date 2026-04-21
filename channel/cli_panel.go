@@ -355,14 +355,10 @@ func (m *cliModel) viewRewindPanel(width, height int) string {
 		lines = append(lines, line)
 	}
 
-	// Scroll indicator
+	// Scroll indicator with position
 	if total > maxVisible {
-		if scrollStart > 0 {
-			lines = append(lines, m.styles.TextMutedSt.Render("  ↑ more"))
-		}
-		if scrollEnd < total {
-			lines = append(lines, m.styles.TextMutedSt.Render("  ↓ more"))
-		}
+		scrollInfo := fmt.Sprintf("  [%d-%d/%d]", scrollStart+1, scrollEnd, total)
+		lines = append(lines, m.styles.TextMutedSt.Render(scrollInfo))
 	}
 
 	// Build panel with border
@@ -370,7 +366,7 @@ func (m *cliModel) viewRewindPanel(width, height int) string {
 	box := m.styles.PanelBox.Render(panelContent)
 
 	// Hint line
-	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Rewind  Esc Cancel")
+	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  PgUp/PgDn Page  Home/End Jump  Enter Rewind  Esc Cancel")
 
 	// Center vertically
 	listH := len(lines) + 3
@@ -404,6 +400,25 @@ func (m *cliModel) handleRewindKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case tea.KeyDown:
 		if m.rewindCursor < len(m.rewindItems)-1 {
 			m.rewindCursor++
+		}
+		return true, nil
+	case tea.KeyPgUp:
+		maxVisible := m.height - 10
+		if maxVisible < 3 {
+			maxVisible = 3
+		}
+		if m.rewindCursor > 0 {
+			m.rewindCursor -= min(maxVisible, m.rewindCursor)
+		}
+		return true, nil
+	case tea.KeyPgDown:
+		maxVisible := m.height - 10
+		if maxVisible < 3 {
+			maxVisible = 3
+		}
+		maxIdx := len(m.rewindItems) - 1
+		if m.rewindCursor < maxIdx {
+			m.rewindCursor += min(maxVisible, maxIdx-m.rewindCursor)
 		}
 		return true, nil
 	case tea.KeyHome:

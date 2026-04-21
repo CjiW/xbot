@@ -985,43 +985,36 @@ func main() {
 				return nil
 			}
 			var entries []channel.SessionPanelEntry
-			// List all tenant sessions (from DB in local mode, RPC in remote mode)
-			if tenantSvc != nil {
-				tenants, err := tenantSvc.ListTenants()
-				if err == nil {
-					for _, t := range tenants {
-						if t.Channel != "cli" {
-							continue
-						}
-						isActive := t.ChatID == absWorkDir
-						label := t.ChatID
-						if isActive {
-							label = "主会话  You ↔ Agent"
-						}
+			tenants, err := app.backend.ListTenants()
+			if err == nil && len(tenants) > 0 {
+				for _, t := range tenants {
+					isActive := t.ChatID == absWorkDir && t.Channel == "cli"
+					label := fmt.Sprintf("[%s] %s", t.Channel, t.ChatID)
+					if isActive {
+						label = "主会话  You ↔ Agent"
+					}
+					entries = append(entries, channel.SessionPanelEntry{
+						ID:     t.ChatID,
+						Type:   "main",
+						Label:  label,
+						Active: isActive,
+					})
+					// SubAgent sessions for this tenant
+					sessions := app.backend.ListInteractiveSessions(t.Channel, t.ChatID)
+					for _, s := range sessions {
 						entries = append(entries, channel.SessionPanelEntry{
-							ID:     t.ChatID,
-							Type:   "main",
-							Label:  label,
-							Active: isActive,
+							ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
+							Type:        "agent",
+							Role:        s.Role,
+							Instance:    s.Instance,
+							ParentID:    t.ChatID,
+							Running:     s.Running,
+							MessageHint: s.Preview,
 						})
-						// SubAgent sessions for this tenant
-						sessions := app.backend.ListInteractiveSessions("cli", t.ChatID)
-						for _, s := range sessions {
-							entries = append(entries, channel.SessionPanelEntry{
-								ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
-								Type:        "agent",
-								Role:        s.Role,
-								Instance:    s.Instance,
-								ParentID:    t.ChatID,
-								Running:     s.Running,
-								MessageHint: s.Preview,
-							})
-						}
 					}
 				}
 			} else {
-				// Fallback: no DB (remote mode without local tenantSvc)
-				// Show current session + its subagents
+				// Fallback: no tenants available
 				entries = append(entries, channel.SessionPanelEntry{
 					ID:     absWorkDir,
 					Type:   "main",

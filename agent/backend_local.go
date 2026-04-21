@@ -430,6 +430,32 @@ func (b *LocalBackend) CleanupCompletedBgTasks(sessionKey string) {
 	}
 }
 
+func (b *LocalBackend) ListTenants() ([]TenantInfo, error) {
+	if b.agent.multiSession == nil {
+		return nil, nil
+	}
+	db := b.agent.multiSession.DB()
+	if db == nil {
+		return nil, nil
+	}
+	tenantSvc := sqlite.NewTenantService(db)
+	tenants, err := tenantSvc.ListTenants()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]TenantInfo, len(tenants))
+	for i, t := range tenants {
+		result[i] = TenantInfo{
+			ID:           t.ID,
+			Channel:      t.Channel,
+			ChatID:       t.ChatID,
+			CreatedAt:    t.CreatedAt.Format(time.RFC3339),
+			LastActiveAt: t.LastActiveAt.Format(time.RFC3339),
+		}
+	}
+	return result, nil
+}
+
 func (b *LocalBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {

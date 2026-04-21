@@ -1103,6 +1103,30 @@ func (b *RemoteBackend) CleanupCompletedBgTasks(sessionKey string) {
 	_ = b.callRPCVoid("cleanup_completed_bg_tasks", map[string]string{"session_key": sessionKey})
 }
 
+// TenantInfo is a transport-only struct for serializing tenant info over RPC.
+type TenantInfo struct {
+	ID           int64  `json:"id"`
+	Channel      string `json:"channel"`
+	ChatID       string `json:"chat_id"`
+	CreatedAt    string `json:"created_at"`
+	LastActiveAt string `json:"last_active_at"`
+}
+
+func (b *RemoteBackend) ListTenants() ([]TenantInfo, error) {
+	raw, err := b.callRPC("list_tenants", nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var result []TenantInfo
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal tenants: %w", err)
+	}
+	return result, nil
+}
+
 func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
 	raw, err := b.callRPC("list_subscriptions", map[string]string{"sender_id": senderID})
 	if err != nil {

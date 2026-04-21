@@ -425,6 +425,7 @@ func (b *fakeAgentBackend) GetBgTaskCount(string) int                      { ret
 func (b *fakeAgentBackend) ListBgTasks(string) ([]agent.BgTaskJSON, error) { return nil, nil }
 func (b *fakeAgentBackend) KillBgTask(string) error                        { return nil }
 func (b *fakeAgentBackend) CleanupCompletedBgTasks(string)                 {}
+func (b *fakeAgentBackend) ListTenants() ([]agent.TenantInfo, error)       { return nil, nil }
 func (b *fakeAgentBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
 	svc := b.factory.GetSubscriptionSvc()
 	subs, err := svc.List(senderID)

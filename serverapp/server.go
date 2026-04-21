@@ -610,6 +610,39 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(true)
 
+	case "list_tenants":
+		// List all tenants (sessions) for the authenticated user.
+		if backend.MultiSession() == nil {
+			return json.Marshal([]struct{}{})
+		}
+		db := backend.MultiSession().DB()
+		if db == nil {
+			return json.Marshal([]struct{}{})
+		}
+		tenantSvc := sqlite.NewTenantService(db)
+		tenants, err := tenantSvc.ListTenants()
+		if err != nil {
+			return nil, err
+		}
+		type tenantJSON struct {
+			ID           int64  `json:"id"`
+			Channel      string `json:"channel"`
+			ChatID       string `json:"chat_id"`
+			CreatedAt    string `json:"created_at"`
+			LastActiveAt string `json:"last_active_at"`
+		}
+		result := make([]tenantJSON, len(tenants))
+		for i, t := range tenants {
+			result[i] = tenantJSON{
+				ID:           t.ID,
+				Channel:      t.Channel,
+				ChatID:       t.ChatID,
+				CreatedAt:    t.CreatedAt.Format(time.RFC3339),
+				LastActiveAt: t.LastActiveAt.Format(time.RFC3339),
+			}
+		}
+		return json.Marshal(result)
+
 	// --- History ---
 	case "get_history":
 		var p struct {

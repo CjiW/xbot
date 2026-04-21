@@ -220,6 +220,9 @@ type AgentBackend interface {
 	// CleanupCompletedBgTasks removes completed/errored tasks from the task manager.
 	CleanupCompletedBgTasks(sessionKey string)
 
+	// ListTenants returns all tenant sessions from the DB.
+	ListTenants() ([]TenantInfo, error)
+
 	// ListSubscriptions lists LLM subscriptions.
 	ListSubscriptions(senderID string) ([]channel.Subscription, error)
 

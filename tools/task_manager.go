@@ -320,6 +320,11 @@ func (m *BackgroundTaskManager) Adopt(
 			task.Status = BgTaskKilled
 			task.Error = "killed by user"
 			task.ExitCode = -1
+		} else if safetyCtx.Err() != nil {
+			// safetyCtx expired (24h max lifetime) — process may still be running
+			task.Status = BgTaskError
+			task.Error = "task exceeded maximum lifetime"
+			task.ExitCode = -1
 		} else {
 			task.Status = BgTaskDone
 		}

@@ -1304,8 +1304,10 @@ func main() {
 		// Run in goroutine to avoid blocking TUI startup on RPC timeout.
 		go func() {
 			if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
-				cliCh.SendProgress(cliCfg.ChatID, progress)
+				// Set processing BEFORE sending progress — otherwise handleProgressMsg
+				// rejects it via the stale guard (!m.typing check).
 				cliCh.SetProcessing(true)
+				cliCh.SendProgress(cliCfg.ChatID, progress)
 			}
 		}()
 
@@ -1326,6 +1328,10 @@ func main() {
 				// Re-check processing state after reconnect.
 				if app.backend.IsProcessing("cli", remoteChatID) {
 					cliCh.SetProcessing(true)
+					// Restore active progress snapshot (iteration history + stream state).
+					if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
+						cliCh.SendProgress(cliCfg.ChatID, progress)
+					}
 				} else {
 					cliCh.SetProcessing(false)
 				}

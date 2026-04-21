@@ -316,6 +316,37 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 		return
 	}
 	m.progress = msg.payload
+
+	// Restore iteration history from reconnect/GetActiveProgress snapshot.
+	// When a CLI reconnects mid-turn, the server sends completed iterations
+	// in IterationHistory. Convert them to cliIterationSnapshot for rendering.
+	if m.progress != nil && len(m.progress.IterationHistory) > 0 && len(m.iterationHistory) == 0 {
+		for _, ih := range m.progress.IterationHistory {
+			snap := cliIterationSnapshot{
+				Iteration: ih.Iteration,
+				Thinking:  ih.Thinking,
+				Reasoning: ih.Reasoning,
+				Tools:     ih.CompletedTools,
+			}
+			// Restore StartedAt for tools that have Elapsed but zero StartedAt.
+			for i := range snap.Tools {
+				t := &snap.Tools[i]
+				if t.StartedAt.IsZero() && t.Elapsed > 0 {
+					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+				}
+			}
+			m.iterationHistory = append(m.iterationHistory, snap)
+		}
+		// Set lastSeenIteration to the latest restored iteration so we don't
+		// re-snapshot it when the next progress event arrives.
+		if len(m.iterationHistory) > 0 {
+			lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+			if lastIter > m.lastSeenIteration {
+				m.lastSeenIteration = lastIter
+			}
+		}
+	}
+
 	// Preserve StartedAt across progress updates so live timers don't reset.
 	// Each structured progress event replaces ActiveTools entirely (StartedAt=zero),
 	// so we must carry forward the previous StartedAt values by matching tool name.

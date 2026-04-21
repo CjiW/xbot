@@ -56,6 +56,10 @@ type RemoteBackend struct {
 	// before reconnect spawns a new one, preventing goroutine leaks.
 	readPumpWg sync.WaitGroup
 
+	// Event seq tracking — tracks the highest seq from server events
+	// so that on reconnect we send last_seq and only replay missed events.
+	lastSeq atomic.Uint64
+
 	// Outbound message callback (for final agent replies)
 	outboundMu sync.RWMutex
 	outboundCb func(bus.OutboundMessage)
@@ -107,6 +111,7 @@ type wsIncomingMessage struct {
 	Content         string                     `json:"content,omitempty"`
 	OriginalContent string                     `json:"original_content,omitempty"`
 	TS              int64                      `json:"ts,omitempty"`
+	Seq             uint64                     `json:"seq,omitempty"`
 	Progress        *channel.WsProgressPayload `json:"progress,omitempty"`
 	ProgressHistory string                     `json:"progress_history,omitempty"`
 	Result          json.RawMessage            `json:"result,omitempty"`
@@ -338,6 +343,21 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 	}
 	log.Info("Connected to remote xbot server")
 	b.setConnState("connected")
+
+	// Send sync message so server replays missed events from eventStream buffer.
+	// This enables mid-turn reconnect: a new CLI terminal sees recent progress/stream
+	// events without waiting for the 2s timeout fallback.
+	syncMsg := struct {
+		Type    string `json:"type"`
+		LastSeq uint64 `json:"last_seq"`
+	}{
+		Type:    "sync",
+		LastSeq: b.lastSeq.Load(),
+	}
+	if err := conn.WriteJSON(syncMsg); err != nil {
+		log.WithError(err).Warn("Failed to send sync message")
+	}
+
 	return nil
 }
 
@@ -387,6 +407,15 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			log.WithError(err).Debug("Invalid WS message from server")
 			continue
+		}
+		// Track highest seq for reconnect sync.
+		if msg.Seq > 0 {
+			for {
+				old := b.lastSeq.Load()
+				if msg.Seq <= old || b.lastSeq.CompareAndSwap(old, msg.Seq) {
+					break
+				}
+			}
 		}
 		switch msg.Type {
 		case "rpc_response":

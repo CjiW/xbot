@@ -188,7 +188,10 @@ var dangerConfirmStrings = map[string]string{
 // openAskUserPanel activates the ask-user panel overlay.
 func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
 	m.panelMode = "askuser"
-	m.progress = nil
+	// Do NOT clear m.progress here — the viewport above the AskUser panel
+	// still renders the progress block (iteration history, tool calls, etc).
+	// Clearing it causes all iteration info from the current turn to disappear.
+	// Progress will be cleaned up by endAgentTurn when the turn actually finishes.
 	m.typing = false
 	m.relayoutViewport() // viewport gets split-layout height
 	m.panelItems = items

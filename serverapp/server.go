@@ -778,6 +778,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		p.Sub.ID = p.ID
 		p.Sub.SenderID = existing.SenderID
+		p.Sub.IsDefault = existing.IsDefault // preserve is_default (client sends zero)
 		if strings.HasSuffix(p.Sub.APIKey, "****") {
 			p.Sub.APIKey = existing.APIKey
 		}
@@ -785,6 +786,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, err
 		}
 		backend.LLMFactory().Invalidate(existing.SenderID)
+		// If this is the default subscription, also switch the cached LLM client
+		// so that list_models/generate immediately use the new config.
+		if existing.IsDefault {
+			backend.LLMFactory().SwitchSubscription(bizID, &p.Sub)
+		}
 		return nil, nil
 	case "remove_subscription":
 		var p struct {

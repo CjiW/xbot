@@ -86,10 +86,13 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 }
 
 // ListModels 返回可用模型列表
+// Anthropic has no /v1/models API, so we only return the configured model.
+// This prevents Ctrl+N from cycling through fake hardcoded model names.
 func (a *AnthropicLLM) ListModels() []string {
-	result := make([]string, len(a.models))
-	copy(result, a.models)
-	return result
+	if a.defaultModel != "" {
+		return []string{a.defaultModel}
+	}
+	return nil
 }
 
 // GetDefaultModel 返回默认模型

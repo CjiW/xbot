@@ -605,10 +605,11 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 		}
 
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "data: ") {
+		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimPrefix(data, " ") // tolerate both "data:" and "data: "
 		if data == "[DONE]" || data == "" {
 			if lastUsage != nil {
 				eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}

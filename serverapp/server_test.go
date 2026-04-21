@@ -43,6 +43,58 @@ func newTestConfig() *config.Config {
 	}
 }
 
+// TestHandleCLIRPCAdminAddSubscription_ListRoundTrip verifies that a subscription
+// added via adminAddSubscription (SenderID="cli_user") is visible when listing
+// with an empty senderID (which falls back to WS auth "admin").
+// This was a real bug: openQuickSwitch passes senderID="" → server falls back
+// to authSenderID "admin" → svc.List("admin") returns nothing because subs are
+// stored under "cli_user".
+func TestHandleCLIRPCAdminAddSubscription_ListRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XBOT_HOME", dir)
+	db, err := sqlite.Open(config.DBFilePath())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	factory := agent.NewLLMFactory(sqlite.NewUserLLMConfigService(db), &llm.MockLLM{}, "default-model")
+	subSvc := sqlite.NewLLMSubscriptionService(db)
+	factory.SetSubscriptionSvc(subSvc)
+
+	aCfg := &config.Config{}
+	lb := fakeBackend{factory: factory}
+
+	// Add subscription via admin path (same as remote CLI does)
+	sub := channel.Subscription{
+		Name: "test", Provider: "openai",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-test", Model: "gpt-4",
+	}
+	addParams, _ := json.Marshal(map[string]any{"sub": sub})
+	if _, err := handleCLIRPC(aCfg, lb, "add_subscription", addParams, "admin"); err != nil {
+		t.Fatalf("add_subscription: %v", err)
+	}
+
+	// List with empty senderID (simulates openQuickSwitch behavior)
+	// Before fix: senderIDFromParams falls back to "admin" → empty list
+	// After fix: should return the subscription
+	listParams, _ := json.Marshal(map[string]string{"sender_id": ""})
+	raw, err := handleCLIRPC(aCfg, lb, "list_subscriptions", listParams, "admin")
+	if err != nil {
+		t.Fatalf("list_subscriptions: %v", err)
+	}
+	var subs []channel.Subscription
+	if err := json.Unmarshal(raw, &subs); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(subs) == 0 {
+		t.Fatal("list_subscriptions returned empty, expected the subscription added by admin")
+	}
+	if subs[0].Name != "test" {
+		t.Fatalf("expected subscription name 'test', got %q", subs[0].Name)
+	}
+}
+
 func newTestBackendWithSettings(t *testing.T) (agent.AgentBackend, *sqlite.UserSettingsService) {
 	t.Helper()
 	db, err := sqlite.Open(filepath.Join(t.TempDir(), "settings.db"))
@@ -261,5 +313,51 @@ func TestHandleCLIRPCSetDefaultSubscriptionRefreshesSenderCache(t *testing.T) {
 	_, model, _, _ = factory.GetLLM("admin")
 	if model != "glm-5.1" {
 		t.Fatalf("expected switched glm model, got %q", model)
+	}
+}
+
+// TestHandleCLIRPCSetDefaultSubscription_CrossIdentity verifies that when
+// the WS auth identity ("admin") differs from the subscription's business
+// senderID ("cli_user"), the LLM factory cache is still updated correctly.
+// This was a real bug: the server used senderIDFromParams (→ "admin") as
+// the cache key instead of sub.SenderID ("cli_user"), so GetLLM("cli_user")
+// kept returning the old client after a subscription switch.
+func TestHandleCLIRPCSetDefaultSubscription_CrossIdentity(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XBOT_HOME", dir)
+	db, err := sqlite.Open(config.DBFilePath())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	factory := agent.NewLLMFactory(sqlite.NewUserLLMConfigService(db), &llm.MockLLM{}, "default-model")
+	subSvc := sqlite.NewLLMSubscriptionService(db)
+	factory.SetSubscriptionSvc(subSvc)
+	// Subscriptions belong to "cli_user" (business identity)
+	if err := subSvc.Add(&sqlite.LLMSubscription{ID: "sub-gpt", SenderID: "cli_user", Name: "gpt", Provider: "openai", BaseURL: "https://gpt.example/v1", APIKey: "sk-gpt", Model: "gpt-4.1", IsDefault: true}); err != nil {
+		t.Fatalf("add gpt: %v", err)
+	}
+	if err := subSvc.Add(&sqlite.LLMSubscription{ID: "sub-glm", SenderID: "cli_user", Name: "glm", Provider: "openai", BaseURL: "https://glm.example/v1", APIKey: "sk-glm", Model: "glm-5.1", IsDefault: false}); err != nil {
+		t.Fatalf("add glm: %v", err)
+	}
+
+	aCfg := &config.Config{}
+	lb := fakeBackend{factory: factory}
+	// Agent calls GetLLM with "cli_user" (business identity)
+	_, model, _, _ := factory.GetLLM("cli_user")
+	if model != "gpt-4.1" {
+		t.Fatalf("expected initial gpt model for cli_user, got %q", model)
+	}
+
+	// RPC call with WS auth "admin", no sender_id in params (matches real CLI behavior)
+	params, _ := json.Marshal(map[string]string{"id": "sub-glm"})
+	if _, err := handleCLIRPC(aCfg, lb, "set_default_subscription", params, "admin"); err != nil {
+		t.Fatalf("handleCLIRPC set_default_subscription: %v", err)
+	}
+	// The key assertion: GetLLM("cli_user") must see the new model
+	_, model, _, _ = factory.GetLLM("cli_user")
+	if model != "glm-5.1" {
+		t.Fatalf("expected switched glm model for cli_user, got %q (LLM factory cached under wrong key)", model)
 	}
 }

@@ -579,9 +579,9 @@ fi
 
 # For bash: insert before PS1 guard if present
 if [ "$shell_name" = "bash" ] && grep -q '\[ -z "\$PS1" \]' "$rc_file" 2>/dev/null; then
-    sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env\n' "$rc_file"
+    sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] && source ~/.xbot_env\n' "$rc_file"
 elif ! grep -q 'source ~/.xbot_env' "$rc_file" 2>/dev/null; then
-    echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env' >> "$rc_file"
+    echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] && source ~/.xbot_env' >> "$rc_file"
 fi`
 	RunInSandboxWithShell(toolCtx, ensureRcCmd)
 

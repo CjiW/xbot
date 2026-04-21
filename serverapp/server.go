@@ -813,6 +813,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return json.Marshal([]channel.Subscription{})
 		}
 		bizID := senderIDFromParams(params, senderID)
+		// Admin users manage subscriptions under "cli_user" (set by adminAddSubscription).
+		// When the CLI sends empty senderID, senderIDFromParams falls back to WS auth
+		// identity "admin" — but subscriptions are stored under "cli_user".
+		if isAdmin(senderID) && bizID == adminSenderID {
+			bizID = cliSenderID
+		}
 		subs, err := svc.List(bizID)
 		if err != nil {
 			return nil, err
@@ -834,8 +840,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, nil
 		}
-		// get_default_subscription: use business senderID from params.
-		sub, err := svc.GetDefault(senderIDFromParams(params, senderID))
+		bizID := senderIDFromParams(params, senderID)
+		if isAdmin(senderID) && bizID == adminSenderID {
+			bizID = cliSenderID
+		}
+		sub, err := svc.GetDefault(bizID)
 		if err != nil || sub == nil {
 			return nil, err
 		}
@@ -957,9 +966,14 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := svc.SetDefault(p.ID); err != nil {
 			return nil, err
 		}
-		bizID := senderIDFromParams(params, senderID)
-		backend.LLMFactory().Invalidate(bizID)
-		if err := backend.LLMFactory().SwitchSubscription(bizID, sub); err != nil {
+		// Use sub.SenderID (not senderIDFromParams) for LLM factory operations.
+		// The subscription's SenderID is the authoritative business identity,
+		// matching LocalBackend.SetDefaultSubscription behavior. The WS auth
+		// identity ("admin") must not be used as the LLM cache key — it would
+		// cache under the wrong user and the agent's GetLLM("cli_user") would
+		// keep returning the stale client.
+		backend.LLMFactory().Invalidate(sub.SenderID)
+		if err := backend.LLMFactory().SwitchSubscription(sub.SenderID, sub); err != nil {
 			return nil, err
 		}
 		return nil, nil

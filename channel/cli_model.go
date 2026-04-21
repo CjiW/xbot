@@ -194,10 +194,9 @@ func (m *cliModel) cycleModel() {
 		return
 	}
 
-	// Use ListAllModels to include models from ALL subscriptions, not just
-	// the current default LLM. This prevents "Only one model available" when
-	// the user has multiple subscriptions with different models.
-	models := m.channel.modelLister.ListAllModels()
+	// Use ListModels (current subscription only) instead of ListAllModels.
+	// Ctrl+N should cycle through the current subscription's models only.
+	models := m.channel.modelLister.ListModels()
 	if len(models) < 2 {
 		m.showTempStatus("Only one model available")
 		return
@@ -216,24 +215,8 @@ func (m *cliModel) cycleModel() {
 	m.cachedModelName = nextModel
 	m.showTempStatus(fmt.Sprintf("Model: %s", nextModel))
 
-	// If the target model belongs to a different subscription, switch to it
-	// so the correct API credentials are used for subsequent LLM calls.
-	if m.subscriptionMgr != nil {
-		if subs, err := m.subscriptionMgr.List(""); err == nil {
-			for _, sub := range subs {
-				if sub.Model == nextModel {
-					if m.llmSubscriber != nil {
-						m.llmSubscriber.SwitchSubscription(m.senderID, &sub)
-					}
-					m.updateQuickSwitchModels(nextModel)
-					m.subGeneration++
-					return
-				}
-			}
-		}
-	}
-
-	// No matching subscription — just update model name on current subscription.
+	// Switch model on the current subscription (no need to change subscription
+	// since we're already cycling within the current subscription's models).
 	if m.llmSubscriber != nil {
 		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
 	}

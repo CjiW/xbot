@@ -63,6 +63,11 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 			// (same pattern as model-switch case — avoids stale config/RPC reads)
 			if done.subModel != "" {
 				m.cachedModelName = done.subModel
+				// Always refresh modelCount after subscription switch
+				// so status bar shows correct count and [Ctrl+N] hint.
+				if m.channel.modelLister != nil {
+					m.modelCount = len(m.channel.modelLister.ListModels())
+				}
 			} else {
 				m.refreshCachedModelName()
 			}

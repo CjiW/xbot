@@ -63,12 +63,18 @@ func (f *LLMFactory) SetModelTiers(cfg config.LLMConfig) {
 	f.mu.Unlock()
 }
 
-// SetRetryConfig sets the retry configuration used to wrap LLM clients
-// created by createClient/createClientFromSub (subscription-based clients).
-// Without this, subscription clients have NO retry logic for 429/5xx errors.
+// SetRetryConfig sets the retry configuration used to wrap LLM clients.
+// It wraps both the defaultLLM and all future createClient results.
 func (f *LLMFactory) SetRetryConfig(cfg llm.RetryConfig) {
 	f.mu.Lock()
 	f.retryConfig = cfg
+	// Wrap defaultLLM if not already wrapped (ensures users without
+	// custom subscriptions still get 429/5xx retry).
+	if cfg.Attempts > 0 {
+		if _, ok := f.defaultLLM.(*llm.RetryLLM); !ok {
+			f.defaultLLM = llm.NewRetryLLM(f.defaultLLM, cfg)
+		}
+	}
 	f.mu.Unlock()
 }
 
@@ -258,9 +264,15 @@ func (f *LLMFactory) SetUserThinkingMode(senderID, mode string) {
 
 // SetDefaults 更新默认 LLM 客户端和模型名。
 // 用于 setup/settings 面板修改全局 LLM 配置后立即生效。
+// Wraps the new defaultLLM with RetryLLM if retryConfig is set.
 func (f *LLMFactory) SetDefaults(newLLM llm.LLM, newModel string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.retryConfig.Attempts > 0 {
+		if _, ok := newLLM.(*llm.RetryLLM); !ok {
+			newLLM = llm.NewRetryLLM(newLLM, f.retryConfig)
+		}
+	}
 	f.defaultLLM = newLLM
 	f.defaultModel = newModel
 	// 清除所有用户缓存，让后续 GetLLM 重新创建客户端

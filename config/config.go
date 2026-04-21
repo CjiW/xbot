@@ -749,11 +749,14 @@ func Load() *Config {
 	if cfg.Agent.MaxSubAgentDepth == 0 {
 		cfg.Agent.MaxSubAgentDepth = 6
 	}
+	// Server.Host/Port defaults follow Web.Host/Port since all traffic
+	// (HTTP API, WebSocket, runner WS) goes through the same port.
+	// Keeping them in sync avoids confusion.
 	if cfg.Server.Host == "" {
-		cfg.Server.Host = "0.0.0.0"
+		cfg.Server.Host = cfg.Web.Host // "0.0.0.0"
 	}
 	if cfg.Server.Port == 0 {
-		cfg.Server.Port = 8080
+		cfg.Server.Port = cfg.Web.Port // 8082
 	}
 	if cfg.Server.ReadTimeout == 0 {
 		cfg.Server.ReadTimeout = 30 * time.Second
@@ -766,6 +769,16 @@ func Load() *Config {
 	}
 
 	return cfg
+}
+
+// PublicWSAddr returns the WebSocket address runners should connect to.
+// Uses Sandbox.PublicURL if set, otherwise falls back to the unified
+// web server address (Server.Host:Server.Port, which defaults to Web.Host:Web.Port).
+func (c *Config) PublicWSAddr() string {
+	if c.Sandbox.PublicURL != "" {
+		return c.Sandbox.PublicURL
+	}
+	return fmt.Sprintf("ws://%s:%d", c.Server.Host, c.Server.Port)
 }
 
 // getAdminChatID 获取管理员会话 ID，实现回退逻辑

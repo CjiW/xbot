@@ -17,6 +17,15 @@ variables:
     - .cache/go-build
   policy: pull-push
 
+.web_cache: &web_cache
+  key:
+    files:
+      - web/yarn.lock
+    prefix: web
+  paths:
+    - web/node_modules
+  policy: pull-push
+
 # Lint job
 lint:
   stage: lint
@@ -43,6 +52,19 @@ test:
   script:
     - go test -v -race ./...
   cache: *go_cache
+
+# Frontend lint + build
+frontend:
+  stage: lint
+  image: node:22
+  tags:
+    - linux-x86
+  script:
+    - cd web
+    - yarn install --frozen-lockfile
+    - yarn lint
+    - yarn build
+  cache: *web_cache
 
 # Build job
 build:

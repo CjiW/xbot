@@ -1118,10 +1118,7 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 			if err != nil {
 				return "", err
 			}
-			pubURL := cfg.Sandbox.PublicURL
-			if pubURL == "" {
-				pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-			}
+			pubURL := cfg.PublicWSAddr()
 			cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
 			if mode == "docker" && dockerImage != "" {
 				cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
@@ -1325,6 +1322,29 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 	return callbacks
 }
 
+// resolveStaticDir returns the frontend static directory.
+// Priority: explicit config → binary-relative web/dist → XBOT_HOME/web/dist.
+func resolveStaticDir(cfg *config.Config) string {
+	if cfg.Web.StaticDir != "" {
+		return cfg.Web.StaticDir
+	}
+	// 1. Binary-relative: <exe_dir>/web/dist/ (Docker image layout)
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "web", "dist")
+		if fi, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !fi.IsDir() {
+			return candidate
+		}
+	}
+	// 2. XBOT_HOME-relative: ~/.xbot/web/dist/ (install script layout)
+	if home := config.XbotHome(); home != "" {
+		candidate := filepath.Join(home, "web", "dist")
+		if fi, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !fi.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // registerChannels creates and registers all channels.
 func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.MessageBus, backend agent.AgentBackend, webDB *sql.DB, workDir string) (*channel.FeishuChannel, *channel.WebChannel, error) {
 	var feishuCh *channel.FeishuChannel
@@ -1371,8 +1391,11 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 				InviteOnly: cfg.Web.InviteOnly,
 				PublicURL:  cfg.Sandbox.PublicURL,
 			}, msgBus)
-			if cfg.Web.StaticDir != "" {
-				webCh.SetStaticDir(cfg.Web.StaticDir)
+			// Auto-detect frontend static files if not explicitly configured.
+			staticDir := resolveStaticDir(cfg)
+			if staticDir != "" {
+				webCh.SetStaticDir(staticDir)
+				log.WithField("static_dir", staticDir).Info("Frontend static files detected")
 			}
 			// Web file uploads go through cloud OSS only — no local storage
 			webCh.SetWorkDir(workDir)
@@ -1869,11 +1892,7 @@ func Run(args []string) error {
 				if token == "" {
 					return ""
 				}
-				pubURL := cfg.Sandbox.PublicURL
-				if pubURL == "" {
-					// Fallback: use the xbot server address directly.
-					pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-				}
+				pubURL := cfg.PublicWSAddr()
 				return fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
 			},
 			RunnerTokenGet: func(senderID string) string {
@@ -1952,10 +1971,7 @@ func Run(args []string) error {
 				if err != nil {
 					return "", err
 				}
-				pubURL := cfg.Sandbox.PublicURL
-				if pubURL == "" {
-					pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-				}
+				pubURL := cfg.PublicWSAddr()
 				cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
 				if mode == "docker" && dockerImage != "" {
 					cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
@@ -2294,10 +2310,7 @@ func (a *feishuPromptAdapter) ChannelSystemParts(ctx context.Context, chatID, se
 
 // buildRunnerConnectCmd constructs the xbot-runner CLI command from a token entry.
 func buildRunnerConnectCmd(cfg *config.Config, entry *tools.RunnerTokenEntry) string {
-	pubURL := cfg.Sandbox.PublicURL
-	if pubURL == "" {
-		pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-	}
+	pubURL := cfg.PublicWSAddr()
 	cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, entry.UserID, entry.Token)
 	if entry.Settings.Mode == "docker" {
 		cmd += " --mode docker"

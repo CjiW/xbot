@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build run dev clean ci clean-memory
+.PHONY: fmt lint test build run dev clean ci clean-memory web-build web-lint web-dev
 
 BINARY_NAME := xbot
 
@@ -27,10 +27,19 @@ clean:
 	rm -f $(BINARY_NAME) coverage.out
 	go clean
 
-ci: lint build test
+ci: lint build test web-lint web-build
 	@echo "CI checks passed!"
 
 clean-memory:
 	rm -rf .xbot/
 	@echo "Memory cleaned!"
+
+web-build:
+	cd web && yarn build
+
+web-lint:
+	cd web && yarn lint
+
+web-dev:
+	cd web && yarn dev
 

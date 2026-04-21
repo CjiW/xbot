@@ -21,6 +21,21 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: web/yarn.lock
+
+      - name: Build frontend
+        working-directory: web
+        run: yarn install --frozen-lockfile && yarn build
+
+      - name: Package frontend dist
+        run: |
+          cd web
+          tar czf ../dist/xbot-web-dist.tar.gz -C dist .
+
       - name: Build CLI binaries
         run: |
           VERSION=${GITHUB_REF_NAME}
@@ -61,4 +76,5 @@ jobs:
             dist/xbot-cli-darwin-arm64
             dist/xbot-cli-windows-amd64.exe
             dist/xbot-cli-windows-arm64.exe
+            dist/xbot-web-dist.tar.gz
             checksums.txt

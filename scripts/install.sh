@@ -7,7 +7,7 @@ INSTALL_PATH="${INSTALL_PATH:-/usr/local/bin}"
 XBOT_HOME="${XBOT_HOME:-$HOME/.xbot}"
 CONFIG_PATH="${CONFIG_PATH:-$XBOT_HOME/config.json}"
 SERVICE_NAME="xbot-server"
-DEFAULT_PORT="${PORT:-8080}"
+DEFAULT_PORT="${PORT:-8082}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -156,6 +156,20 @@ print('CONFIG_PRESERVED_END')
 PY
 }
 
+download_web_dist() {
+    local version="$1" target_dir="$2"
+    local dist_url="https://github.com/${REPO}/releases/download/${version}/xbot-web-dist.tar.gz"
+    info "Downloading Web UI frontend..."
+    mkdir -p "$target_dir"
+    if curl -fsSL --progress-bar "$dist_url" | tar xzf - -C "$target_dir" 2>/dev/null; then
+        info "Web UI installed to ${target_dir} ✓"
+    else
+        warn "Failed to download Web UI frontend. The server will run in API-only mode."
+        warn "You can manually download it later from: ${dist_url}"
+        warn "Extract to: ${target_dir}"
+    fi
+}
+
 write_systemd_unit() {
     local bin_path="$1" config_path="$2" unit_file="$3"
     local install_user
@@ -251,7 +265,7 @@ main() {
     TOKEN=$(random_token)
     PORT="$DEFAULT_PORT"
     if [ "$MODE" = "server-client" ]; then
-        printf "WebSocket port for local server [${DEFAULT_PORT}]: "
+        printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: "
         read -r input_port
         PORT="${input_port:-$DEFAULT_PORT}"
     fi
@@ -302,6 +316,7 @@ main() {
     done
 
     if [ "$MODE" = "server-client" ]; then
+        download_web_dist "$VERSION" "$XBOT_HOME/web/dist"
         case "$(uname -s)" in
             Linux) install_systemd "${INSTALL_PATH}/${BINARY}" "$CONFIG_PATH" ;;
             Darwin) install_launchd "${INSTALL_PATH}/${BINARY}" "$CONFIG_PATH" ;;
@@ -313,6 +328,7 @@ main() {
     info "Mode: ${MODE}"
     info "Config: ${CONFIG_PATH}"
     if [ "$MODE" = "server-client" ]; then
+        info "Web UI: http://localhost:${PORT}"
         info "CLI will connect to the configured local server (see ${CONFIG_PATH})"
         info "Use '${BINARY}' for client, '${BINARY} serve --config ${CONFIG_PATH}' for manual server start"
     else

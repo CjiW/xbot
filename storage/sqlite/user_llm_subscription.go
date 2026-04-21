@@ -251,6 +251,10 @@ func (s *LLMSubscriptionService) Update(sub *LLMSubscription) error {
 	if sub.IsDefault {
 		isDefault = 1
 	}
+	log.WithFields(log.Fields{
+		"id": sub.ID, "sender_id": sub.SenderID, "name": sub.Name,
+		"model": sub.Model, "is_default": isDefault,
+	}).Info("[DB] Update subscription")
 	_, err = tx.Exec(`
 		UPDATE user_llm_subscriptions SET
 		name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,

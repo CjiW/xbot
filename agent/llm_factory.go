@@ -94,6 +94,12 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 		maxCtx := f.maxContexts[senderID]
 		thinkingMode := f.thinkingModes[senderID]
 		f.mu.RUnlock()
+		log.WithFields(log.Fields{
+			"sender_id":   senderID,
+			"path":        "cache",
+			"model":       model,
+			"client_type": fmt.Sprintf("%T", client),
+		}).Info("[LLM] GetLLM")
 		return client, model, maxCtx, thinkingMode
 	}
 	f.mu.RUnlock()
@@ -111,6 +117,12 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 				f.maxOutputTokens[senderID] = cfg.MaxOutputTokens
 				f.thinkingModes[senderID] = cfg.ThinkingMode
 				f.mu.Unlock()
+				log.WithFields(log.Fields{
+					"sender_id":   senderID,
+					"path":        "configSvc",
+					"model":       model,
+					"client_type": fmt.Sprintf("%T", client),
+				}).Info("[LLM] GetLLM")
 				return client, model, cfg.MaxContext, cfg.ThinkingMode
 			}
 		}
@@ -133,12 +145,39 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 				f.maxOutputTokens[senderID] = sub.MaxOutputTokens
 				f.thinkingModes[senderID] = sub.ThinkingMode
 				f.mu.Unlock()
+				log.WithFields(log.Fields{
+					"sender_id":   senderID,
+					"path":        "subscriptionSvc",
+					"sub_id":      sub.ID,
+					"sub_name":    sub.Name,
+					"sub_baseurl": sub.BaseURL,
+					"model":       model,
+					"client_type": fmt.Sprintf("%T", client),
+				}).Info("[LLM] GetLLM")
 				return client, model, sub.MaxContext, sub.ThinkingMode
 			}
+		}
+		if err != nil {
+			log.WithError(err).WithField("sender_id", senderID).Warn("[LLM] GetLLM subscriptionSvc.GetDefault error")
+		} else if sub == nil {
+			log.WithField("sender_id", senderID).Warn("[LLM] GetLLM subscriptionSvc.GetDefault returned nil")
+		} else {
+			log.WithFields(log.Fields{
+				"sender_id":   senderID,
+				"sub_id":      sub.ID,
+				"sub_baseurl": sub.BaseURL,
+				"sub_apikey":  sub.APIKey != "",
+			}).Warn("[LLM] GetLLM subscriptionSvc.GetDefault sub missing baseURL or apiKey")
 		}
 	}
 
 	// 无配置或出错，使用默认客户端
+	log.WithFields(log.Fields{
+		"sender_id":   senderID,
+		"path":        "defaultLLM",
+		"model":       f.defaultModel,
+		"client_type": fmt.Sprintf("%T", f.defaultLLM),
+	}).Info("[LLM] GetLLM")
 	return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
 }
 
@@ -225,6 +264,13 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 	}
 	client, model := f.createClient(cfg)
 	if client == nil {
+		log.WithFields(log.Fields{
+			"sender_id": senderID,
+			"sub_id":    sub.ID,
+			"provider":  sub.Provider,
+			"base_url":  sub.BaseURL,
+			"api_key":   sub.APIKey != "",
+		}).Error("[LLM] SwitchSubscription: failed to create client")
 		return fmt.Errorf("failed to create LLM client for subscription %s", sub.ID)
 	}
 
@@ -241,6 +287,15 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 		f.defaultModel = model
 	}
 	f.mu.Unlock()
+
+	log.WithFields(log.Fields{
+		"sender_id":   senderID,
+		"sub_id":      sub.ID,
+		"sub_name":    sub.Name,
+		"sub_baseurl": sub.BaseURL,
+		"model":       model,
+		"client_type": fmt.Sprintf("%T", client),
+	}).Info("[LLM] SwitchSubscription: client created and cached")
 
 	f.hasCustomLLMCache.Store(senderID, true)
 	return nil

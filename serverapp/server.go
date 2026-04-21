@@ -375,8 +375,16 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		client, _, _, _ := backend.LLMFactory().GetLLM(bizID)
-		return json.Marshal(client.ListModels())
+		client, model, _, _ := backend.LLMFactory().GetLLM(bizID)
+		models := client.ListModels()
+		log.WithFields(log.Fields{
+			"biz_id":       bizID,
+			"client_type":  fmt.Sprintf("%T", client),
+			"cached_model": model,
+			"model_count":  len(models),
+			"models":       models,
+		}).Info("RPC list_models")
+		return json.Marshal(models)
 	case "list_all_models":
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
@@ -832,10 +840,20 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// cache key for GetLLM(bizID). SwitchSubscription must use the same key
 		// that list_models / generate uses, otherwise the cache holds a stale
 		// client and the user keeps seeing the old subscription's models.
+		log.WithFields(log.Fields{
+			"biz_id":      bizID,
+			"sub_id":      sub.ID,
+			"sub_sender":  sub.SenderID,
+			"sub_name":    sub.Name,
+			"sub_model":   sub.Model,
+			"sub_baseurl": sub.BaseURL,
+		}).Info("RPC set_default_subscription: invalidating and switching")
 		backend.LLMFactory().Invalidate(bizID)
 		if err := backend.LLMFactory().SwitchSubscription(bizID, sub); err != nil {
+			log.WithError(err).WithField("biz_id", bizID).Error("RPC set_default_subscription: SwitchSubscription failed")
 			return nil, err
 		}
+		log.WithField("biz_id", bizID).Info("RPC set_default_subscription: switched OK")
 		return nil, nil
 	case "rename_subscription":
 		var p struct {

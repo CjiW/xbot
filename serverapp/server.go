@@ -157,110 +157,16 @@ func createAdminLLM(cfg *config.Config) (llm_pkg.LLM, error) {
 	}
 }
 
-func adminAddSubscription(cfg *config.Config, backend agent.AgentBackend, sub channel.Subscription) error {
-	subSvc := backend.LLMFactory().GetSubscriptionSvc()
-	if subSvc == nil {
-		return fmt.Errorf("subscription service not available")
-	}
-	return subSvc.Add(&sqlite.LLMSubscription{
-		SenderID:  cliSenderID,
-		Name:      sub.Name,
-		Provider:  sub.Provider,
-		BaseURL:   sub.BaseURL,
-		APIKey:    sub.APIKey,
-		Model:     sub.Model,
-		IsDefault: sub.Active,
-	})
-}
-
-func adminUpdateSubscription(cfg *config.Config, backend agent.AgentBackend, id string, sub channel.Subscription) error {
-	subSvc := backend.LLMFactory().GetSubscriptionSvc()
-	if subSvc == nil {
-		return fmt.Errorf("subscription service not available")
-	}
-	existing, err := subSvc.Get(id)
-	if err != nil {
-		return fmt.Errorf("subscription %s not found: %w", id, err)
-	}
-	existing.Name = sub.Name
-	existing.Provider = sub.Provider
-	existing.BaseURL = sub.BaseURL
-	if !strings.HasSuffix(sub.APIKey, "****") {
-		existing.APIKey = sub.APIKey
-	}
-	existing.Model = sub.Model
-	if err := subSvc.Update(existing); err != nil {
-		return err
-	}
-	// If this is the default subscription, rebuild LLM client
-	if existing.IsDefault {
-		return rebuildLLMFromSubscription(cfg, backend, existing)
-	}
-	return nil
-}
-
-func adminRemoveSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
-	subSvc := backend.LLMFactory().GetSubscriptionSvc()
-	if subSvc == nil {
-		return fmt.Errorf("subscription service not available")
-	}
-	return subSvc.Remove(id)
-}
-
-func adminRenameSubscription(cfg *config.Config, backend agent.AgentBackend, id, name string) error {
-	subSvc := backend.LLMFactory().GetSubscriptionSvc()
-	if subSvc == nil {
-		return fmt.Errorf("subscription service not available")
-	}
-	return subSvc.Rename(id, name)
-}
-
-// rebuildLLMFromSubscription creates a new LLM client from a DB subscription
-// and sets it as the factory default.
-func rebuildLLMFromSubscription(cfg *config.Config, backend agent.AgentBackend, sub *sqlite.LLMSubscription) error {
-	// Update cfg.LLM from subscription
-	cfg.LLM.Provider = sub.Provider
-	cfg.LLM.BaseURL = sub.BaseURL
-	cfg.LLM.APIKey = sub.APIKey
-	cfg.LLM.Model = sub.Model
-	cfg.LLM.MaxOutputTokens = sub.MaxOutputTokens
-
-	// Rebuild LLM client
-	newClient, err := createAdminLLM(cfg)
-	if err != nil {
-		return fmt.Errorf("create LLM from subscription: %w", err)
-	}
-	if factory := backend.LLMFactory(); factory != nil {
-		factory.SetDefaults(newClient, sub.Model)
-		factory.SetModelTiers(cfg.LLM)
-		factory.Invalidate(cliSenderID)
-	}
-
-	// Sync LLM fields into user_settings so Settings panel shows correct values.
-	if ss := backend.SettingsService(); ss != nil {
-		settings := map[string]string{
-			"llm_provider": sub.Provider,
-			"llm_base_url": sub.BaseURL,
-			"llm_api_key":  sub.APIKey,
-			"llm_model":    sub.Model,
-		}
-		if sub.MaxOutputTokens > 0 {
-			settings["max_output_tokens"] = fmt.Sprintf("%d", sub.MaxOutputTokens)
-		}
-		for k, v := range settings {
-			if err := ss.SetSetting("cli", cliSenderID, k, v); err != nil {
-				log.WithError(err).WithField("key", k).Warn("Failed to sync subscription settings to DB")
-			}
-		}
-	}
-
-	return nil
-}
-
 // handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
 // to the server's LocalBackend. This is the server-side counterpart of
 // RemoteBackend.callRPC().
 func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
+	// bizID is the resolved business identity for DB operations.
+	// senderID is the WS auth identity, used ONLY for isAdmin() authorization.
+	// Admin ("admin") is a role, not a business ID — all admin's CLI data
+	// lives under cliSenderID ("cli_user").
+	bizID := senderIDFromParams(params, senderID)
+
 	switch method {
 	// --- Context / settings ---
 	case "get_context_mode":
@@ -291,21 +197,15 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		// Use business senderID from params (CLI may pass "cli_user").
-		// Falls back to WS auth senderID for web clients.
-		effectiveSenderID := p.SenderID
-		if effectiveSenderID == "" {
-			effectiveSenderID = senderID
-		}
 		// All users (including admin) go through DB settings service.
 		// Migrate config.json values on first access if DB has no data yet.
-		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
+		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, bizID); err != nil {
 			return nil, err
 		}
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
 		}
-		result, err := backend.SettingsService().GetSettings(p.Namespace, effectiveSenderID)
+		result, err := backend.SettingsService().GetSettings(p.Namespace, bizID)
 		if err != nil {
 			return nil, err
 		}
@@ -313,9 +213,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// This ensures Settings panel always shows the active subscription's endpoint,
 		// regardless of which user is asking (admin, cli_user, web user).
 		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
-			// Try user's own subscription first, then admin's
 			var sub *sqlite.LLMSubscription
-			if s, err := subSvc.GetDefault(effectiveSenderID); err == nil && s != nil {
+			if s, err := subSvc.GetDefault(bizID); err == nil && s != nil {
 				sub = s
 			} else if s, err := subSvc.GetDefault(cliSenderID); err == nil && s != nil {
 				sub = s
@@ -337,25 +236,18 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		// Use business senderID from params (CLI passes "cli_user").
-		// Falls back to WS auth senderID for web clients.
-		effectiveSenderID := p.SenderID
-		if effectiveSenderID == "" {
-			effectiveSenderID = senderID
-		}
-		// All users (including admin) go through DB settings service.
-		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
+		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, bizID); err != nil {
 			return nil, err
 		}
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
 		}
-		if err := backend.SettingsService().SetSetting(p.Namespace, effectiveSenderID, p.Key, p.Value); err != nil {
+		if err := backend.SettingsService().SetSetting(p.Namespace, bizID, p.Key, p.Value); err != nil {
 			return nil, err
 		}
 		// Apply runtime changes for admin
-		if isAdmin(effectiveSenderID) {
-			applyRuntimeSetting(cfg, backend, effectiveSenderID, p.Key, p.Value)
+		if isAdmin(senderID) {
+			applyRuntimeSetting(cfg, backend, bizID, p.Key, p.Value)
 		}
 		return nil, nil
 
@@ -392,19 +284,15 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 	case "get_default_model":
 		model := ""
 		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
-			effectiveSenderID := senderID
-			if isAdmin(senderID) {
-				effectiveSenderID = "admin"
-			}
-			if sub, err := subSvc.GetDefault(effectiveSenderID); err == nil && sub != nil && sub.Model != "" {
+			if sub, err := subSvc.GetDefault(bizID); err == nil && sub != nil && sub.Model != "" {
 				model = sub.Model
 			}
 		}
 		if model == "" {
-			_, m, _, _ := backend.LLMFactory().GetLLM(senderIDFromParams(params, senderID))
+			_, m, _, _ := backend.LLMFactory().GetLLM(bizID)
 			model = m
 		}
-		log.WithField("sender_id", senderIDFromParams(params, senderID)).WithField("model", model).Debug("RPC get_default_model")
+		log.WithField("sender_id", bizID).WithField("model", model).Debug("RPC get_default_model")
 		return json.Marshal(model)
 	case "set_user_model":
 		var p struct {
@@ -413,7 +301,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserModel(senderIDFromParams(params, senderID), p.Model)
+		return nil, backend.SetUserModel(bizID, p.Model)
 	case "switch_model":
 		var p struct {
 			Model string `json:"model"`
@@ -421,7 +309,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		bizID := senderIDFromParams(params, senderID)
 		log.WithField("sender_id", bizID).WithField("model", p.Model).Info("RPC switch_model")
 		backend.SwitchModel(bizID, p.Model)
 		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
@@ -433,7 +320,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return nil, nil
 	case "get_user_max_context":
-		return json.Marshal(backend.GetUserMaxContext(senderIDFromParams(params, senderID)))
+		return json.Marshal(backend.GetUserMaxContext(bizID))
 	case "set_user_max_context":
 		var p struct {
 			MaxContext int `json:"max_context"`
@@ -441,9 +328,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserMaxContext(senderIDFromParams(params, senderID), p.MaxContext)
+		return nil, backend.SetUserMaxContext(bizID, p.MaxContext)
 	case "get_user_max_output_tokens":
-		return json.Marshal(backend.GetUserMaxOutputTokens(senderIDFromParams(params, senderID)))
+		return json.Marshal(backend.GetUserMaxOutputTokens(bizID))
 	case "set_user_max_output_tokens":
 		var p struct {
 			MaxTokens int `json:"max_tokens"`
@@ -451,9 +338,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserMaxOutputTokens(senderIDFromParams(params, senderID), p.MaxTokens)
+		return nil, backend.SetUserMaxOutputTokens(bizID, p.MaxTokens)
 	case "get_user_thinking_mode":
-		return json.Marshal(backend.GetUserThinkingMode(senderIDFromParams(params, senderID)))
+		return json.Marshal(backend.GetUserThinkingMode(bizID))
 	case "set_user_thinking_mode":
 		var p struct {
 			Mode string `json:"mode"`
@@ -461,9 +348,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserThinkingMode(senderIDFromParams(params, senderID), p.Mode)
+		return nil, backend.SetUserThinkingMode(bizID, p.Mode)
 	case "get_llm_concurrency":
-		return json.Marshal(backend.GetLLMConcurrency(senderIDFromParams(params, senderID)))
+		return json.Marshal(backend.GetLLMConcurrency(bizID))
 	case "set_llm_concurrency":
 		var p struct {
 			Personal int `json:"personal"`
@@ -471,7 +358,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetLLMConcurrency(senderIDFromParams(params, senderID), p.Personal)
+		return nil, backend.SetLLMConcurrency(bizID, p.Personal)
 	case "set_default_thinking_mode":
 		var p struct {
 			Mode string `json:"mode"`
@@ -493,7 +380,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		models := backend.LLMFactory().ListAllModelsForUser(senderID)
+		models := backend.LLMFactory().ListAllModelsForUser(bizID)
 		log.WithField("count", len(models)).Debug("RPC list_all_models")
 		return json.Marshal(models)
 	case "set_model_tiers":
@@ -520,11 +407,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// SetProxyLLM(nil) would store a nil client and crash GetLLM,
 		// so use SwitchModel instead which only updates the cached model name.
 		if backend.LLMFactory() != nil {
-			backend.LLMFactory().SwitchModel(senderID, p.Model)
+			backend.LLMFactory().SwitchModel(bizID, p.Model)
 		}
 		return nil, nil
 	case "clear_proxy_llm":
-		backend.ClearProxyLLM(senderID)
+		backend.ClearProxyLLM(bizID)
 		return nil, nil
 
 	// --- Memory ---
@@ -541,13 +428,13 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("multi-session not available")
 		}
 		// Non-admin users can only clear their own memory
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, senderID)
+		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, bizID)
 	case "get_memory_stats":
 		var p struct {
 			Channel string `json:"channel"`
@@ -560,20 +447,20 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("multi-session not available")
 		}
 		// Non-admin users can only view their own memory stats
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, senderID)
+		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, bizID)
 		return json.Marshal(result)
 	case "get_user_token_usage":
-		usageSenderID := senderIDFromParams(params, senderID)
+		bizID := bizID
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		usage, err := backend.MultiSession().GetUserTokenUsage(usageSenderID)
+		usage, err := backend.MultiSession().GetUserTokenUsage(bizID)
 		if err != nil {
 			return nil, err
 		}
@@ -589,8 +476,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		usageSenderID := senderIDFromParams(params, senderID)
-		daily, err := backend.MultiSession().GetDailyTokenUsage(usageSenderID, p.Days)
+		bizID := bizID
+		daily, err := backend.MultiSession().GetDailyTokenUsage(bizID, p.Days)
 		if err != nil {
 			return nil, err
 		}
@@ -605,11 +492,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
 		return json.Marshal(backend.CountInteractiveSessions(p.Channel, p.ChatID))
 	case "list_interactive_sessions":
@@ -620,11 +507,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
 		return json.Marshal(backend.ListInteractiveSessions(p.Channel, p.ChatID))
 	case "inspect_interactive_session":
@@ -638,11 +525,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
 		result, err := backend.InspectInteractiveSession(context.Background(), p.Role, p.Channel, p.ChatID, p.Instance, p.TailCount)
 		if err != nil {
@@ -728,9 +615,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			p.Channel = "web"
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		history, err := backend.GetHistory(p.Channel, p.ChatID)
@@ -752,9 +639,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			p.Channel = "web"
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		var cutoff time.Time
@@ -778,7 +665,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.Channel == "" {
 			p.Channel = "web"
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		return json.Marshal(backend.IsProcessing(p.Channel, p.ChatID))
@@ -794,7 +681,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.Channel == "" {
 			p.Channel = "web"
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		progress := backend.GetActiveProgress(p.Channel, p.ChatID)
@@ -811,13 +698,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		svc := backend.LLMFactory().GetSubscriptionSvc()
 		if svc == nil {
 			return json.Marshal([]channel.Subscription{})
-		}
-		bizID := senderIDFromParams(params, senderID)
-		// Admin users manage subscriptions under "cli_user" (set by adminAddSubscription).
-		// When the CLI sends empty senderID, senderIDFromParams falls back to WS auth
-		// identity "admin" — but subscriptions are stored under "cli_user".
-		if isAdmin(senderID) && bizID == adminSenderID {
-			bizID = cliSenderID
 		}
 		subs, err := svc.List(bizID)
 		if err != nil {
@@ -840,10 +720,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, nil
 		}
-		bizID := senderIDFromParams(params, senderID)
-		if isAdmin(senderID) && bizID == adminSenderID {
-			bizID = cliSenderID
-		}
 		sub, err := svc.GetDefault(bizID)
 		if err != nil || sub == nil {
 			return nil, err
@@ -860,12 +736,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminAddSubscription(cfg, backend, channel.Subscription{
-				ID: p.Sub.ID, Name: p.Sub.Name, Provider: p.Sub.Provider,
-				BaseURL: p.Sub.BaseURL, APIKey: p.Sub.APIKey, Model: p.Sub.Model, Active: p.Sub.IsDefault,
-			})
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -873,7 +743,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
-		p.Sub.SenderID = senderID
+		p.Sub.SenderID = bizID
 		return nil, svc.Add(&p.Sub)
 	case "update_subscription":
 		var p struct {
@@ -882,12 +752,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
-		}
-		if isAdmin(senderID) {
-			return nil, adminUpdateSubscription(cfg, backend, p.ID, channel.Subscription{
-				ID: p.ID, Name: p.Sub.Name, Provider: p.Sub.Provider,
-				BaseURL: p.Sub.BaseURL, APIKey: p.Sub.APIKey, Model: p.Sub.Model, Active: p.Sub.IsDefault,
-			})
 		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
@@ -900,7 +764,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && existing.SenderID != senderID {
+		if !isAdmin(senderID) && existing.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		p.Sub.ID = p.ID
@@ -920,9 +784,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminRemoveSubscription(cfg, backend, p.ID)
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -934,7 +795,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		if err := svc.Remove(p.ID); err != nil {
@@ -960,7 +821,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderIDFromParams(params, senderID) {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		if err := svc.SetDefault(p.ID); err != nil {
@@ -985,9 +846,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminRenameSubscription(cfg, backend, p.ID, p.Name)
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -999,7 +857,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		return nil, svc.Rename(p.ID, p.Name)
@@ -1023,7 +881,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		if err := svc.SetModel(p.ID, p.Model); err != nil {
@@ -2411,15 +2269,20 @@ const cliSenderID = "cli_user"
 func isAdmin(authSenderID string) bool { return authSenderID == adminSenderID }
 
 // senderIDFromParams extracts the business sender_id from RPC params.
-// Falls back to authSenderID (WS auth identity) if not present.
-// This ensures CLI clients can pass their business senderID ("cli_user")
-// which may differ from the WS auth identity ("admin").
+// For admin users (WS auth identity "admin"), if params don't specify a sender_id,
+// it defaults to cliSenderID — because admin is a ROLE, not a business identity.
+// All CLI subscriptions, settings, and per-user state live under cliSenderID.
+//
+// For non-admin web users, falls back to their WS auth identity directly.
 func senderIDFromParams(params json.RawMessage, authSenderID string) string {
 	var p struct {
 		SenderID string `json:"sender_id"`
 	}
 	if err := json.Unmarshal(params, &p); err == nil && p.SenderID != "" {
 		return p.SenderID
+	}
+	if isAdmin(authSenderID) {
+		return cliSenderID
 	}
 	return authSenderID
 }

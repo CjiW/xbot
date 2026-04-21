@@ -611,7 +611,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		return json.Marshal(true)
 
 	case "list_tenants":
-		// List all tenants (sessions) for the authenticated user.
+		// List tenants (sessions) for the authenticated user only.
 		if backend.MultiSession() == nil {
 			return json.Marshal([]struct{}{})
 		}
@@ -624,6 +624,14 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
+		// Filter: CLI sessions belong to the operator (cli_user).
+		// Other channels: only show tenants where chatID matches the user.
+		var filtered []sqlite.TenantInfo
+		for _, t := range tenants {
+			if t.Channel == "cli" || t.ChatID == bizID {
+				filtered = append(filtered, t)
+			}
+		}
 		type tenantJSON struct {
 			ID           int64  `json:"id"`
 			Channel      string `json:"channel"`
@@ -631,8 +639,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			CreatedAt    string `json:"created_at"`
 			LastActiveAt string `json:"last_active_at"`
 		}
-		result := make([]tenantJSON, len(tenants))
-		for i, t := range tenants {
+		result := make([]tenantJSON, len(filtered))
+		for i, t := range filtered {
 			result[i] = tenantJSON{
 				ID:           t.ID,
 				Channel:      t.Channel,

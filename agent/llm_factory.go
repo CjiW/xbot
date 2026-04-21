@@ -198,12 +198,13 @@ func (f *LLMFactory) GetDefaultModel() string {
 // It creates a new LLM client from the subscription config and caches it.
 func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscription) error {
 	cfg := &sqlite.UserLLMConfig{
-		Provider:     sub.Provider,
-		BaseURL:      sub.BaseURL,
-		APIKey:       sub.APIKey,
-		Model:        sub.Model,
-		MaxContext:   0,
-		ThinkingMode: "",
+		Provider:        sub.Provider,
+		BaseURL:         sub.BaseURL,
+		APIKey:          sub.APIKey,
+		Model:           sub.Model,
+		MaxContext:      sub.MaxContext,
+		MaxOutputTokens: sub.MaxOutputTokens,
+		ThinkingMode:    sub.ThinkingMode,
 	}
 	client, model := f.createClient(cfg)
 	if client == nil {
@@ -220,8 +221,9 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 	f.mu.Lock()
 	f.clients[senderID] = client
 	f.models[senderID] = model
-	f.maxContexts[senderID] = 0
-	f.thinkingModes[senderID] = ""
+	f.maxContexts[senderID] = sub.MaxContext
+	f.maxOutputTokens[senderID] = sub.MaxOutputTokens
+	f.thinkingModes[senderID] = sub.ThinkingMode
 	// For the CLI identity, also update defaultLLM so that GetLLM fallback
 	// (when cache miss and no DB default) returns the currently active
 	// subscription's client, not the stale startup client.
@@ -232,10 +234,12 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 	f.mu.Unlock()
 
 	log.WithFields(log.Fields{
-		"sender_id": senderID,
-		"sub_id":    sub.ID,
-		"sub_name":  sub.Name,
-		"model":     model,
+		"sender_id":         senderID,
+		"sub_id":            sub.ID,
+		"sub_name":          sub.Name,
+		"model":             model,
+		"max_output_tokens": sub.MaxOutputTokens,
+		"thinking_mode":     sub.ThinkingMode,
 	}).Debug("[LLM] SwitchSubscription: client created and cached")
 
 	f.hasCustomLLMCache.Store(senderID, true)

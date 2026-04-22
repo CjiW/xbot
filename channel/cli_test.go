@@ -702,12 +702,10 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
-	// Simulate: turn already ended (typing=false, progress=nil)
+	// Scenario 1: After Ctrl+C (turn ended), stale progress is ignored
 	model.typing = false
 	model.progress = nil
 
-	// A non-done progress event with matching ChatID should auto-start the turn
-	// (this is the normal case when switching to a session with a running SubAgent).
 	progMsg := cliProgressMsg{
 		payload: &CLIProgressPayload{
 			Phase:     "thinking",
@@ -719,19 +717,14 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 	model.channelName = "cli"
 	_, _ = model.Update(progMsg)
 
-	// Progress should be set — the turn auto-starts
-	if model.progress == nil {
-		t.Error("Progress should be set when receiving a valid progress event")
-	}
-	if !model.typing {
-		t.Error("Turn should auto-start when receiving progress for current session")
+	if model.progress != nil {
+		t.Error("Progress after cancel should be ignored when typing=false")
 	}
 
-	// But progress for a DIFFERENT session should be ignored
+	// Scenario 2: Progress for a different session is ignored
 	model2 := newCLIModel()
 	model2.handleResize(80, 24)
-	model2.typing = false
-	model2.progress = nil
+	model2.typing = true
 	model2.chatID = "/other"
 	model2.channelName = "cli"
 
@@ -745,6 +738,39 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 
 	if model2.progress != nil {
 		t.Error("Progress for a different session should be ignored")
+	}
+
+	// Scenario 3: restoreSession with typing=true allows progress through
+	model3 := newCLIModel()
+	model3.handleResize(80, 24)
+	model3.chatID = "/test"
+	model3.channelName = "cli"
+	model3.savedSessions = map[string]*sessionState{
+		"cli:/test": {
+			typing:          true,
+			progress:        &CLIProgressPayload{Phase: "thinking", Iteration: 0},
+			streamingMsgIdx: -1,
+		},
+	}
+	model3.restoreSession()
+
+	if !model3.typing {
+		t.Fatal("restoreSession should restore typing=true")
+	}
+	// Direct call — bypasses full Update() which needs viewport/messages setup
+	model3.handleProgressMsg(cliProgressMsg{
+		payload: &CLIProgressPayload{
+			Phase:     "tool_exec",
+			Iteration: 1,
+			ChatID:    "cli:/test",
+		},
+	})
+
+	if model3.progress == nil {
+		t.Error("Progress should be accepted after restoreSession with typing=true")
+	}
+	if model3.progress.Iteration != 1 {
+		t.Errorf("Progress iteration = %d, want 1", model3.progress.Iteration)
 	}
 }
 

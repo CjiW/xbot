@@ -693,7 +693,11 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 			}
 			m.messages = append(m.messages, cm)
 		}
-		m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitchedHistory, m.senderID, len(msg.history)), feedbackInfo)
+		if m.viewerMode {
+			m.showSystemMsg(fmt.Sprintf("✅ 已加载 agent 会话: %d messages", len(msg.history)), feedbackInfo)
+		} else {
+			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitchedHistory, m.senderID, len(msg.history)), feedbackInfo)
+		}
 	}
 	m.invalidateAllCache(false)
 	m.viewport.GotoBottom()

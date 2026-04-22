@@ -141,6 +141,15 @@ func (a *Agent) SpawnInteractiveSession(
 	}
 	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true, subModel)
 
+	// Interactive SubAgent gets its own TenantSession for message persistence.
+	// Channel="agent", ChatID=key → messages saved to DB like normal sessions.
+	agentTenantSession, err := a.multiSession.GetOrCreateSession("agent", key)
+	if err != nil {
+		a.interactiveSubAgents.Delete(key)
+		return nil, fmt.Errorf("create agent tenant session: %w", err)
+	}
+	cfg.Session = agentTenantSession
+
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。
 	// 进度穿透：子 Agent 不仅上报自身进度，还注入回调到 subCtx 让更深层 SubAgent 也能递归穿透。

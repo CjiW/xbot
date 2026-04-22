@@ -462,6 +462,25 @@ func (m *cliModel) ensureBgCursorVisible() {
 	}
 }
 
+// ensureSessionCursorVisible adjusts panelScrollY so the session cursor is within the visible area.
+// Each session entry takes exactly 1 rendered line.
+func (m *cliModel) ensureSessionCursorVisible() {
+	visibleH := m.panelVisibleHeight()
+	// +1 for header line
+	cursorLine := m.panelSessionCursor + 1
+	totalLines := len(m.panelSessionItems) + 1
+	if totalLines <= visibleH {
+		m.panelScrollY = 0
+		return
+	}
+	if cursorLine >= m.panelScrollY+visibleH {
+		m.panelScrollY = cursorLine - visibleH + 1
+	}
+	if cursorLine < m.panelScrollY {
+		m.panelScrollY = cursorLine
+	}
+}
+
 // panelVisibleHeight 返回 panel 可见区域高度。
 func (m *cliModel) panelVisibleHeight() int {
 	h := m.height - 5 // titleBar(1) + footer(1) + toast(1) + PanelBox borders(2)

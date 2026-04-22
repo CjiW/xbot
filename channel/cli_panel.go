@@ -827,12 +827,14 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 	case msg.Code == tea.KeyUp:
 		if !m.panelSessionViewing && m.panelSessionCursor > 0 {
 			m.panelSessionCursor--
+			m.ensureSessionCursorVisible()
 		}
 		return true, m, nil
 
 	case msg.Code == tea.KeyDown:
 		if !m.panelSessionViewing && m.panelSessionCursor < len(m.panelSessionItems)-1 {
 			m.panelSessionCursor++
+			m.ensureSessionCursorVisible()
 		}
 		return true, m, nil
 
@@ -881,6 +883,42 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 			m.panelSessionItems = m.sessionsListFn()
 		}
 		return true, m, nil
+
+	case msg.Code == tea.KeyHome:
+		if !m.panelSessionViewing && len(m.panelSessionItems) > 0 {
+			m.panelSessionCursor = 0
+			m.panelScrollY = 0
+		}
+		return true, m, nil
+
+	case msg.Code == tea.KeyEnd:
+		if !m.panelSessionViewing && len(m.panelSessionItems) > 0 {
+			m.panelSessionCursor = len(m.panelSessionItems) - 1
+			m.ensureSessionCursorVisible()
+		}
+		return true, m, nil
+
+	case msg.Code == tea.KeyPgUp:
+		if !m.panelSessionViewing {
+			visibleH := m.panelVisibleHeight()
+			m.panelSessionCursor -= visibleH
+			if m.panelSessionCursor < 0 {
+				m.panelSessionCursor = 0
+			}
+			m.ensureSessionCursorVisible()
+		}
+		return true, m, nil
+
+	default:
+		if msg.String() == "pgdown" && !m.panelSessionViewing {
+			visibleH := m.panelVisibleHeight()
+			m.panelSessionCursor += visibleH
+			if m.panelSessionCursor >= len(m.panelSessionItems) {
+				m.panelSessionCursor = len(m.panelSessionItems) - 1
+			}
+			m.ensureSessionCursorVisible()
+			return true, m, nil
+		}
 	}
 	return false, m, nil
 }
@@ -899,11 +937,17 @@ func (m *cliModel) viewSessionsList() string {
 	cursorStyle := s.PanelCursor
 	header := s.PanelHeader.Render("Sessions")
 	help := s.PanelDesc.Render("↑↓ Navigate  Enter Switch/View  r Refresh  Esc Close")
+	total := len(m.panelSessionItems)
+	scrollHint := ""
+	if total > 1 {
+		scrollHint = s.PanelDesc.Render(fmt.Sprintf(" [%d/%d]", m.panelSessionCursor+1, total))
+	}
 
 	var sb strings.Builder
 	sb.WriteString(header)
 	sb.WriteString("  ")
 	sb.WriteString(help)
+	sb.WriteString(scrollHint)
 	sb.WriteString("\n")
 
 	contentW := m.width - 4

@@ -992,6 +992,7 @@ func main() {
 			}
 			var entries []channel.SessionPanelEntry
 			tenants, err := app.backend.ListTenants()
+			seen := make(map[string]bool) // dedup agent sessions by role:instance
 			if err == nil && len(tenants) > 0 {
 				for _, t := range tenants {
 					isActive := t.ChatID == absWorkDir && t.Channel == "cli"
@@ -1009,6 +1010,11 @@ func main() {
 					// SubAgent sessions for this tenant
 					sessions := app.backend.ListInteractiveSessions(t.Channel, t.ChatID)
 					for _, s := range sessions {
+						agentKey := s.Role + ":" + s.Instance
+						if seen[agentKey] {
+							continue
+						}
+						seen[agentKey] = true
 						entries = append(entries, channel.SessionPanelEntry{
 							ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
 							Type:        "agent",
@@ -1032,6 +1038,11 @@ func main() {
 				})
 				sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
 				for _, s := range sessions {
+					agentKey := s.Role + ":" + s.Instance
+					if seen[agentKey] {
+						continue
+					}
+					seen[agentKey] = true
 					entries = append(entries, channel.SessionPanelEntry{
 						ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
 						Type:        "agent",

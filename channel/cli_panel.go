@@ -809,23 +809,34 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 
 	case msg.Code == tea.KeyEnter:
 		if m.panelSessionViewing {
+			// Viewing mode: Esc goes back, Enter does nothing
 			return true, m, nil
 		}
 		if m.panelSessionCursor >= 0 && m.panelSessionCursor < len(m.panelSessionItems) {
 			entry := m.panelSessionItems[m.panelSessionCursor]
 			switch entry.Type {
 			case "main":
-				// Switch to this chatroom
+				// Switch to this chatroom + close panel
 				if entry.ID != m.chatID {
 					m.chatID = entry.ID
+					m.channelName = entry.Channel
 					m.messages = nil
 					m.invalidateAllCache(false)
+					// Close panel first
+					m.panelMode = ""
+					m.panelSessionItems = nil
+					m.relayoutViewport()
 					if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
 						m.suLoading = true
 						m.splashFrame = 0
 						return true, m, tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
 					}
 					m.showSystemMsg(fmt.Sprintf("✅ 已切换到会话: %s", entry.Label), feedbackInfo)
+				} else {
+					// Already on this session, just close panel
+					m.panelMode = ""
+					m.panelSessionItems = nil
+					m.relayoutViewport()
 				}
 			case "agent":
 				// View agent conversation messages
@@ -860,21 +871,6 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 			m.panelSessionItems = m.sessionsListFn()
 		}
 		return true, m, nil
-
-	case msg.String() == "x":
-		// Switch to selected session and close panel
-		if m.panelSessionCursor >= 0 && m.panelSessionCursor < len(m.panelSessionItems) {
-			entry := m.panelSessionItems[m.panelSessionCursor]
-			if entry.Type == "main" && entry.ID != m.chatID {
-				m.chatID = entry.ID
-				m.messages = nil
-				m.invalidateAllCache(false)
-			}
-		}
-		m.panelMode = ""
-		m.panelSessionItems = nil
-		m.relayoutViewport()
-		return true, m, nil
 	}
 	return false, m, nil
 }
@@ -892,7 +888,7 @@ func (m *cliModel) viewSessionsList() string {
 	s := &m.styles
 	cursorStyle := s.PanelCursor
 	header := s.PanelHeader.Render("Sessions")
-	help := s.PanelDesc.Render("↑↓ Navigate  Enter View/Switch  x Switch+Close  r Refresh  Esc Close")
+	help := s.PanelDesc.Render("↑↓ Navigate  Enter Switch/View  r Refresh  Esc Close")
 
 	var sb strings.Builder
 	sb.WriteString(header)

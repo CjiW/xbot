@@ -1000,10 +1000,11 @@ func main() {
 						label = "主会话  You ↔ Agent"
 					}
 					entries = append(entries, channel.SessionPanelEntry{
-						ID:     t.ChatID,
-						Type:   "main",
-						Label:  label,
-						Active: isActive,
+						ID:      t.ChatID,
+						Type:    "main",
+						Channel: t.Channel,
+						Label:   label,
+						Active:  isActive,
 					})
 					// SubAgent sessions for this tenant
 					sessions := app.backend.ListInteractiveSessions(t.Channel, t.ChatID)
@@ -1022,10 +1023,11 @@ func main() {
 			} else {
 				// Fallback: no tenants available
 				entries = append(entries, channel.SessionPanelEntry{
-					ID:     absWorkDir,
-					Type:   "main",
-					Label:  "主会话  You ↔ Agent",
-					Active: true,
+					ID:      absWorkDir,
+					Type:    "main",
+					Channel: "cli",
+					Label:   "主会话  You ↔ Agent",
+					Active:  true,
 				})
 				sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
 				for _, s := range sessions {
@@ -1065,10 +1067,14 @@ func main() {
 	// Remote mode: history loaded after backend.Start() via cliCh.LoadHistory()
 	// (HistoryLoader runs during NewCLIChannel, before WS is connected)
 
-	// /su 动态历史加载器：从 web tenant 加载目标用户历史
+	// 动态历史加载器：按 (channelName, chatID) 加载目标会话历史
+	// 用于 /su 切换用户、session 面板切换会话、压缩后刷新
 	if tenantSvc != nil && cliSessionSvc != nil {
-		cliCfg.DynamicHistoryLoader = func(_, chatID string) ([]channel.HistoryMessage, error) {
-			tid, err := tenantSvc.GetOrCreateTenantID("web", chatID)
+		cliCfg.DynamicHistoryLoader = func(channelName, chatID string) ([]channel.HistoryMessage, error) {
+			if channelName == "" {
+				channelName = "cli"
+			}
+			tid, err := tenantSvc.GetOrCreateTenantID(channelName, chatID)
 			if err != nil {
 				return nil, fmt.Errorf("get tenant: %w", err)
 			}

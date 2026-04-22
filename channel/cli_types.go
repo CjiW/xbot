@@ -474,6 +474,7 @@ type AgentPanelEntry struct {
 type SessionPanelEntry struct {
 	ID          string // chatID or "agent:role/instance"
 	Type        string // "main" = main chatroom, "agent" = SubAgent session
+	Channel     string // channel name (e.g. "cli", "web") for history loading
 	Label       string // display label
 	Role        string // agent role (for agent type)
 	Instance    string // agent instance (for agent type)

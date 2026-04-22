@@ -767,12 +767,13 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 // suLoadHistoryCmd 异步加载 /su 目标用户的历史消息
 func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
 	chatID := m.chatID
+	channelName := m.channelName
 	loader := m.channel.config.DynamicHistoryLoader
 	if loader == nil {
 		return func() tea.Msg { return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader")} }
 	}
 	return func() tea.Msg {
-		history, err := loader("", chatID)
+		history, err := loader(channelName, chatID)
 		return suHistoryLoadMsg{history: history, err: err}
 	}
 }
@@ -786,8 +787,9 @@ func (m *cliModel) reloadMessagesFromSession() {
 		return
 	}
 	chatID := m.chatID
+	channelName := m.channelName
 	go func() {
-		history, err := loader("", chatID)
+		history, err := loader(channelName, chatID)
 		// Send result via async channel (goroutine-safe)
 		if m.channel != nil {
 			select {

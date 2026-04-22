@@ -20,6 +20,24 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		return m, []tea.Cmd{func() tea.Msg { return easterEggDoneMsg{} }}, true
 	}
 
+	// §Session Viewer: Esc exits, all other keys blocked (read-only)
+	if m.viewerMode {
+		if msg.Code == tea.KeyEsc {
+			m.exitViewerMode()
+		}
+		// Allow viewport scrolling to pass through
+		switch msg.Code {
+		case tea.KeyUp, tea.KeyDown, tea.KeyHome, tea.KeyEnd, tea.KeyPgUp:
+			// Fall through to textarea/viewport handling below
+		default:
+			// PgDn: bubbletea doesn't have a KeyPgDn constant, match by string
+			if msg.String() == "pgdown" {
+				break
+			}
+			return m, nil, true
+		}
+	}
+
 	// 🥚 Konami Code 彩蛋：监听方向键和字母键
 	if m.easterEgg == easterEggNone {
 		konamiKey := ""

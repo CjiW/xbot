@@ -129,6 +129,20 @@ func (m *cliModel) View() tea.View {
 	// 输入区
 	input := inputBoxStyle.Render(inputArea)
 
+	// §Session Viewer: override titleBar and input for read-only SubAgent viewing
+	if m.viewerMode {
+		viewerLeft := m.viewerLabel
+		viewerRight := m.styles.InfoSt.Render("Esc Back")
+		viewerPad := m.width - lipgloss.Width(viewerLeft) - lipgloss.Width(viewerRight)
+		if viewerPad < 1 {
+			viewerPad = 1
+		}
+		titleBar = m.styles.TitleBar.Render(viewerLeft + strings.Repeat(" ", viewerPad) + viewerRight)
+		// Viewer footer: message count
+		viewerStatus := m.styles.ReadyStatus.Render(fmt.Sprintf("📋 %d messages · read-only", len(m.messages)))
+		input = viewerStatus
+	}
+
 	// Build content string
 	var content string
 

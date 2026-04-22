@@ -243,6 +243,15 @@ type suHistoryLoadMsg struct {
 	err     error
 }
 
+// viewerState holds the main-session state saved while viewing a SubAgent session.
+type viewerState struct {
+	messages    []cliMessage
+	chatID      string
+	senderID    string
+	channelName string
+	typing      bool
+}
+
 // cliHistoryReloadMsg context compression 后重新加载历史完成消息
 type cliHistoryReloadMsg struct {
 	history []HistoryMessage
@@ -477,6 +486,11 @@ type cliModel struct {
 	splashDone  bool // true = splash 动画结束，进入正常界面
 	splashFrame int  // 当前 splash 动画帧索引
 	suLoading   bool // true = /su 切换用户后正在加载历史，显示 loading 画面
+
+	// --- §Session Viewer (read-only SubAgent session view) ---
+	viewerMode  bool        // true = viewing a SubAgent session in main viewport (read-only)
+	viewerLabel string      // header label while viewing (e.g. "🤖 explore/test-agent-1")
+	viewerSaved viewerState // saved main-session state to restore on Esc
 
 	// --- §16 Toast 通知队列 ---
 	toasts     []cliToastItem // Toast 队列（头部=当前显示）

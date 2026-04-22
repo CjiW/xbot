@@ -1012,6 +1012,7 @@ func main() {
 						entries = append(entries, channel.SessionPanelEntry{
 							ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
 							Type:        "agent",
+							Channel:     t.Channel,
 							Role:        s.Role,
 							Instance:    s.Instance,
 							ParentID:    t.ChatID,
@@ -1034,6 +1035,7 @@ func main() {
 					entries = append(entries, channel.SessionPanelEntry{
 						ID:          fmt.Sprintf("agent:%s/%s", s.Role, s.Instance),
 						Type:        "agent",
+						Channel:     "cli",
 						Role:        s.Role,
 						Instance:    s.Instance,
 						ParentID:    absWorkDir,

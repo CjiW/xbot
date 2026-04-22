@@ -534,6 +534,27 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, err
 		}
 		return json.Marshal(result)
+	case "get_session_messages":
+		var p struct {
+			Channel  string `json:"channel"`
+			ChatID   string `json:"chat_id"`
+			Role     string `json:"role"`
+			Instance string `json:"instance"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = bizID
+		}
+		msgs, _ := backend.GetSessionMessages(p.Channel, p.ChatID, p.Role, p.Instance)
+		if msgs == nil {
+			msgs = []agent.SessionMessage{}
+		}
+		return json.Marshal(msgs)
 
 	// --- Background tasks ---
 	case "get_bg_task_count":

@@ -16,32 +16,6 @@ import (
 
 // --- §12 Interactive Panel ---
 
-// formatSessionMessages formats SubAgent conversation messages for panel display.
-func (m *cliModel) formatSessionMessages(msgs []SessionChatMessage) []string {
-	var lines []string
-	for _, msg := range msgs {
-		content := msg.Content
-		if runes := []rune(content); len(runes) > 100 {
-			content = string(runes[:97]) + "..."
-		}
-		content = strings.ReplaceAll(content, "\n", " ")
-		switch msg.Role {
-		case "system":
-			lines = append(lines, "⚙️ System: "+content)
-		case "user":
-			lines = append(lines, "👤 User: "+content)
-		case "assistant":
-			lines = append(lines, "🤖 "+content)
-		default:
-			lines = append(lines, "  "+content)
-		}
-	}
-	if len(lines) == 0 {
-		lines = []string{"(no messages yet)"}
-	}
-	return lines
-}
-
 // panelAgentEntry represents an interactive sub-agent session in the unified panel.
 type panelAgentEntry struct {
 	Role       string // role name (e.g. "explore")
@@ -765,6 +739,61 @@ func (m *cliModel) viewBgTaskLog() string {
 	return sb.String()
 }
 
+// enterViewerMode saves the current main-session state and switches to read-only
+// viewing of a SubAgent session in the main viewport.
+func (m *cliModel) enterViewerMode(entry SessionPanelEntry) {
+	// Save current state
+	m.viewerSaved = viewerState{
+		messages:    m.messages,
+		chatID:      m.chatID,
+		senderID:    m.senderID,
+		channelName: m.channelName,
+		typing:      m.typing,
+	}
+
+	// Load agent messages into m.messages
+	var agentMsgs []cliMessage
+	if m.agentMessagesFn != nil {
+		msgs := m.agentMessagesFn(entry.Role, entry.Instance)
+		for _, sm := range msgs {
+			agentMsgs = append(agentMsgs, cliMessage{
+				role:    sm.Role,
+				content: sm.Content,
+				dirty:   true,
+			})
+		}
+	}
+
+	m.messages = agentMsgs
+	m.viewerMode = true
+	m.viewerLabel = fmt.Sprintf("🤖 %s/%s", entry.Role, entry.Instance)
+	m.typing = false
+	m.streamingMsgIdx = -1
+	m.invalidateAllCache(false)
+
+	// Close panel
+	m.panelMode = ""
+	m.panelSessionItems = nil
+	m.relayoutViewport()
+	m.updateViewportContent()
+	m.viewport.GotoBottom()
+}
+
+// exitViewerMode restores the main-session state after viewing a SubAgent session.
+func (m *cliModel) exitViewerMode() {
+	m.messages = m.viewerSaved.messages
+	m.chatID = m.viewerSaved.chatID
+	m.senderID = m.viewerSaved.senderID
+	m.channelName = m.viewerSaved.channelName
+	m.typing = m.viewerSaved.typing
+	m.viewerMode = false
+	m.viewerLabel = ""
+	m.viewerSaved = viewerState{}
+	m.streamingMsgIdx = -1
+	m.invalidateAllCache(false)
+	m.updateViewportContent()
+}
+
 // openSessionsPanel opens the sessions management panel.
 func (m *cliModel) openSessionsPanel() {
 	m.panelMode = "sessions"
@@ -839,28 +868,9 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 					m.relayoutViewport()
 				}
 			case "agent":
-				// View agent conversation messages
-				if m.agentMessagesFn != nil {
-					msgs := m.agentMessagesFn(entry.Role, entry.Instance)
-					if len(msgs) > 0 {
-						m.panelBgLogLines = m.formatSessionMessages(msgs)
-					} else if m.agentInspectFn != nil {
-						result, err := m.agentInspectFn(entry.Role, entry.Instance, 5)
-						if err != nil {
-							m.panelBgLogLines = []string{"Error: " + err.Error()}
-						} else if result == "" {
-							m.panelBgLogLines = []string{"(no activity yet)"}
-						} else {
-							m.panelBgLogLines = splitLines(result)
-						}
-					} else {
-						m.panelBgLogLines = []string{"(no messages yet)"}
-					}
-				} else {
-					m.panelBgLogLines = []string{"(agent messages not available)"}
-				}
-				m.panelSessionViewing = true
-				m.panelScrollY = 0
+				// View agent session in main viewport (read-only)
+				m.enterViewerMode(entry)
+				return true, m, nil
 			}
 		}
 		return true, m, nil

@@ -1070,6 +1070,7 @@ func main() {
 	// 动态历史加载器：按 (channelName, chatID) 加载目标会话历史
 	// 用于 /su 切换用户、session 面板切换会话、压缩后刷新
 	if tenantSvc != nil && cliSessionSvc != nil {
+		// Local mode: load from session DB directly
 		cliCfg.DynamicHistoryLoader = func(channelName, chatID string) ([]channel.HistoryMessage, error) {
 			if channelName == "" {
 				channelName = "cli"
@@ -1083,6 +1084,15 @@ func main() {
 				return nil, err
 			}
 			return channel.ConvertMessagesToHistory(msgs), nil
+		}
+	} else if app.backend != nil && app.backend.IsRemote() {
+		// Remote mode: load via RPC get_history
+		backend := app.backend
+		cliCfg.DynamicHistoryLoader = func(channelName, chatID string) ([]channel.HistoryMessage, error) {
+			if channelName == "" {
+				channelName = "cli"
+			}
+			return backend.GetHistory(channelName, chatID)
 		}
 	}
 

@@ -739,72 +739,6 @@ func (m *cliModel) viewBgTaskLog() string {
 	return sb.String()
 }
 
-// enterViewerMode saves the current main-session state and switches to read-only
-// viewing of a SubAgent session in the main viewport.
-// Uses DynamicHistoryLoader — same pipeline as switching to another main session.
-// Returns a tea.Cmd for async history loading (or nil if loader unavailable).
-func (m *cliModel) enterViewerMode(entry SessionPanelEntry) tea.Cmd {
-	// Save current state
-	m.viewerSaved = viewerState{
-		messages:    m.messages,
-		chatID:      m.chatID,
-		senderID:    m.senderID,
-		channelName: m.channelName,
-		typing:      m.typing,
-		progress:    m.progress,
-	}
-
-	// Switch to agent session: channel="agent", chatID=interactiveKey(...)
-	// The interactiveKey format is "channel:chatID/roleName:instance"
-	// Must match the key used in SpawnInteractiveSession to create the TenantSession.
-	agentChatID := entry.Channel + ":" + entry.ParentID + "/" + entry.Role
-	if entry.Instance != "" {
-		agentChatID += ":" + entry.Instance
-	}
-	m.chatID = agentChatID
-	m.channelName = "agent"
-	m.messages = nil
-	m.viewerMode = true
-	m.viewerLabel = fmt.Sprintf("🤖 %s/%s", entry.Role, entry.Instance)
-	m.typing = false
-	m.streamingMsgIdx = -1
-	m.progress = nil // clear main session's progress block
-	m.invalidateAllCache(false)
-
-	// Close panel
-	m.panelMode = ""
-	m.panelSessionItems = nil
-	m.relayoutViewport()
-
-	// Load history via DynamicHistoryLoader (same as Ctrl+T session switch)
-	if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
-		m.suLoading = true
-		m.splashFrame = 0
-		return m.suLoadHistoryCmd()
-	}
-
-	m.updateViewportContent()
-	m.viewport.GotoBottom()
-	return nil
-}
-
-// exitViewerMode restores the main-session state after viewing a SubAgent session.
-func (m *cliModel) exitViewerMode() {
-	m.messages = m.viewerSaved.messages
-	m.chatID = m.viewerSaved.chatID
-	m.senderID = m.viewerSaved.senderID
-	m.channelName = m.viewerSaved.channelName
-	m.typing = m.viewerSaved.typing
-	m.progress = m.viewerSaved.progress
-	m.viewerMode = false
-	m.viewerLabel = ""
-	m.viewerSaved = viewerState{}
-	m.streamingMsgIdx = -1
-	m.invalidateAllCache(false)
-	m.updateViewportContent()
-}
-
-// openSessionsPanel opens the sessions management panel.
 func (m *cliModel) openSessionsPanel() {
 	m.panelMode = "sessions"
 	m.relayoutViewport()
@@ -880,12 +814,33 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 					m.relayoutViewport()
 				}
 			case "agent":
-				// View agent session in main viewport (read-only)
-				cmd := m.enterViewerMode(entry)
-				if cmd != nil {
-					return true, m, tea.Batch(m.splashTick(0), cmd)
+				// Switch to agent session — same logic as normal session switch
+				// Agent chatID uses interactiveKey format: "channel:chatID/roleName:instance"
+				agentChatID := entry.Channel + ":" + entry.ParentID + "/" + entry.Role
+				if entry.Instance != "" {
+					agentChatID += ":" + entry.Instance
 				}
-				return true, m, nil
+				if agentChatID != m.chatID {
+					m.chatID = agentChatID
+					m.channelName = "agent"
+					m.messages = nil
+					m.invalidateAllCache(false)
+					// Close panel first
+					m.panelMode = ""
+					m.panelSessionItems = nil
+					m.relayoutViewport()
+					if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
+						m.suLoading = true
+						m.splashFrame = 0
+						return true, m, tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
+					}
+					m.showSystemMsg(fmt.Sprintf("✅ 已切换到 agent 会话: %s/%s", entry.Role, entry.Instance), feedbackInfo)
+				} else {
+					// Already on this session, just close panel
+					m.panelMode = ""
+					m.panelSessionItems = nil
+					m.relayoutViewport()
+				}
 			}
 		}
 		return true, m, nil

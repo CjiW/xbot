@@ -751,16 +751,24 @@ func (m *cliModel) enterViewerMode(entry SessionPanelEntry) tea.Cmd {
 		senderID:    m.senderID,
 		channelName: m.channelName,
 		typing:      m.typing,
+		progress:    m.progress,
 	}
 
-	// Switch to agent session: channel="agent", chatID=entry.ID (e.g. "agent:explore/test-1")
-	m.chatID = entry.ID
+	// Switch to agent session: channel="agent", chatID=interactiveKey(...)
+	// The interactiveKey format is "channel:chatID/roleName:instance"
+	// Must match the key used in SpawnInteractiveSession to create the TenantSession.
+	agentChatID := entry.Channel + ":" + entry.ParentID + "/" + entry.Role
+	if entry.Instance != "" {
+		agentChatID += ":" + entry.Instance
+	}
+	m.chatID = agentChatID
 	m.channelName = "agent"
 	m.messages = nil
 	m.viewerMode = true
 	m.viewerLabel = fmt.Sprintf("🤖 %s/%s", entry.Role, entry.Instance)
 	m.typing = false
 	m.streamingMsgIdx = -1
+	m.progress = nil // clear main session's progress block
 	m.invalidateAllCache(false)
 
 	// Close panel
@@ -787,6 +795,7 @@ func (m *cliModel) exitViewerMode() {
 	m.senderID = m.viewerSaved.senderID
 	m.channelName = m.viewerSaved.channelName
 	m.typing = m.viewerSaved.typing
+	m.progress = m.viewerSaved.progress
 	m.viewerMode = false
 	m.viewerLabel = ""
 	m.viewerSaved = viewerState{}

@@ -250,6 +250,7 @@ type viewerState struct {
 	senderID    string
 	channelName string
 	typing      bool
+	progress    *CLIProgressPayload
 }
 
 // cliHistoryReloadMsg context compression 后重新加载历史完成消息

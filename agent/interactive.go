@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -482,6 +483,22 @@ func (a *Agent) SpawnInteractiveSession(
 	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
 	a.interactiveSubAgents.Store(key, ia)
 
+	// Persist final assistant message with iteration history as Detail,
+	// same as the main agent does in handleInboundMessage (agent.go:1884).
+	// The incremental persistence in postToolProcessing saves assistant messages
+	// WITHOUT Detail — this adds the one with full iteration history.
+	if agentTenantSession != nil && out.Content != "" {
+		assistantMsg := llm.NewAssistantMessage(out.Content)
+		if len(out.IterationHistory) > 0 {
+			if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+				assistantMsg.Detail = string(jsonBytes)
+			}
+		}
+		if err := agentTenantSession.AddMessage(assistantMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to save interactive agent assistant message with detail")
+		}
+	}
+
 	log.WithFields(log.Fields{
 		"role":     roleName,
 		"messages": len(ia.messages),
@@ -626,6 +643,20 @@ func (a *Agent) SendToInteractiveSession(
 		ia.iterationHistory = append(ia.iterationHistory, out.IterationHistory...)
 	}
 	ia.lastReply = out.Content
+
+	// Persist final assistant message with iteration history as Detail,
+	// same as the main agent does in handleInboundMessage (agent.go:1884).
+	if cfg.Session != nil && out.Content != "" {
+		assistantMsg := llm.NewAssistantMessage(out.Content)
+		if len(out.IterationHistory) > 0 {
+			if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+				assistantMsg.Detail = string(jsonBytes)
+			}
+		}
+		if err := cfg.Session.AddMessage(assistantMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to save interactive agent assistant message with detail")
+		}
+	}
 
 	return out.OutboundMessage, nil
 }

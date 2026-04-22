@@ -222,6 +222,7 @@ func (a *Agent) buildMainRunConfig(
 					s := event.Structured
 					if cliCh != nil {
 						payload := &channelpkg.CLIProgressPayload{
+							ChatID:           progressKey,
 							Phase:            string(s.Phase),
 							Iteration:        s.Iteration,
 							Thinking:         s.ThinkingContent,
@@ -515,7 +516,7 @@ func (a *Agent) buildMainRunConfig(
 			}
 			cfg.StreamContentFunc = func(content string) {
 				if cliCh != nil {
-					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{StreamContent: content})
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, StreamContent: content})
 				}
 				if remoteCLICh != nil {
 					remoteCLICh.SendStreamContent(chatID, content, "")
@@ -526,7 +527,7 @@ func (a *Agent) buildMainRunConfig(
 			}
 			cfg.StreamReasoningFunc = func(content string) {
 				if cliCh != nil {
-					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ReasoningStreamContent: content})
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, ReasoningStreamContent: content})
 				}
 				if remoteCLICh != nil {
 					remoteCLICh.SendStreamContent(chatID, "", content)

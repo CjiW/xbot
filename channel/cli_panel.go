@@ -796,6 +796,9 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 					m.chatID = entry.ID
 					m.channelName = entry.Channel
 					m.messages = nil
+					m.progress = nil
+					m.typing = false
+					m.streamingMsgIdx = -1
 					m.invalidateAllCache(false)
 					// Close panel first
 					m.panelMode = ""
@@ -824,6 +827,9 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 					m.chatID = agentChatID
 					m.channelName = "agent"
 					m.messages = nil
+					m.progress = nil
+					m.typing = false
+					m.streamingMsgIdx = -1
 					m.invalidateAllCache(false)
 					// Close panel first
 					m.panelMode = ""

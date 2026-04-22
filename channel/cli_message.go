@@ -608,6 +608,13 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 
 // handleAgentMessage 处理 agent 回复
 func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
+	// Filter by session: only process outbound for the currently viewed session.
+	if msg.Channel != "" && msg.ChatID != "" {
+		if msg.Channel != m.channelName || msg.ChatID != m.chatID {
+			return
+		}
+	}
+
 	turnID := m.agentTurnID // capture at entry for stale-signal guard
 	content := msg.Content
 

@@ -284,6 +284,15 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 
 // handleProgressMsg processes progress update events from the agent.
 func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
+	// Filter by session: only process progress for the currently viewed session.
+	// payload.ChatID is set by ProgressEventHandler as "channel:chatID".
+	if msg.payload != nil && msg.payload.ChatID != "" {
+		currentKey := m.channelName + ":" + m.chatID
+		if msg.payload.ChatID != currentKey {
+			return
+		}
+	}
+
 	turnID := m.agentTurnID // capture before any mutation
 	prev := m.progress
 

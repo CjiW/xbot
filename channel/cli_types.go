@@ -197,6 +197,7 @@ const (
 
 // CLIProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
 type CLIProgressPayload struct {
+	ChatID                 string // session key for routing — CLI filters by m.chatID
 	Phase                  string
 	Iteration              int
 	ActiveTools            []CLIToolProgress

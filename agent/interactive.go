@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xbot/bus"
+	channelpkg "xbot/channel"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/tools"
@@ -150,10 +151,75 @@ func (a *Agent) SpawnInteractiveSession(
 	}
 	cfg.Session = agentTenantSession
 
+	// Interactive SubAgent gets its own ProgressEventHandler so its progress
+	// is pushed to CLI directly with its own ChatID — same pipeline as main session.
+	// CLI filters by m.chatID so only the currently viewed session's progress is shown.
+	if a.channelFinder != nil && !background {
+		if ch, ok := a.channelFinder("cli"); ok {
+			if cliCh, ok := ch.(*channelpkg.CLIChannel); ok {
+				agentProgressKey := "agent:" + key
+				cfg.ProgressEventHandler = func(event *ProgressEvent) {
+					if event == nil || event.Structured == nil {
+						return
+					}
+					s := event.Structured
+					payload := &channelpkg.CLIProgressPayload{
+						ChatID:           agentProgressKey,
+						Phase:            string(s.Phase),
+						Iteration:        s.Iteration,
+						Thinking:         s.ThinkingContent,
+						Reasoning:        s.ReasoningContent,
+						HistoryCompacted: s.HistoryCompacted,
+					}
+					for _, t := range s.ActiveTools {
+						payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
+							Name: t.Name, Label: t.Label, Status: string(t.Status),
+							Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+						})
+					}
+					for _, t := range s.CompletedTools {
+						payload.CompletedTools = append(payload.CompletedTools, channelpkg.CLIToolProgress{
+							Name: t.Name, Label: t.Label, Status: string(t.Status),
+							Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+						})
+					}
+					if len(s.Todos) > 0 {
+						payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+						for i, td := range s.Todos {
+							payload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+						}
+					}
+					if s.TokenUsage != nil {
+						payload.TokenUsage = &channelpkg.CLITokenUsage{
+							PromptTokens: s.TokenUsage.PromptTokens, CompletionTokens: s.TokenUsage.CompletionTokens,
+							TotalTokens: s.TokenUsage.TotalTokens, CacheHitTokens: s.TokenUsage.CacheHitTokens,
+						}
+					}
+					cliCh.SendProgress(key, payload)
+				}
+				// Also wire stream callbacks for real-time rendering
+				cfg.Stream = true
+				cfg.StreamContentFunc = func(content string) {
+					cliCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, StreamContent: content})
+				}
+				cfg.StreamReasoningFunc = func(content string) {
+					cliCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
+				}
+			}
+		}
+	}
+
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。
 	// 进度穿透：子 Agent 不仅上报自身进度，还注入回调到 subCtx 让更深层 SubAgent 也能递归穿透。
 	// Background 模式例外：bg subagent 的进度不应穿透到父 agent 的 TUI。
+
+	// Override SendFunc to route outbound via agent session's channel/chatID.
+	// This makes agent session outbound go through the same pipeline as the main session.
+	cfg.SendFunc = func(channel, chatID, content string, metadata ...map[string]string) error {
+		return a.sendMessage("agent", key, content, metadata...)
+	}
+
 	if !background {
 		if cb, ok := SubAgentProgressFromContext(ctx); ok {
 			rn := roleName

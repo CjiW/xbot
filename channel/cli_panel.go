@@ -793,13 +793,12 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 			case "main":
 				// Switch to this chatroom + close panel
 				if entry.ID != m.chatID {
+					m.saveCurrentSession() // save current session state
 					m.chatID = entry.ID
 					m.channelName = entry.Channel
 					m.messages = nil
-					m.progress = nil
-					m.typing = false
-					m.streamingMsgIdx = -1
 					m.invalidateAllCache(false)
+					m.restoreSession() // restore target session state (or reset to idle)
 					// Close panel first
 					m.panelMode = ""
 					m.panelSessionItems = nil
@@ -824,13 +823,12 @@ func (m *cliModel) updateSessionsPanel(msg tea.KeyPressMsg) (bool, *cliModel, te
 					agentChatID += ":" + entry.Instance
 				}
 				if agentChatID != m.chatID {
+					m.saveCurrentSession() // save current session state
 					m.chatID = agentChatID
 					m.channelName = "agent"
 					m.messages = nil
-					m.progress = nil
-					m.typing = false
-					m.streamingMsgIdx = -1
 					m.invalidateAllCache(false)
+					m.restoreSession() // restore target session state (or reset to idle)
 					// Close panel first
 					m.panelMode = ""
 					m.panelSessionItems = nil

@@ -296,13 +296,11 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	turnID := m.agentTurnID // capture before any mutation
 	prev := m.progress
 
-	// Guard: ignore stale progress events arriving after the turn has ended.
-	// Without this, a late progress event (especially from SubAgent callbacks
-	// running in separate goroutines) can re-set m.progress to non-nil after
-	// endAgentTurn cleared it, causing the progress panel to persist.
-	// PhaseDone is still allowed through: it's idempotent (endAgentTurn checks turnID).
+	// Auto-start turn if we receive progress for current session but aren't typing.
+	// This happens when switching to a session whose SubAgent is mid-run.
+	// PhaseDone is excluded — it signals completion, not a new turn.
 	if !m.typing && msg.payload != nil && msg.payload.Phase != "done" {
-		return
+		m.startAgentTurn()
 	}
 
 	// Stream-only payloads (from StreamContentFunc/StreamReasoningFunc) only carry

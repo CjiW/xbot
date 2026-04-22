@@ -243,6 +243,69 @@ type suHistoryLoadMsg struct {
 	err     error
 }
 
+// sessionState holds per-session state that should be preserved when switching sessions.
+// Messages are NOT stored here — the DB is the source of truth for history.
+type sessionState struct {
+	progress          *CLIProgressPayload
+	typing            bool
+	iterationHistory  []cliIterationSnapshot
+	lastSeenIteration int
+	streamingMsgIdx   int
+	typingStartTime   time.Time
+	lastReasoning     string
+	lastThinking      string
+}
+
+// sessionKey returns the map key for the current session.
+func (m *cliModel) sessionKey() string {
+	return m.channelName + ":" + m.chatID
+}
+
+// saveCurrentSession saves the current session's live state into the savedSessions map.
+func (m *cliModel) saveCurrentSession() {
+	key := m.sessionKey()
+	if m.savedSessions == nil {
+		m.savedSessions = make(map[string]*sessionState)
+	}
+	m.savedSessions[key] = &sessionState{
+		progress:          m.progress,
+		typing:            m.typing,
+		iterationHistory:  m.iterationHistory,
+		lastSeenIteration: m.lastSeenIteration,
+		streamingMsgIdx:   m.streamingMsgIdx,
+		typingStartTime:   m.typingStartTime,
+		lastReasoning:     m.lastReasoning,
+		lastThinking:      m.lastThinking,
+	}
+}
+
+// restoreSession restores a session's live state from the savedSessions map.
+// If the session has saved state, restores it; otherwise resets to idle.
+func (m *cliModel) restoreSession() {
+	key := m.sessionKey()
+	if saved, ok := m.savedSessions[key]; ok {
+		m.progress = saved.progress
+		m.typing = saved.typing
+		m.iterationHistory = saved.iterationHistory
+		m.lastSeenIteration = saved.lastSeenIteration
+		m.streamingMsgIdx = saved.streamingMsgIdx
+		m.typingStartTime = saved.typingStartTime
+		m.lastReasoning = saved.lastReasoning
+		m.lastThinking = saved.lastThinking
+		delete(m.savedSessions, key) // clean up
+	} else {
+		// No saved state — reset to idle
+		m.progress = nil
+		m.typing = false
+		m.streamingMsgIdx = -1
+		m.iterationHistory = nil
+		m.lastSeenIteration = 0
+		m.typingStartTime = time.Time{}
+		m.lastReasoning = ""
+		m.lastThinking = ""
+	}
+}
+
 // cliHistoryReloadMsg context compression 后重新加载历史完成消息
 type cliHistoryReloadMsg struct {
 	history []HistoryMessage
@@ -484,6 +547,11 @@ type cliModel struct {
 
 	// --- §19 长消息折叠 ---
 	msgLineOffsets []int // 每条消息在 viewport 折行后 content 中的起始行号
+
+	// --- §Session state save/restore ---
+	// Per-session saved state so switching sessions doesn't lose in-progress state.
+	// Key = "channelName:chatID". Messages are NOT saved here — DB is source of truth.
+	savedSessions map[string]*sessionState
 
 	// --- §21 消息搜索 /search ---
 	searchMode    bool            // 是否处于搜索模式

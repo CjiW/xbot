@@ -706,18 +706,45 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 	model.typing = false
 	model.progress = nil
 
-	// A stale non-done progress event should be silently ignored
+	// A non-done progress event with matching ChatID should auto-start the turn
+	// (this is the normal case when switching to a session with a running SubAgent).
 	progMsg := cliProgressMsg{
 		payload: &CLIProgressPayload{
 			Phase:     "thinking",
 			Iteration: 1,
-			SubAgents: []CLISubAgent{{Role: "explore", Status: "running", Desc: "exploring"}},
+			ChatID:    "cli:/test",
 		},
 	}
+	model.chatID = "/test"
+	model.channelName = "cli"
 	_, _ = model.Update(progMsg)
 
-	if model.progress != nil {
-		t.Error("Stale progress event should be ignored when turn has ended")
+	// Progress should be set — the turn auto-starts
+	if model.progress == nil {
+		t.Error("Progress should be set when receiving a valid progress event")
+	}
+	if !model.typing {
+		t.Error("Turn should auto-start when receiving progress for current session")
+	}
+
+	// But progress for a DIFFERENT session should be ignored
+	model2 := newCLIModel()
+	model2.handleResize(80, 24)
+	model2.typing = false
+	model2.progress = nil
+	model2.chatID = "/other"
+	model2.channelName = "cli"
+
+	_, _ = model2.Update(cliProgressMsg{
+		payload: &CLIProgressPayload{
+			Phase:     "thinking",
+			Iteration: 1,
+			ChatID:    "cli:/different",
+		},
+	})
+
+	if model2.progress != nil {
+		t.Error("Progress for a different session should be ignored")
 	}
 }
 

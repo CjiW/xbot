@@ -296,12 +296,18 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	turnID := m.agentTurnID // capture before any mutation
 	prev := m.progress
 
-	// Guard: ignore progress after the turn has ended (Ctrl+C cancelled or completed).
+	// Guard: ignore progress after explicit Ctrl+C cancel.
 	// PhaseDone is allowed through: it's idempotent (endAgentTurn checks turnID).
-	// Note: restoreSession() sets m.typing=true when switching to a mid-run session,
-	// so progress for restored sessions passes this guard naturally.
-	if !m.typing && msg.payload != nil && msg.payload.Phase != "done" {
+	// When switching to a running session with no saved state (first switch),
+	// turnCancelled is false and m.typing is false — auto-start below handles it.
+	if m.turnCancelled && msg.payload != nil && msg.payload.Phase != "done" {
 		return
+	}
+
+	// Auto-start turn: when receiving progress for current session but not typing,
+	// start the turn. This handles first-switch to a running SubAgent session.
+	if !m.typing && msg.payload != nil && msg.payload.Phase != "done" {
+		m.startAgentTurn()
 	}
 
 	// Stream-only payloads (from StreamContentFunc/StreamReasoningFunc) only carry

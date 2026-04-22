@@ -702,9 +702,10 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
-	// Scenario 1: After Ctrl+C (turn ended), stale progress is ignored
+	// Scenario 1: After Ctrl+C (typing=false, turnCancelled=true), progress is ignored
 	model.typing = false
 	model.progress = nil
+	model.turnCancelled = true
 
 	progMsg := cliProgressMsg{
 		payload: &CLIProgressPayload{
@@ -715,10 +716,10 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 	}
 	model.chatID = "/test"
 	model.channelName = "cli"
-	_, _ = model.Update(progMsg)
+	model.handleProgressMsg(progMsg)
 
 	if model.progress != nil {
-		t.Error("Progress after cancel should be ignored when typing=false")
+		t.Error("Progress after Ctrl+C should be ignored when turnCancelled=true")
 	}
 
 	// Scenario 2: Progress for a different session is ignored
@@ -728,7 +729,7 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 	model2.chatID = "/other"
 	model2.channelName = "cli"
 
-	_, _ = model2.Update(cliProgressMsg{
+	model2.handleProgressMsg(cliProgressMsg{
 		payload: &CLIProgressPayload{
 			Phase:     "thinking",
 			Iteration: 1,
@@ -740,24 +741,22 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 		t.Error("Progress for a different session should be ignored")
 	}
 
-	// Scenario 3: restoreSession with typing=true allows progress through
+	// Scenario 3: First switch to running SubAgent (typing=false, turnCancelled=false)
+	// → auto-start should fire
 	model3 := newCLIModel()
 	model3.handleResize(80, 24)
 	model3.chatID = "/test"
 	model3.channelName = "cli"
-	model3.savedSessions = map[string]*sessionState{
-		"cli:/test": {
-			typing:          true,
-			progress:        &CLIProgressPayload{Phase: "thinking", Iteration: 0},
-			streamingMsgIdx: -1,
-		},
-	}
+	// No saved state → restoreSession sets typing=false, turnCancelled=false
 	model3.restoreSession()
 
-	if !model3.typing {
-		t.Fatal("restoreSession should restore typing=true")
+	if model3.typing {
+		t.Error("restoreSession with no saved state should set typing=false")
 	}
-	// Direct call — bypasses full Update() which needs viewport/messages setup
+	if model3.turnCancelled {
+		t.Error("restoreSession with no saved state should set turnCancelled=false")
+	}
+
 	model3.handleProgressMsg(cliProgressMsg{
 		payload: &CLIProgressPayload{
 			Phase:     "tool_exec",
@@ -766,11 +765,11 @@ func TestCLIModelStaleProgressIgnored(t *testing.T) {
 		},
 	})
 
-	if model3.progress == nil {
-		t.Error("Progress should be accepted after restoreSession with typing=true")
+	if !model3.typing {
+		t.Error("Auto-start should fire when turnCancelled=false and typing=false")
 	}
-	if model3.progress.Iteration != 1 {
-		t.Errorf("Progress iteration = %d, want 1", model3.progress.Iteration)
+	if model3.progress == nil {
+		t.Error("Progress should be set after auto-start")
 	}
 }
 

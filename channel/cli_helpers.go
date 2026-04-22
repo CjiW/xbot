@@ -275,6 +275,7 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
+	m.turnCancelled = false // clear any previous cancel flag
 	// Remote mode: optimistically show initial progress so the user sees
 	// immediate feedback (progress bubble) without waiting for the server's
 	// first progress_structured event (which has network round-trip latency).
@@ -319,6 +320,7 @@ func (m *cliModel) endAgentTurn(turnID uint64) {
 	m.rwVisible = 0
 	m.typing = false
 	m.typewriterTickActive = false
+	m.turnCancelled = true // prevent stale progress from auto-starting after cancel
 	// Refresh agent count so the tick chain continues if agents exist
 	if m.agentCountFn != nil {
 		m.agentCount = m.agentCountFn()

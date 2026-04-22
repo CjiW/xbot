@@ -254,6 +254,7 @@ type sessionState struct {
 	typingStartTime   time.Time
 	lastReasoning     string
 	lastThinking      string
+	turnCancelled     bool // true after explicit Ctrl+C cancel — prevents auto-start
 }
 
 // sessionKey returns the map key for the current session.
@@ -276,6 +277,7 @@ func (m *cliModel) saveCurrentSession() {
 		typingStartTime:   m.typingStartTime,
 		lastReasoning:     m.lastReasoning,
 		lastThinking:      m.lastThinking,
+		turnCancelled:     m.turnCancelled,
 	}
 }
 
@@ -292,9 +294,10 @@ func (m *cliModel) restoreSession() {
 		m.typingStartTime = saved.typingStartTime
 		m.lastReasoning = saved.lastReasoning
 		m.lastThinking = saved.lastThinking
+		m.turnCancelled = saved.turnCancelled
 		delete(m.savedSessions, key) // clean up
 	} else {
-		// No saved state — reset to idle
+		// No saved state — reset to idle (NOT cancelled)
 		m.progress = nil
 		m.typing = false
 		m.streamingMsgIdx = -1
@@ -303,6 +306,7 @@ func (m *cliModel) restoreSession() {
 		m.typingStartTime = time.Time{}
 		m.lastReasoning = ""
 		m.lastThinking = ""
+		m.turnCancelled = false
 	}
 }
 
@@ -552,6 +556,7 @@ type cliModel struct {
 	// Per-session saved state so switching sessions doesn't lose in-progress state.
 	// Key = "channelName:chatID". Messages are NOT saved here — DB is source of truth.
 	savedSessions map[string]*sessionState
+	turnCancelled bool // true after Ctrl+C — prevents auto-start on stale progress
 
 	// --- §21 消息搜索 /search ---
 	searchMode    bool            // 是否处于搜索模式

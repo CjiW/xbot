@@ -286,6 +286,15 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	// Filter by session: only process progress for the currently viewed session.
 	// payload.ChatID is set by ProgressEventHandler as "channel:chatID".
+	// Fatal guard: ChatID must never be empty — it identifies which session
+	// this progress belongs to. Empty ChatID means the progress bypassed
+	// session filtering and would leak into the wrong view.
+	if msg.payload != nil && msg.payload.ChatID == "" {
+		log.WithFields(log.Fields{
+			"phase":     msg.payload.Phase,
+			"iteration": msg.payload.Iteration,
+		}).Fatal("handleProgressMsg: received progress with empty ChatID — this is a programming error")
+	}
 	if msg.payload != nil && msg.payload.ChatID != "" {
 		currentKey := m.channelName + ":" + m.chatID
 		if msg.payload.ChatID != currentKey {
@@ -307,6 +316,12 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	// Auto-start turn: when receiving progress for current session but not typing,
 	// start the turn. This handles first-switch to a running SubAgent session.
 	if !m.typing && msg.payload != nil && msg.payload.Phase != "done" {
+		log.WithFields(log.Fields{
+			"phase":     msg.payload.Phase,
+			"iteration": msg.payload.Iteration,
+			"active":    len(msg.payload.ActiveTools),
+			"chatID":    msg.payload.ChatID,
+		}).Info("handleProgressMsg: auto-start turn")
 		m.startAgentTurn()
 	}
 
@@ -358,6 +373,23 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
 			if lastIter > m.lastSeenIteration {
 				m.lastSeenIteration = lastIter
+			}
+		}
+		// Deduplicate: remove the last tool_summary message if it overlaps with
+		// the restored iteration history. History load may have produced a
+		// tool_summary from incremental assistant messages (postToolProcessing),
+		// and the progress snapshot's IterationHistory contains the same data.
+		// Without dedup, the user sees both a static Tools block and a live
+		// progress block rendering the same iterations.
+		if len(m.messages) > 0 {
+			lastMsg := &m.messages[len(m.messages)-1]
+			if lastMsg.role == "tool_summary" && len(lastMsg.iterations) > 0 {
+				lastHistIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+				lastMsgIter := lastMsg.iterations[len(lastMsg.iterations)-1].Iteration
+				if lastMsgIter <= lastHistIter {
+					m.messages = m.messages[:len(m.messages)-1]
+					m.renderCacheValid = false
+				}
 			}
 		}
 	}
@@ -670,6 +702,13 @@ func (m *cliModel) handleUpdateCheck(msg cliUpdateCheckMsg) {
 // handleSuHistoryLoad processes /su user switch history load results.
 func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 	m.suLoading = false
+
+	// Stale result guard: if user switched away from the target session
+	// while the async load was in-flight, discard the result.
+	if msg.channelName != m.channelName || msg.chatID != m.chatID {
+		return
+	}
+
 	if msg.err != nil {
 		m.showSystemMsg(fmt.Sprintf(m.locale.SuLoadFailed, msg.err), feedbackWarning)
 	} else {
@@ -693,6 +732,61 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 	}
 	m.invalidateAllCache(false)
 	m.viewport.GotoBottom()
+
+	// Restore active progress for seamless session switch.
+	// When switching to a session with an active agent turn (e.g. mid-iteration
+	// after CLI restart, or switching from another session), apply the progress
+	// snapshot so the user sees live iteration status without waiting for the
+	// next progress event. This makes session switches feel instantaneous.
+	if msg.activeProgress != nil && msg.activeProgress.Phase != "done" {
+		m.startAgentTurn()
+		m.progress = msg.activeProgress
+
+		// Restore StartedAt for active tools so live elapsed timers work.
+		for i := range m.progress.ActiveTools {
+			t := &m.progress.ActiveTools[i]
+			if t.StartedAt.IsZero() && t.Elapsed > 0 {
+				t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+			}
+		}
+
+		// Restore iteration history from the progress snapshot.
+		if len(msg.activeProgress.IterationHistory) > 0 {
+			for _, ih := range msg.activeProgress.IterationHistory {
+				snap := cliIterationSnapshot{
+					Iteration: ih.Iteration,
+					Thinking:  ih.Thinking,
+					Reasoning: ih.Reasoning,
+					Tools:     ih.CompletedTools,
+				}
+				for i := range snap.Tools {
+					t := &snap.Tools[i]
+					if t.StartedAt.IsZero() && t.Elapsed > 0 {
+						t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+					}
+				}
+				m.iterationHistory = append(m.iterationHistory, snap)
+			}
+			if len(m.iterationHistory) > 0 {
+				lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+				if lastIter > m.lastSeenIteration {
+					m.lastSeenIteration = lastIter
+				}
+			}
+			// Deduplicate: remove last tool_summary message if its iterations
+			// are covered by the restored iterationHistory.
+			if len(m.messages) > 0 {
+				lastMsg := &m.messages[len(m.messages)-1]
+				if lastMsg.role == "tool_summary" && len(lastMsg.iterations) > 0 {
+					lastHistIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+					lastMsgIter := lastMsg.iterations[len(lastMsg.iterations)-1].Iteration
+					if lastMsgIter <= lastHistIter {
+						m.messages = m.messages[:len(m.messages)-1]
+					}
+				}
+			}
+		}
+	}
 }
 
 // handleHistoryReload rebuilds m.messages from session storage after context compression.

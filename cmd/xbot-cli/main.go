@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +29,7 @@ import (
 	"xbot/agent"
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/clipanic"
 	"xbot/config"
 	"xbot/llm"
 	log "xbot/logger"
@@ -520,12 +520,8 @@ func (app *cliApp) Close() {
 
 func main() {
 	xbotHome := config.XbotHome()
-	defer func() {
-		if r := recover(); r != nil {
-			appendCLIPanicLog(xbotHome, r)
-			panic(r)
-		}
-	}()
+	clipanic.EnableFileLogging(filepath.Join(xbotHome, "logs", "cli-panic.log"))
+	defer clipanic.Recover("main.main", nil, true)
 	fmt.Printf("xbot CLI %s\n", version.Version)
 
 	printHelp := func() {
@@ -1115,46 +1111,53 @@ func main() {
 	// Agent session history: load from in-memory interactiveSubAgents (not DB).
 	if app.backend != nil {
 		backend := app.backend
+		cliCfg.GetActiveProgressFn = func(channelName, chatID string) *channel.CLIProgressPayload {
+			return backend.GetActiveProgress(channelName, chatID)
+		}
 		cliCfg.AgentSessionDumpFn = func(chatID string) ([]channel.HistoryMessage, error) {
+			// Try in-memory first (running sessions)
 			dump, ok := backend.GetAgentSessionDumpByFullKey(chatID)
-			if !ok {
-				return nil, nil
-			}
-			var msgs []channel.HistoryMessage
-			for _, m := range dump.Messages {
-				msgs = append(msgs, channel.HistoryMessage{
-					Role:    m.Role,
-					Content: m.Content,
-				})
-			}
-			// Append iteration history as a tool_summary message
-			if len(dump.IterationHistory) > 0 {
-				var iters []channel.HistoryIteration
-				for _, snap := range dump.IterationHistory {
-					var tools []channel.CLIToolProgress
-					for _, t := range snap.Tools {
-						tools = append(tools, channel.CLIToolProgress{
-							Name:      t.Name,
-							Label:     t.Label,
-							Status:    t.Status,
-							Elapsed:   t.ElapsedMS,
-							Iteration: snap.Iteration,
-							Summary:   t.Summary,
-						})
-					}
-					iters = append(iters, channel.HistoryIteration{
-						Iteration: snap.Iteration,
-						Thinking:  snap.Thinking,
-						Reasoning: snap.Reasoning,
-						Tools:     tools,
+			if ok && len(dump.Messages) > 0 {
+				var msgs []channel.HistoryMessage
+				for _, m := range dump.Messages {
+					msgs = append(msgs, channel.HistoryMessage{
+						Role:    m.Role,
+						Content: m.Content,
 					})
 				}
-				msgs = append(msgs, channel.HistoryMessage{
-					Role:       "tool_summary",
-					Iterations: iters,
-				})
+				if len(dump.IterationHistory) > 0 {
+					var iters []channel.HistoryIteration
+					for _, snap := range dump.IterationHistory {
+						var tools []channel.CLIToolProgress
+						for _, t := range snap.Tools {
+							tools = append(tools, channel.CLIToolProgress{
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    t.Status,
+								Elapsed:   t.ElapsedMS,
+								Iteration: snap.Iteration,
+								Summary:   t.Summary,
+							})
+						}
+						iters = append(iters, channel.HistoryIteration{
+							Iteration: snap.Iteration,
+							Thinking:  snap.Thinking,
+							Reasoning: snap.Reasoning,
+							Tools:     tools,
+						})
+					}
+					msgs = append(msgs, channel.HistoryMessage{
+						Role:       "tool_summary",
+						Iterations: iters,
+					})
+				}
+				return msgs, nil
 			}
-			return msgs, nil
+			// Fallback: load from DB (agent tenants have channel="agent", chatID=interactiveKey)
+			if cliCfg.DynamicHistoryLoader != nil {
+				return cliCfg.DynamicHistoryLoader("agent", chatID)
+			}
+			return nil, nil
 		}
 	}
 
@@ -1169,23 +1172,25 @@ func main() {
 			cliCh.SetModelLister(newRemoteModelLister(app.backend))
 			// Forward user messages to server instead of local bus
 			cliCh.SetSendInboundFn(func(msg bus.InboundMessage) bool {
-				go func() {
+				clipanic.Go("main.remote.SendInbound", func() {
 					if err := app.backend.SendInbound(msg); err != nil {
 						log.WithError(err).Warn("Failed to forward message to remote server")
 						// Show a toast so the user knows the message failed to send.
 						cliCh.SendToast("Failed to send message: "+err.Error(), "✗")
 					}
-				}()
+				})
 				return true
 			})
 			// Forward server responses directly to CLI channel (skip dispatcher
 			// since there's no local agent loop — dispatcher would not match "remote" channel)
 			app.backend.OnOutbound(func(msg bus.OutboundMessage) {
+				defer clipanic.Recover("main.remote.OnOutbound", msg, false)
 				cliCh.Send(msg)
 			})
 			// Register OnProgress callback for streaming progress from server
 			app.backend.OnProgress(func(p *channel.CLIProgressPayload) {
-				cliCh.SendProgress(cliCfg.ChatID, p)
+				defer clipanic.Recover("main.remote.OnProgress", p, false)
+				cliCh.SendProgress("cli:"+cliCfg.ChatID, p)
 			})
 			// Inject remote bg task callbacks (BgTaskManager is nil in remote mode)
 			bgSessionKey := "cli:" + cliCfg.ChatID
@@ -1359,7 +1364,7 @@ func main() {
 			return
 		}
 	}
-	go disp.Run()
+	clipanic.Go("main.dispatcher.Run", disp.Run)
 
 	// Remote mode: load history from server after WS connection is established.
 	// Use the original CLI tenant key so remote mode can resume the same session
@@ -1395,18 +1400,30 @@ func main() {
 		}
 		// Check if server has an active agent turn for this chat (mid-session reconnect).
 		// Run in goroutine to avoid blocking TUI startup on RPC timeout.
-		go func() {
-			if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
+		clipanic.Go("main.remote.RestoreActiveProgress", func() {
+			progress := app.backend.GetActiveProgress("cli", remoteChatID)
+			if progress != nil {
+				log.WithFields(log.Fields{
+					"chatID":    remoteChatID,
+					"phase":     progress.Phase,
+					"iteration": progress.Iteration,
+					"active":    len(progress.ActiveTools),
+					"completed": len(progress.CompletedTools),
+					"histLen":   len(progress.IterationHistory),
+				}).Info("RestoreActiveProgress: restoring progress snapshot")
 				// Set processing BEFORE sending progress — otherwise handleProgressMsg
 				// rejects it via the stale guard (!m.typing check).
 				cliCh.SetProcessing(true)
-				cliCh.SendProgress(cliCfg.ChatID, progress)
+				cliCh.SendProgress("cli:"+cliCfg.ChatID, progress)
+			} else {
+				log.WithField("chatID", remoteChatID).Info("RestoreActiveProgress: no active progress")
 			}
-		}()
+		})
 
 		// Wire reconnect callback to reload history on WS reconnect.
 		if rb, ok := app.backend.(interface{ OnReconnect(func()) }); ok {
 			rb.OnReconnect(func() {
+				defer clipanic.Recover("main.remote.OnReconnect", nil, false)
 				// Re-sync CWD on reconnect (server may have restarted, losing in-memory cwd)
 				if isLocalServer(app.cfg.CLI.ServerURL) {
 					if cwd, err := os.Getwd(); err == nil {
@@ -1423,7 +1440,7 @@ func main() {
 					cliCh.SetProcessing(true)
 					// Restore active progress snapshot (iteration history + stream state).
 					if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
-						cliCh.SendProgress(cliCfg.ChatID, progress)
+						cliCh.SendProgress("cli:"+cliCfg.ChatID, progress)
 					}
 				} else {
 					cliCh.SetProcessing(false)
@@ -1433,12 +1450,13 @@ func main() {
 		// Wire connection state change callback for header bar indicator.
 		if csc, ok := app.backend.(interface{ OnConnStateChange(func(string)) }); ok {
 			csc.OnConnStateChange(func(state string) {
+				defer clipanic.Recover("main.remote.OnConnStateChange", state, false)
 				cliCh.SetConnState(state)
 			})
 		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)
-		go func() {
+		clipanic.Go("main.remote.RefreshAgentCache", func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -1468,7 +1486,7 @@ func main() {
 					app.agentCacheMu.Unlock()
 				}
 			}
-		}()
+		})
 	}
 
 	// Background goroutine: periodically refresh remote values cache
@@ -1477,7 +1495,7 @@ func main() {
 		// Initial seed
 		app.refreshRemoteValuesCache()
 		valuesCtx, valuesCancel := context.WithCancel(context.Background())
-		go func() {
+		clipanic.Go("main.remote.RefreshValuesCache", func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -1488,7 +1506,7 @@ func main() {
 					return
 				}
 			}
-		}()
+		})
 		app.valuesCancel = valuesCancel
 	}
 
@@ -1507,7 +1525,7 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
+	clipanic.Go("main.signalHandler", func() {
 		<-sigCh
 		log.Info("Received shutdown signal, shutting down...")
 		// Stop backend first (closes WS, unblocks pending RPCs)
@@ -1516,10 +1534,10 @@ func main() {
 		}
 		// Wait for pending saves with timeout (avoid blocking forever on hung RPC)
 		done := make(chan struct{})
-		go func() {
+		clipanic.Go("main.signalHandler.WaitSaves", func() {
 			saveWg.Wait()
 			close(done)
-		}()
+		})
 		select {
 		case <-done:
 			log.Info("All saves complete")
@@ -1529,7 +1547,7 @@ func main() {
 		cancel()
 		// Quit BubbleTea program so cliCh.Start() returns
 		cliCh.Stop()
-	}()
+	})
 
 	// Runner Bridge: inject LLM client, model list and provider for runner use
 	if !app.backend.IsRemote() {
@@ -2034,18 +2052,4 @@ func (s *remoteLLMSubscriber) SwitchModel(senderID, model string) {
 
 func (s *remoteLLMSubscriber) GetDefaultModel() string {
 	return s.backend.GetDefaultModel()
-}
-
-func appendCLIPanicLog(xbotHome string, recovered any) {
-	logDir := filepath.Join(xbotHome, "logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return
-	}
-	path := filepath.Join(logDir, "cli-panic.log")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = fmt.Fprintf(f, "\n==== %s panic ====\n%v\n%s\n", time.Now().Format(time.RFC3339), recovered, debug.Stack())
 }

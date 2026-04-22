@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"time"
 	"xbot/bus"
+	"xbot/clipanic"
 	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
@@ -239,8 +240,11 @@ type splashDoneMsg struct{}
 
 // suHistoryLoadMsg /su 切换用户后的历史加载完成消息
 type suHistoryLoadMsg struct {
-	history []HistoryMessage
-	err     error
+	history        []HistoryMessage
+	err            error
+	channelName    string              // target session at time of request
+	chatID         string              // target session at time of request
+	activeProgress *CLIProgressPayload // non-nil if target session has an active agent turn
 }
 
 // sessionState holds per-session state that should be preserved when switching sessions.
@@ -841,6 +845,7 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
 	chatID := m.chatID
 	channelName := m.channelName
+	progressFn := m.channel.config.GetActiveProgressFn
 
 	// Agent sessions: load from in-memory interactiveSubAgents (not DB).
 	if channelName == "agent" {
@@ -848,18 +853,30 @@ func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
 		if dumpFn != nil {
 			return func() tea.Msg {
 				history, err := dumpFn(chatID)
-				return suHistoryLoadMsg{history: history, err: err}
+				// Agent sessions don't have GetActiveProgress, but try anyway
+				var activeProgress *CLIProgressPayload
+				if progressFn != nil {
+					activeProgress = progressFn(channelName, chatID)
+				}
+				return suHistoryLoadMsg{history: history, err: err, channelName: channelName, chatID: chatID, activeProgress: activeProgress}
 			}
 		}
 	}
 
 	loader := m.channel.config.DynamicHistoryLoader
 	if loader == nil {
-		return func() tea.Msg { return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader")} }
+		return func() tea.Msg {
+			return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader"), channelName: channelName, chatID: chatID}
+		}
 	}
 	return func() tea.Msg {
 		history, err := loader(channelName, chatID)
-		return suHistoryLoadMsg{history: history, err: err}
+		// Also fetch active progress for seamless session switch recovery.
+		var activeProgress *CLIProgressPayload
+		if progressFn != nil {
+			activeProgress = progressFn(channelName, chatID)
+		}
+		return suHistoryLoadMsg{history: history, err: err, channelName: channelName, chatID: chatID, activeProgress: activeProgress}
 	}
 }
 
@@ -873,7 +890,7 @@ func (m *cliModel) reloadMessagesFromSession() {
 	}
 	chatID := m.chatID
 	channelName := m.channelName
-	go func() {
+	clipanic.Go("channel.cliModel.reloadMessagesFromSession", func() {
 		history, err := loader(channelName, chatID)
 		// Send result via async channel (goroutine-safe)
 		if m.channel != nil {
@@ -883,5 +900,5 @@ func (m *cliModel) reloadMessagesFromSession() {
 				// channel full, drop — next progress event will retry
 			}
 		}
-	}()
+	})
 }

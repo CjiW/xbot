@@ -11,6 +11,7 @@ import (
 	"xbot/config"
 	"xbot/event"
 	llm "xbot/llm"
+	log "xbot/logger"
 	"xbot/session"
 	"xbot/storage/sqlite"
 	"xbot/tools"
@@ -97,9 +98,17 @@ func (b *LocalBackend) GetActiveProgress(ch, chatID string) *channel.CLIProgress
 	key := ch + ":" + chatID
 	v, ok := b.agent.lastProgressSnapshot.Load(key)
 	if !ok {
+		log.WithField("key", key).Info("GetActiveProgress: no snapshot found")
 		return nil
 	}
 	snapshot := v.(*channel.CLIProgressPayload)
+	log.WithFields(log.Fields{
+		"key":       key,
+		"phase":     snapshot.Phase,
+		"iteration": snapshot.Iteration,
+		"active":    len(snapshot.ActiveTools),
+		"completed": len(snapshot.CompletedTools),
+	}).Info("GetActiveProgress: snapshot found")
 	// Attach iteration history if available
 	if histPtr, ok := b.agent.iterationHistories.Load(key); ok {
 		hist := *histPtr.(*[]channel.CLIProgressPayload)

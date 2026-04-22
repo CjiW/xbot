@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"xbot/bus"
+	"xbot/clipanic"
 	log "xbot/logger"
 )
 
@@ -55,6 +56,7 @@ func (d *Dispatcher) Run() {
 			if _, err := func() (ret string, err error) {
 				defer func() {
 					if r := recover(); r != nil {
+						clipanic.Report("channel.Dispatcher.Send", msg, r)
 						log.WithField("channel", msg.Channel).Errorf("Channel.Send panic: %v", r)
 						err = fmt.Errorf("channel %s panic: %v", msg.Channel, r)
 					}

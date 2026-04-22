@@ -16,6 +16,7 @@ import (
 
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/clipanic"
 	"xbot/cron"
 	"xbot/event"
 	"xbot/llm"
@@ -1314,10 +1315,10 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() {
+	clipanic.Go("agent.chatWorker.processLoop", func() {
 		defer wg.Done()
 		a.chatProcessLoop(ctx, chatKey, msgCh)
-	}()
+	})
 
 	for msg := range ch {
 		if ctx.Err() != nil {
@@ -1328,7 +1329,9 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		if cmd := a.commands.Match(msg.Content); cmd != nil {
 			if cmd.Concurrent() {
 				// 无状态命令：独立 goroutine 处理，不占信号量，不阻塞
-				go func(m bus.InboundMessage, c Command) {
+				m := msg
+				c := cmd
+				clipanic.Go("agent.chatWorker.concurrentCommand", func() {
 					// 清除 sessionFinalSent：command 不走 processMessage，
 					// 需要手动清除否则 sendMessage 会被拦截
 					cmdKey := m.Channel + ":" + m.ChatID
@@ -1353,7 +1356,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 							a.bus.Outbound <- *response
 						}
 					}
-				}(msg, cmd)
+				})
 			} else {
 				// 有状态命令（/new, /compress, /set-llm 等）：走串行队列，
 				// 避免与正在处理的普通消息产生 session 数据竞态
@@ -1420,13 +1423,13 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		reqCtx, reqCancel := context.WithCancel(ctx)
 
 		// 监听 cancel 信号
-		go func() {
+		clipanic.Go("agent.chatProcessLoop.cancelListener", func() {
 			select {
 			case <-cancelCh:
 				reqCancel()
 			case <-reqCtx.Done():
 			}
-		}()
+		})
 
 		// 执行消息处理，完成后检查是否被取消
 		// 注意：必须在 reqCancel() 调用前检查，否则 reqCtx.Err() 总是返回 Canceled

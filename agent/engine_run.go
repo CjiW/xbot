@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xbot/bus"
+	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
 
@@ -1113,6 +1114,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 		for _, entry := range ops {
 			wg.Add(1)
 			go func(e toolCallEntry) {
+				defer clipanic.Recover("agent.executeToolCalls.subAgentOp", e.tc, false)
 				defer wg.Done()
 				var release func()
 				if subAgentSem != nil {
@@ -1155,6 +1157,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 				wg.Add(1)
 				sem <- struct{}{}
 				go func(e toolCallEntry) {
+					defer clipanic.Recover("agent.executeToolCalls.readOp", e.tc, false)
 					defer wg.Done()
 					defer func() { <-sem }()
 					execOne(e)

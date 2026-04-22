@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"xbot/bus"
+	"xbot/clipanic"
 )
 
 // AgentChannel wraps a SubAgent as a Channel in Dispatcher.
@@ -48,9 +49,8 @@ func (ac *AgentChannel) Start() error {
 	ac.ctx = ctx
 	ac.cancel = cancel
 
-	ac.wg.Add(1)
-	go func() {
-		defer ac.wg.Done()
+	ac.wg.Go(func() {
+		defer clipanic.Recover("channel.AgentChannel.Start", nil, false)
 		for {
 			select {
 			case <-ctx.Done():
@@ -69,7 +69,7 @@ func (ac *AgentChannel) Start() error {
 				}
 			}
 		}
-	}()
+	})
 
 	return nil
 }

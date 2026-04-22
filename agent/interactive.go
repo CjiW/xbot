@@ -12,6 +12,7 @@ import (
 
 	"xbot/bus"
 	channelpkg "xbot/channel"
+	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/tools"
@@ -331,6 +332,7 @@ func (a *Agent) SpawnInteractiveSession(
 			startTime := time.Now()
 			defer func() {
 				if r := recover(); r != nil {
+					clipanic.Report("agent.interactive.RunBackgroundSession", fmt.Sprintf("%s:%s", roleName, instance), r)
 					log.WithFields(log.Fields{
 						"role":     roleName,
 						"instance": instance,

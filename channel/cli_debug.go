@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"xbot/clipanic"
 	log "xbot/logger"
 
 	tea "charm.land/bubbletea/v2"
@@ -300,7 +301,7 @@ func startAutoInput(sequence string, asyncCh chan<- tea.Msg, stopCh <-chan struc
 		return
 	}
 
-	go func() {
+	clipanic.Go("channel.startAutoInput", func() {
 		log.WithField("sequence", sequence).Info("Auto-input: waiting for splash to finish")
 		// Wait for splash to finish and UI to stabilize
 		select {
@@ -334,7 +335,7 @@ func startAutoInput(sequence string, asyncCh chan<- tea.Msg, stopCh <-chan struc
 			time.Sleep(300 * time.Millisecond)
 		}
 		log.Info("Auto-input: sequence complete")
-	}()
+	})
 }
 
 // isSpecialKey checks if the input is a recognized special key or modifier combo.

@@ -206,13 +206,26 @@ func (a *Agent) buildMainRunConfig(
 		case "cli":
 			var cliCh *channelpkg.CLIChannel
 			var remoteCLICh *channelpkg.RemoteCLIChannel
-			if ch, ok := a.channelFinder("cli"); ok {
-				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-					cliCh = cc
-				} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
-					remoteCLICh = rc
+			if a.channelFinder != nil {
+				if ch, ok := a.channelFinder("cli"); ok {
+					if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+						cliCh = cc
+					} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+						remoteCLICh = rc
+					} else {
+						log.WithField("type", fmt.Sprintf("%T", ch)).Warn("buildMainRunConfig: channelFinder('cli') returned unexpected type")
+					}
+				} else {
+					log.Warn("buildMainRunConfig: channelFinder('cli') returned not found")
 				}
+			} else {
+				log.Warn("buildMainRunConfig: channelFinder is nil")
 			}
+			log.WithFields(log.Fields{
+				"hasCliCh":       cliCh != nil,
+				"hasRemoteCLICh": remoteCLICh != nil,
+				"progressKey":    channel + ":" + chatID,
+			}).Info("buildMainRunConfig: cli channel resolution")
 			if cliCh != nil || remoteCLICh != nil {
 				progressKey := channel + ":" + chatID
 				cfg.ProgressEventHandler = func(event *ProgressEvent) {
@@ -352,6 +365,83 @@ func (a *Agent) buildMainRunConfig(
 							}
 						}
 						remoteCLICh.SendProgress(chatID, payload)
+						// Store progress snapshot for remote CLI reconnect recovery.
+						// Without this, GetActiveProgress returns nil after CLI restart
+						// because only the local cliCh path stored snapshots.
+						cliPayload := &channelpkg.CLIProgressPayload{
+							ChatID:    progressKey,
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+							Reasoning: s.ReasoningContent,
+						}
+						for _, t := range s.ActiveTools {
+							cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
+								Name: t.Name, Label: t.Label, Status: string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+							})
+						}
+						for _, t := range s.CompletedTools {
+							cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
+								Name: t.Name, Label: t.Label, Status: string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+							})
+						}
+						if len(event.Lines) > 0 {
+							subAgents := ExtractSubAgentTree(event.Lines)
+							if len(subAgents) > 0 {
+								cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
+								for i, sa := range subAgents {
+									cliSubAgents[i] = channelpkg.CLISubAgent{
+										Role:     sa.Role,
+										Status:   sa.Status,
+										Desc:     sa.Desc,
+										Children: convertCLISubAgentTree(sa.Children),
+									}
+								}
+								cliPayload.SubAgents = cliSubAgents
+							}
+						}
+						if len(s.Todos) > 0 {
+							cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+							for i, td := range s.Todos {
+								cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+							}
+						}
+						if s.TokenUsage != nil {
+							cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+							}
+						}
+						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
+							prev := prevSnap.(*channelpkg.CLIProgressPayload)
+							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
+								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
+								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
+								already := false
+								for _, h := range hist {
+									if h.Iteration == prev.Iteration {
+										already = true
+										break
+									}
+								}
+								if !already {
+									updated := append(hist, *prev)
+									a.iterationHistories.Store(progressKey, &updated)
+								}
+							}
+						}
+						a.lastProgressSnapshot.Store(progressKey, cliPayload)
+						log.WithFields(log.Fields{
+							"key":       progressKey,
+							"phase":     cliPayload.Phase,
+							"iteration": cliPayload.Iteration,
+							"active":    len(cliPayload.ActiveTools),
+							"completed": len(cliPayload.CompletedTools),
+						}).Info("remote CLI: stored progress snapshot")
 					}
 				}
 			}

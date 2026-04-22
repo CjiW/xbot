@@ -22,6 +22,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/google/uuid"
 	"xbot/bus"
+	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/tools"
@@ -200,11 +201,11 @@ func (c *CLIChannel) Start() error {
 	// 启动 progress coalescing goroutine: drains progressCh and forwards
 	// to the unified async channel.
 	c.wg.Add(1)
-	go c.handleProgressDrain()
+	clipanic.Go("channel.CLIChannel.handleProgressDrain", c.handleProgressDrain)
 
 	// 启动 unified async drain goroutine: single sender to p.msgs
 	c.wg.Add(1)
-	go c.handleAsyncDrain()
+	clipanic.Go("channel.CLIChannel.handleAsyncDrain", c.handleAsyncDrain)
 
 	// §13 异步检查更新（不阻塞 TUI 启动）
 	c.CheckUpdateAsync()
@@ -218,7 +219,7 @@ func (c *CLIChannel) Start() error {
 		}
 		c.programMu.Unlock()
 		// Delay connection slightly to let TUI render first
-		go func() {
+		clipanic.Go("channel.CLIChannel.runnerAutoConnect", func() {
 			time.Sleep(500 * time.Millisecond)
 			c.programMu.Lock()
 			model := c.model
@@ -234,7 +235,7 @@ func (c *CLIChannel) Start() error {
 					c.getLLMProvider(),
 				)
 			}
-		}()
+		})
 	}
 
 	// --debug: start Unix socket for key injection
@@ -315,6 +316,9 @@ func (c *CLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 	if payload == nil || c.program == nil {
 		return
+	}
+	if payload.ChatID == "" {
+		payload.ChatID = chatID
 	}
 	select {
 	case c.progressCh <- payload:
@@ -559,13 +563,13 @@ func (c *CLIChannel) CheckUpdateAsync() {
 	if c.program == nil {
 		return
 	}
-	go func() {
+	clipanic.Go("channel.CLIChannel.CheckUpdateAsync", func() {
 		info := version.CheckUpdate(context.Background())
 		select {
 		case c.asyncCh <- cliUpdateCheckMsg{info: info}:
 		default:
 		}
-	}()
+	})
 }
 
 // handleOutbound 处理从 agent 发来的消息 — 通过 asyncCh 合并发送

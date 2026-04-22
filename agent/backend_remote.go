@@ -12,6 +12,7 @@ import (
 
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/clipanic"
 	"xbot/config"
 	"xbot/event"
 	llm "xbot/llm"
@@ -449,6 +450,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
+							clipanic.Report("agent.RemoteBackend.OnOutbound", outMsg, r)
 							log.WithField("panic", r).Warn("RemoteBackend outbound callback panicked")
 						}
 					}()
@@ -483,7 +485,15 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 					cb := b.outboundCb
 					b.outboundMu.RUnlock()
 					if cb != nil {
-						cb(outMsg)
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									clipanic.Report("agent.RemoteBackend.OnAskUser", outMsg, r)
+									log.WithField("panic", r).Warn("RemoteBackend ask_user callback panicked")
+								}
+							}()
+							cb(outMsg)
+						}()
 					} else {
 						log.Warn("Received ask_user but no outbound callback registered")
 					}
@@ -523,6 +533,7 @@ func (b *RemoteBackend) dispatchProgress(payload *channel.CLIProgressPayload) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					clipanic.Report("agent.RemoteBackend.OnProgress", payload, r)
 					log.WithField("panic", r).Warn("RemoteBackend progress callback panicked")
 				}
 			}()

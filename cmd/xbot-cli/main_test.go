@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"xbot/agent"
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/clipanic"
 	"xbot/config"
 	"xbot/event"
 	"xbot/llm"
@@ -18,6 +20,37 @@ import (
 	"xbot/storage/sqlite"
 	"xbot/tools"
 )
+
+func TestAppendCLIPanicLogIncludesMainContext(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "cli-panic.log")
+	clipanic.EnableFileLogging(logPath)
+	defer clipanic.DisableFileLogging()
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected main recover to repanic")
+			}
+		}()
+		func() {
+			defer clipanic.Recover("main.main", nil, true)
+			panic("boom")
+		}()
+	}()
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read panic log: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "where=main.main") {
+		t.Fatalf("expected panic log to include main context, got: %s", content)
+	}
+	if !strings.Contains(content, "panic=boom") {
+		t.Fatalf("expected panic log to include panic value, got: %s", content)
+	}
+}
 
 func TestSubscriptionPersistence(t *testing.T) {
 	dir := t.TempDir()

@@ -795,6 +795,23 @@ func (b *RemoteBackend) GetAgentSessionDump(channelName, chatID, roleName, insta
 	return &dump, true
 }
 
+func (b *RemoteBackend) GetAgentSessionDumpByFullKey(fullKey string) (*AgentSessionDump, bool) {
+	raw, err := b.callRPC("get_agent_session_dump_by_full_key", map[string]any{
+		"full_key": fullKey,
+	})
+	if err != nil {
+		return nil, false
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var dump AgentSessionDump
+	if err := json.Unmarshal(raw, &dump); err != nil {
+		return nil, false
+	}
+	return &dump, true
+}
+
 func (b *RemoteBackend) callRPCInt(method string, params any) (int, error) {
 	raw, err := b.callRPC(method, params)
 	if err != nil {

@@ -841,6 +841,18 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
 	chatID := m.chatID
 	channelName := m.channelName
+
+	// Agent sessions: load from in-memory interactiveSubAgents (not DB).
+	if channelName == "agent" {
+		dumpFn := m.channel.config.AgentSessionDumpFn
+		if dumpFn != nil {
+			return func() tea.Msg {
+				history, err := dumpFn(chatID)
+				return suHistoryLoadMsg{history: history, err: err}
+			}
+		}
+	}
+
 	loader := m.channel.config.DynamicHistoryLoader
 	if loader == nil {
 		return func() tea.Msg { return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader")} }

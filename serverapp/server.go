@@ -577,7 +577,20 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(dump)
 
-	// --- Background tasks ---
+	case "get_agent_session_dump_by_full_key":
+		var p struct {
+			FullKey string `json:"full_key"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		dump, _ := backend.GetAgentSessionDumpByFullKey(p.FullKey)
+		if dump == nil {
+			dump = &agent.AgentSessionDump{}
+		}
+		return json.Marshal(dump)
+
+		// --- Background tasks ---
 	case "get_bg_task_count":
 		var p struct {
 			SessionKey string `json:"session_key"`

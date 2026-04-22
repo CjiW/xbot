@@ -416,6 +416,9 @@ func (b *fakeAgentBackend) GetSessionMessages(string, string, string, string) ([
 func (b *fakeAgentBackend) GetAgentSessionDump(string, string, string, string) (*agent.AgentSessionDump, bool) {
 	return nil, false
 }
+func (b *fakeAgentBackend) GetAgentSessionDumpByFullKey(string) (*agent.AgentSessionDump, bool) {
+	return nil, false
+}
 func (b *fakeAgentBackend) SetContextMode(string) error                    { return nil }
 func (b *fakeAgentBackend) SetCWD(string, string, string) error            { return nil }
 func (b *fakeAgentBackend) SetMaxIterations(int)                           {}

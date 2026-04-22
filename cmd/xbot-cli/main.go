@@ -992,6 +992,12 @@ func main() {
 			seen := make(map[string]bool) // dedup agent sessions by role:instance
 			if err == nil && len(tenants) > 0 {
 				for _, t := range tenants {
+					// Agent tenants (channel="agent") are not real "main" sessions —
+					// they're internal bookkeeping for interactive SubAgent persistence.
+					// Skip them; agent sessions are listed separately via ListInteractiveSessions.
+					if t.Channel == "agent" {
+						continue
+					}
 					isActive := t.ChatID == absWorkDir && t.Channel == "cli"
 					label := fmt.Sprintf("[%s] %s", t.Channel, t.ChatID)
 					if isActive {
@@ -1103,6 +1109,52 @@ func main() {
 				channelName = "cli"
 			}
 			return backend.GetHistory(channelName, chatID)
+		}
+	}
+
+	// Agent session history: load from in-memory interactiveSubAgents (not DB).
+	if app.backend != nil {
+		backend := app.backend
+		cliCfg.AgentSessionDumpFn = func(chatID string) ([]channel.HistoryMessage, error) {
+			dump, ok := backend.GetAgentSessionDumpByFullKey(chatID)
+			if !ok {
+				return nil, nil
+			}
+			var msgs []channel.HistoryMessage
+			for _, m := range dump.Messages {
+				msgs = append(msgs, channel.HistoryMessage{
+					Role:    m.Role,
+					Content: m.Content,
+				})
+			}
+			// Append iteration history as a tool_summary message
+			if len(dump.IterationHistory) > 0 {
+				var iters []channel.HistoryIteration
+				for _, snap := range dump.IterationHistory {
+					var tools []channel.CLIToolProgress
+					for _, t := range snap.Tools {
+						tools = append(tools, channel.CLIToolProgress{
+							Name:      t.Name,
+							Label:     t.Label,
+							Status:    t.Status,
+							Elapsed:   t.ElapsedMS,
+							Iteration: snap.Iteration,
+							Summary:   t.Summary,
+						})
+					}
+					iters = append(iters, channel.HistoryIteration{
+						Iteration: snap.Iteration,
+						Thinking:  snap.Thinking,
+						Reasoning: snap.Reasoning,
+						Tools:     tools,
+					})
+				}
+				msgs = append(msgs, channel.HistoryMessage{
+					Role:       "tool_summary",
+					Iterations: iters,
+				})
+			}
+			return msgs, nil
 		}
 	}
 

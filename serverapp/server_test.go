@@ -142,6 +142,9 @@ func (b fakeBackend) GetSessionMessages(_, _, _, _ string) ([]agent.SessionMessa
 func (b fakeBackend) GetAgentSessionDump(_, _, _, _ string) (*agent.AgentSessionDump, bool) {
 	return nil, false
 }
+func (b fakeBackend) GetAgentSessionDumpByFullKey(_ string) (*agent.AgentSessionDump, bool) {
+	return nil, false
+}
 func (b fakeBackend) SetContextMode(_ string) error                                  { return nil }
 func (b fakeBackend) SetCWD(_, _, _ string) error                                    { return nil }
 func (b fakeBackend) SetMaxIterations(_ int)                                         {}

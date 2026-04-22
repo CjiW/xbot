@@ -103,6 +103,9 @@ type AgentBackend interface {
 	// GetAgentSessionDump returns the full session state (messages + iteration snapshots).
 	GetAgentSessionDump(channelName, chatID, roleName, instance string) (*AgentSessionDump, bool)
 
+	// GetAgentSessionDumpByFullKey returns the session state using the full interactiveKey directly.
+	GetAgentSessionDumpByFullKey(fullKey string) (*AgentSessionDump, bool)
+
 	// SetCWD sets the current working directory for a session on the server.
 	// Used by CLI remote mode to sync the client's cwd to the server session.
 	SetCWD(ch, chatID, dir string) error

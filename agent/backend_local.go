@@ -178,6 +178,10 @@ func (b *LocalBackend) GetAgentSessionDump(channelName, chatID, roleName, instan
 	return b.agent.GetAgentSessionDump(channelName, chatID, roleName, instance)
 }
 
+func (b *LocalBackend) GetAgentSessionDumpByFullKey(fullKey string) (*AgentSessionDump, bool) {
+	return b.agent.GetAgentSessionDumpByFullKey(fullKey)
+}
+
 func (b *LocalBackend) SetContextMode(mode string) error {
 	return b.agent.SetContextMode(mode)
 }

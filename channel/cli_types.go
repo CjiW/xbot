@@ -456,8 +456,33 @@ type CLIChannelConfig struct {
 	AgentList            func() []AgentPanelEntry                                                                                       // 列出活跃 interactive agents（用于 panel 展示）
 	AgentInspect         func(roleName, instance string, tailCount int) (string, error)                                                 // 窥探 interactive agent 的最近活动（tail 风格）
 	AgentMessages        func(roleName, instance string) []SessionChatMessage                                                           // 获取 interactive agent 的对话消息
+	AgentSessionDumpFn   func(roleName, instance string) *AgentSessionDumpData                                                          // 获取 interactive agent 的完整 session 数据（含迭代）
 	ChatCreateFn         func(channelName, senderID, label string) (string, error)                                                      // 创建新 ChatRoom（返回 chatID）
 	SessionsList         func() []SessionPanelEntry                                                                                     // 列出所有 session（main + subagent）
+}
+
+// AgentSessionDumpData holds the full agent session state for viewer rendering.
+// Maps agent-layer IterationSnapshot to CLI-layer iteration data.
+type AgentSessionDumpData struct {
+	Messages   []SessionChatMessage
+	Iterations []AgentIterationData
+}
+
+// AgentIterationData is a CLI-friendly representation of an iteration snapshot.
+type AgentIterationData struct {
+	Iteration int
+	Thinking  string
+	Reasoning string
+	Tools     []AgentToolData
+}
+
+// AgentToolData represents a single tool call within an iteration.
+type AgentToolData struct {
+	Name      string
+	Label     string
+	Status    string
+	ElapsedMS int64
+	Summary   string
 }
 
 // AgentPanelEntry is the channel-layer representation of an interactive agent session for panel display.

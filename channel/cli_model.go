@@ -328,12 +328,13 @@ type cliModel struct {
 	bgTaskCleanupFn func()                         // callback to cleanup completed tasks (remote mode)
 
 	// --- Interactive agents ---
-	agentCount      int                                                            // active interactive agent sessions (0 = no indicator)
-	agentCountFn    func() int                                                     // callback to get current agent count (set by channel)
-	agentListFn     func() []panelAgentEntry                                       // callback to list active agents for panel
-	agentInspectFn  func(roleName, instance string, tailCount int) (string, error) // callback to inspect agent activity
-	agentMessagesFn func(roleName, instance string) []SessionChatMessage           // callback to get agent conversation messages
-	sessionsListFn  func() []SessionPanelEntry                                     // callback to list all sessions for Sessions panel
+	agentCount         int                                                            // active interactive agent sessions (0 = no indicator)
+	agentCountFn       func() int                                                     // callback to get current agent count (set by channel)
+	agentListFn        func() []panelAgentEntry                                       // callback to list active agents for panel
+	agentInspectFn     func(roleName, instance string, tailCount int) (string, error) // callback to inspect agent activity
+	agentMessagesFn    func(roleName, instance string) []SessionChatMessage           // callback to get agent conversation messages
+	agentSessionDumpFn func(roleName, instance string) *AgentSessionDumpData          // callback to get full agent session (messages + iterations)
+	sessionsListFn     func() []SessionPanelEntry                                     // callback to list all sessions for Sessions panel
 
 	// --- Usage query ---
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)

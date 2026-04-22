@@ -751,9 +751,16 @@ func (m *cliModel) enterViewerMode(entry SessionPanelEntry) {
 		typing:      m.typing,
 	}
 
-	// Load agent messages into m.messages
+	// Load agent session dump (messages + iterations)
 	var agentMsgs []cliMessage
-	if m.agentMessagesFn != nil {
+	if m.agentSessionDumpFn != nil {
+		dump := m.agentSessionDumpFn(entry.Role, entry.Instance)
+		if dump != nil {
+			agentMsgs = buildAgentViewerMessages(dump)
+		}
+	}
+	// Fallback to simple messages if dump not available
+	if len(agentMsgs) == 0 && m.agentMessagesFn != nil {
 		msgs := m.agentMessagesFn(entry.Role, entry.Instance)
 		for _, sm := range msgs {
 			agentMsgs = append(agentMsgs, cliMessage{
@@ -777,6 +784,91 @@ func (m *cliModel) enterViewerMode(entry SessionPanelEntry) {
 	m.relayoutViewport()
 	m.updateViewportContent()
 	m.viewport.GotoBottom()
+}
+
+// buildAgentViewerMessages constructs cliMessage list from AgentSessionDumpData.
+// Each assistant message gets the corresponding iteration snapshot (thinking,
+// reasoning, tool calls) so the main viewport renders it like a normal session.
+func buildAgentViewerMessages(dump *AgentSessionDumpData) []cliMessage {
+	if dump == nil {
+		return nil
+	}
+
+	if len(dump.Iterations) == 0 {
+		// No iterations: build flat messages from dump
+		msgs := make([]cliMessage, 0, len(dump.Messages))
+		for _, sm := range dump.Messages {
+			msgs = append(msgs, cliMessage{
+				role:    sm.Role,
+				content: sm.Content,
+				dirty:   true,
+			})
+		}
+		return msgs
+	}
+
+	// Reconstruct messages with iteration data.
+	// Strategy: map each iteration to the corresponding assistant message.
+	msgs := make([]cliMessage, 0, len(dump.Messages))
+	iterIdx := 0
+	for _, sm := range dump.Messages {
+		switch sm.Role {
+		case "user":
+			msgs = append(msgs, cliMessage{
+				role:    "user",
+				content: sm.Content,
+				dirty:   true,
+			})
+		case "assistant":
+			cm := cliMessage{
+				role:    "assistant",
+				content: sm.Content,
+				dirty:   true,
+			}
+			if iterIdx < len(dump.Iterations) {
+				cm.iterations = []cliIterationSnapshot{buildCLISnapshot(dump.Iterations[iterIdx])}
+				iterIdx++
+			}
+			msgs = append(msgs, cm)
+		default:
+			msgs = append(msgs, cliMessage{
+				role:    sm.Role,
+				content: sm.Content,
+				dirty:   true,
+			})
+		}
+	}
+	// Attach remaining iterations to the last assistant message
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].role == "assistant" {
+			for iterIdx < len(dump.Iterations) {
+				msgs[i].iterations = append(msgs[i].iterations, buildCLISnapshot(dump.Iterations[iterIdx]))
+				iterIdx++
+			}
+			break
+		}
+	}
+	return msgs
+}
+
+// buildCLISnapshot converts an AgentIterationData to a cliIterationSnapshot.
+func buildCLISnapshot(it AgentIterationData) cliIterationSnapshot {
+	snap := cliIterationSnapshot{
+		Iteration: it.Iteration,
+		Thinking:  it.Thinking,
+		Reasoning: it.Reasoning,
+	}
+	for _, t := range it.Tools {
+		snap.Tools = append(snap.Tools, CLIToolProgress{
+			Name:      t.Name,
+			Label:     t.Label,
+			Status:    t.Status,
+			Elapsed:   t.ElapsedMS,
+			Iteration: it.Iteration,
+			Summary:   t.Summary,
+		})
+	}
+	return snap
 }
 
 // exitViewerMode restores the main-session state after viewing a SubAgent session.

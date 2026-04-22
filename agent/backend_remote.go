@@ -777,6 +777,24 @@ func (b *RemoteBackend) GetSessionMessages(channelName, chatID, roleName, instan
 	return msgs, true
 }
 
+func (b *RemoteBackend) GetAgentSessionDump(channelName, chatID, roleName, instance string) (*AgentSessionDump, bool) {
+	raw, err := b.callRPC("get_agent_session_dump", map[string]any{
+		"channel": channelName, "chat_id": chatID,
+		"role": roleName, "instance": instance,
+	})
+	if err != nil {
+		return nil, false
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var dump AgentSessionDump
+	if err := json.Unmarshal(raw, &dump); err != nil {
+		return nil, false
+	}
+	return &dump, true
+}
+
 func (b *RemoteBackend) callRPCInt(method string, params any) (int, error) {
 	raw, err := b.callRPC(method, params)
 	if err != nil {

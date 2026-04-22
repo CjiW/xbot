@@ -986,6 +986,39 @@ func main() {
 			}
 			return result
 		},
+		AgentSessionDumpFn: func(roleName, instance string) *channel.AgentSessionDumpData {
+			if app.backend == nil {
+				return nil
+			}
+			dump, _ := app.backend.GetAgentSessionDump("cli", absWorkDir, roleName, instance)
+			if dump == nil {
+				return nil
+			}
+			data := &channel.AgentSessionDumpData{
+				Messages: make([]channel.SessionChatMessage, len(dump.Messages)),
+			}
+			for i, m := range dump.Messages {
+				data.Messages[i] = channel.SessionChatMessage{Role: m.Role, Content: m.Content}
+			}
+			for _, it := range dump.IterationHistory {
+				iterData := channel.AgentIterationData{
+					Iteration: it.Iteration,
+					Thinking:  it.Thinking,
+					Reasoning: it.Reasoning,
+				}
+				for _, t := range it.Tools {
+					iterData.Tools = append(iterData.Tools, channel.AgentToolData{
+						Name:      t.Name,
+						Label:     t.Label,
+						Status:    t.Status,
+						ElapsedMS: t.ElapsedMS,
+						Summary:   t.Summary,
+					})
+				}
+				data.Iterations = append(data.Iterations, iterData)
+			}
+			return data
+		},
 		SessionsList: func() []channel.SessionPanelEntry {
 			if app.backend == nil {
 				return nil

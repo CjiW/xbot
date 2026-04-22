@@ -100,6 +100,9 @@ type AgentBackend interface {
 	// GetSessionMessages returns the conversation messages for a specific interactive SubAgent session.
 	GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool)
 
+	// GetAgentSessionDump returns the full session state (messages + iteration snapshots).
+	GetAgentSessionDump(channelName, chatID, roleName, instance string) (*AgentSessionDump, bool)
+
 	// SetCWD sets the current working directory for a session on the server.
 	// Used by CLI remote mode to sync the client's cwd to the server session.
 	SetCWD(ch, chatID, dir string) error

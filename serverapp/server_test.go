@@ -139,6 +139,9 @@ func (b fakeBackend) InspectInteractiveSession(_ context.Context, _, _, _, _ str
 func (b fakeBackend) GetSessionMessages(_, _, _, _ string) ([]agent.SessionMessage, bool) {
 	return nil, false
 }
+func (b fakeBackend) GetAgentSessionDump(_, _, _, _ string) (*agent.AgentSessionDump, bool) {
+	return nil, false
+}
 func (b fakeBackend) SetContextMode(_ string) error                                  { return nil }
 func (b fakeBackend) SetCWD(_, _, _ string) error                                    { return nil }
 func (b fakeBackend) SetMaxIterations(_ int)                                         {}

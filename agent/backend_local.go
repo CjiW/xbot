@@ -174,6 +174,10 @@ func (b *LocalBackend) GetSessionMessages(channelName, chatID, roleName, instanc
 	return b.agent.GetSessionMessages(channelName, chatID, roleName, instance)
 }
 
+func (b *LocalBackend) GetAgentSessionDump(channelName, chatID, roleName, instance string) (*AgentSessionDump, bool) {
+	return b.agent.GetAgentSessionDump(channelName, chatID, roleName, instance)
+}
+
 func (b *LocalBackend) SetContextMode(mode string) error {
 	return b.agent.SetContextMode(mode)
 }

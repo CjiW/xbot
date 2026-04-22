@@ -1011,6 +1011,55 @@ type SessionMessage struct {
 	Content string `json:"content"`
 }
 
+// AgentSessionDump contains the full state of an interactive SubAgent session
+// for rendering in a viewer. Includes messages and iteration snapshots.
+type AgentSessionDump struct {
+	Messages         []SessionMessage    `json:"messages"`
+	IterationHistory []IterationSnapshot `json:"iterations"`
+}
+
+// GetAgentSessionDump returns the full session state for viewer rendering.
+func (a *Agent) GetAgentSessionDump(channel, chatID, roleName, instance string) (*AgentSessionDump, bool) {
+	key := interactiveKey(channel, chatID, roleName, instance)
+	val, ok := a.interactiveSubAgents.Load(key)
+	if !ok {
+		return nil, false
+	}
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return nil, false
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	var msgs []SessionMessage
+	if ia.systemPrompt.Content != "" {
+		msgs = append(msgs, SessionMessage{Role: "system", Content: ia.systemPrompt.Content})
+	}
+	for _, m := range ia.messages {
+		content := m.Content
+		if content == "" && len(m.ToolCalls) > 0 {
+			var toolNames []string
+			for _, tc := range m.ToolCalls {
+				toolNames = append(toolNames, tc.Name)
+			}
+			content = "[Tool calls: " + strings.Join(toolNames, ", ") + "]"
+		}
+		if content != "" {
+			msgs = append(msgs, SessionMessage{Role: string(m.Role), Content: content})
+		}
+	}
+
+	iters := make([]IterationSnapshot, len(ia.iterationHistory))
+	copy(iters, ia.iterationHistory)
+
+	return &AgentSessionDump{
+		Messages:         msgs,
+		IterationHistory: iters,
+	}, true
+}
+
 // GetSessionMessages returns the conversation history of a specific interactive SubAgent session.
 // Returns the messages and true if found, nil and false otherwise.
 func (a *Agent) GetSessionMessages(channel, chatID, roleName, instance string) ([]SessionMessage, bool) {

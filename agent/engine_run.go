@@ -580,17 +580,21 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 						if clearErr := s.cfg.Session.Clear(); clearErr != nil {
 							log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for context_window_exceeded compression")
 						} else {
-							sessionWriteOk := true
+							allOk := true
 							for _, msg := range result.SessionView {
 								if err := assertNoSystemPersist(msg); err != nil {
 									continue
 								}
 								if err := s.cfg.Session.AddMessage(msg); err != nil {
-									sessionWriteOk = false
+									log.Ctx(ctx).WithError(err).Error("Partial write during context_window_exceeded compression")
+									allOk = false
+									break
 								}
 							}
-							if sessionWriteOk {
+							if allOk {
 								s.lastPersistedCount = len(s.messages)
+							} else {
+								log.Ctx(ctx).Warn("Context window exceeded compression persistence failed, session may be inconsistent")
 							}
 						}
 					}

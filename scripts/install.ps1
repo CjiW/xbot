@@ -55,7 +55,7 @@ $ConfigPath = Join-Path $XbotHome "config.json"
 
 function Write-Info  { param([string]$Msg) Write-Host "[INFO] $Msg" -ForegroundColor Green }
 function Write-Warn  { param([string]$Msg) Write-Host "[WARN] $Msg" -ForegroundColor Yellow }
-function Write-Err   { param([string]$Msg) Write-Host "[ERROR] $Msg" -ForegroundColor Red; exit 1 }
+function Write-Err   { param([string]$Msg) Write-Host "[ERROR] $Msg" -ForegroundColor Red; throw $Msg }
 
 function ConvertTo-Ht {
     param([Parameter(ValueFromPipeline)]$InputObject)
@@ -146,7 +146,7 @@ function Write-Config {
             $cfg = $raw | ConvertFrom-Json | ConvertTo-Ht
         } catch { $cfg = @{} }
     }
-    foreach ($section in @("server", "web", "cli", "admin", "agent")) {
+    foreach ($section in @("server", "web", "cli", "admin", "agent", "llm")) {
         if (-not $cfg.ContainsKey($section)) { $cfg[$section] = @{} }
     }
     $changes = [System.Collections.ArrayList]::new()
@@ -174,6 +174,10 @@ function Write-Config {
     $adminToken = $cfg["admin"]["token"]
     if (-not $adminToken) { $adminToken = $Token }
     Set-IfMissing "agent" "work_dir" $env:USERPROFILE
+    Set-IfMissing "llm" "provider" "openai"
+    Set-IfMissing "llm" "model" "gpt-4o-mini"
+    Set-IfMissing "llm" "api_key" ""
+    Set-IfMissing "llm" "base_url" ""
     if ($Mode -eq "server-client") {
         Set-IfMissing "server" "host" "127.0.0.1"
         Set-Always  "server" "port" $Port
@@ -216,18 +220,31 @@ function Install-UserAutostart {
     $vbsLauncher = Join-Path $wrapperDir "start-xbot-hidden.vbs"
     Set-Content -Path $vbsLauncher -Value "Set WshShell = CreateObject(`"WScript.Shell`")`r`nWshShell.Run chr(34) & `"$wrapperBat`" & Chr(34), 0, False" -Encoding ASCII
 
-    # Place VBS shortcut in user's Startup folder (auto-runs at login, no admin needed)
+    # Place launcher in user's Startup folder (auto-runs at login, no admin needed)
     $startupFolder = [Environment]::GetFolderPath("Startup")
-    $shortcutPath = Join-Path $startupFolder "xbot-server.lnk"
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = "wscript.exe"
-    $shortcut.Arguments = "`"$vbsLauncher`""
-    $shortcut.WorkingDirectory = $wrapperDir
-    $shortcut.Description = "xbot AI Agent Server"
-    $shortcut.WindowStyle = 7  # Minimized
-    $shortcut.Save()
-    Write-Info "Autostart shortcut created in Startup folder (no admin needed)"
+    $useShortcut = $false
+    try {
+        $shortcutPath = Join-Path $startupFolder "xbot-server.lnk"
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = "wscript.exe"
+        $shortcut.Arguments = "`"$vbsLauncher`""
+        $shortcut.WorkingDirectory = $wrapperDir
+        $shortcut.Description = "xbot AI Agent Server"
+        $shortcut.WindowStyle = 7  # Minimized
+        $shortcut.Save()
+        $useShortcut = $true
+        Write-Info "Autostart shortcut created in Startup folder (no admin needed)"
+    } catch {
+        Write-Warn "COM shortcut creation failed, using batch file in Startup folder"
+    }
+
+    # Fallback: copy batch file directly to Startup folder (shows console window briefly)
+    if (-not $useShortcut) {
+        $startupBat = Join-Path $startupFolder "xbot-server.bat"
+        Copy-Item $wrapperBat $startupBat -Force
+        Write-Info "Autostart batch copied to Startup folder (no admin needed)"
+    }
 
     # Remove any leftover scheduled task from previous installs
     Unregister-ScheduledTask -TaskName "xbot-server" -Confirm:$false -ErrorAction SilentlyContinue
@@ -356,13 +373,23 @@ function Install-ServiceNssm {
 function Install-WindowsService {
     param([string]$BinPath, [string]$CfgPath)
 
-    # Non-admin: use Startup folder (guaranteed no-elevated-privilege method)
-    if ($NonInteractive -or -not (Test-IsAdmin)) {
+    # Non-admin: always use Startup folder (guaranteed no-elevated-privilege method)
+    if (-not (Test-IsAdmin)) {
         Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
         return
     }
 
-    # Admin: offer full choice
+    # Admin + NonInteractive: Scheduled Task (works when admin)
+    if ($NonInteractive) {
+        $ok = Install-ScheduledTask -BinPath $BinPath -CfgPath $CfgPath
+        if (-not $ok) {
+            Write-Warn "Scheduled Task failed, falling back to Startup folder..."
+            Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
+        }
+        return
+    }
+
+    # Admin + Interactive: offer full choice
     Write-Host ""
     Write-Host "Choose service method:" -ForegroundColor Cyan
     Write-Host "  1) Scheduled Task (recommended) - Starts at logon, robust restart" -ForegroundColor Cyan
@@ -405,6 +432,7 @@ function Install-WindowsService {
 # Main
 # ============================================================
 
+try {
 Write-Host ""
 Write-Host "  =======================================" -ForegroundColor Cyan
 Write-Host "         xbot-cli Installer (Windows)" -ForegroundColor Cyan
@@ -463,7 +491,58 @@ try {
     Write-Warn "Checksum verification skipped"
 }
 
-Copy-Item $tmpFile (Join-Path $InstallPath $BINARY) -Force
+# Stop running xbot-cli processes and scheduled task before overwriting the binary
+$binPath = Join-Path $InstallPath $BINARY
+if (Test-Path $binPath) {
+    Write-Info "Checking for running xbot-cli..."
+    # Stop and disable scheduled task to prevent auto-restart
+    try {
+        Stop-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
+        Disable-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
+    } catch {}
+    # Kill ALL xbot-cli processes (by full path match for accuracy)
+    $procs = Get-Process -Name "xbot-cli" -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Info "Stopping running xbot-cli process(es)..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        # Wait up to 5 seconds for process to fully exit and release file handles
+        $waited = 0
+        while ((Get-Process -Name "xbot-cli" -ErrorAction SilentlyContinue) -and ($waited -lt 5000)) {
+            Start-Sleep -Milliseconds 500
+            $waited += 500
+        }
+    }
+}
+
+# Copy with retry — Windows may hold the file handle briefly after process exit
+$copied = $false
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+        Copy-Item $tmpFile $binPath -Force -ErrorAction Stop
+        $copied = $true
+        break
+    } catch {
+        if ($attempt -lt 5) {
+            Write-Warn "File locked, retrying ($attempt/5)..."
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+if (-not $copied) {
+    # Last resort: rename old file and copy new one
+    Write-Warn "File still locked, renaming old binary..."
+    $oldFile = "$binPath.old"
+    Move-Item $binPath $oldFile -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    try {
+        Copy-Item $tmpFile $binPath -Force -ErrorAction Stop
+        Remove-Item $oldFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        # Put old file back if copy still fails
+        if (Test-Path $oldFile) { Move-Item $oldFile $binPath -Force -ErrorAction SilentlyContinue }
+        throw "Cannot replace xbot-cli.exe after 5 retries: $_"
+    }
+}
 Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
@@ -505,7 +584,8 @@ if ($selectedMode -eq "server-client") {
     } else {
         Write-Host "  Manage the server:" -ForegroundColor Cyan
         Write-Host "    Stop:   Task Manager > xbot-cli.exe > End task" -ForegroundColor DarkGray
-        Write-Host "    Start:  wscript `"`"$(Join-Path $XbotHome 'scripts\start-xbot-hidden.vbs')`"" -ForegroundColor DarkGray
+        $vbsPath = Join-Path $XbotHome "scripts\start-xbot-hidden.vbs"
+        Write-Host "    Start:  wscript `"$vbsPath`"" -ForegroundColor DarkGray
         $startupFolder = [Environment]::GetFolderPath("Startup")
         Write-Host "    Remove: del `"$startupFolder\xbot-server.lnk`"" -ForegroundColor DarkGray
     }
@@ -521,6 +601,18 @@ Write-Host ""
 Write-Host "  Project:  https://github.com/$REPO" -ForegroundColor DarkGray
 Write-Host "  License:  MIT" -ForegroundColor DarkGray
 Write-Host ""
+
+} catch {
+    Write-Host ""
+    Write-Host "[ERROR] Installation failed: $_" -ForegroundColor Red
+    Write-Host ""
+}
+
+# Keep terminal open so user can read the output
+if (-not $NonInteractive) {
+    Write-Host "Press Enter to close..." -ForegroundColor DarkGray
+    Read-Host | Out-Null
+}
 
 # Ensure clean exit code (native exe calls like schtasks.exe may leave $LASTEXITCODE non-zero)
 $global:LASTEXITCODE = 0

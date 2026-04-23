@@ -577,18 +577,21 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 					s.lastCompletionTokens = 0
 					s.lastMsgCountAtLLMCall = len(s.messages)
 					if s.cfg.Session != nil {
-						_ = s.cfg.Session.Clear()
-						sessionWriteOk := true
-						for _, msg := range result.SessionView {
-							if err := assertNoSystemPersist(msg); err != nil {
-								continue
+						if clearErr := s.cfg.Session.Clear(); clearErr != nil {
+							log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for context_window_exceeded compression")
+						} else {
+							sessionWriteOk := true
+							for _, msg := range result.SessionView {
+								if err := assertNoSystemPersist(msg); err != nil {
+									continue
+								}
+								if err := s.cfg.Session.AddMessage(msg); err != nil {
+									sessionWriteOk = false
+								}
 							}
-							if err := s.cfg.Session.AddMessage(msg); err != nil {
-								sessionWriteOk = false
+							if sessionWriteOk {
+								s.lastPersistedCount = len(s.messages)
 							}
-						}
-						if sessionWriteOk {
-							s.lastPersistedCount = len(s.messages)
 						}
 					}
 					log.Ctx(ctx).Info("Forced compression completed after context_window_exceeded, retrying")
@@ -1423,6 +1426,7 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 
 	// --- Incremental session persistence ---
 	if s.cfg.Session != nil && len(s.messages) > s.lastPersistedCount {
+		persistOk := true
 		for _, msg := range s.messages[s.lastPersistedCount:] {
 			if msg.Role == "system" {
 				continue
@@ -1433,9 +1437,13 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 			}
 			if err := s.cfg.Session.AddMessage(persistMsg); err != nil {
 				log.Ctx(ctx).WithError(err).Error("Failed to persist message to session")
+				persistOk = false
+				break
 			}
 		}
-		s.lastPersistedCount = len(s.messages)
+		if persistOk {
+			s.lastPersistedCount = len(s.messages)
+		}
 	}
 
 	// --- Background notification draining (bg tasks + bg subagents) ---

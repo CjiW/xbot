@@ -762,9 +762,28 @@ func (m *cliModel) openSessionsPanel() {
 	} else {
 		m.panelSessionItems = nil
 	}
+	// Position cursor on the currently active session
 	m.panelSessionCursor = 0
+	for i, entry := range m.panelSessionItems {
+		if entry.Active {
+			m.panelSessionCursor = i
+			break
+		}
+		// For agent sessions, match by chatID (Active is only set for main sessions)
+		if entry.Type == "agent" {
+			agentChatID := entry.Channel + ":" + entry.ParentID + "/" + entry.Role
+			if entry.Instance != "" {
+				agentChatID += ":" + entry.Instance
+			}
+			if agentChatID == m.chatID {
+				m.panelSessionCursor = i
+				break
+			}
+		}
+	}
 	m.panelSessionViewing = false
 	m.panelScrollY = 0
+	m.ensureSessionCursorVisible()
 }
 
 // updateSessionsPanel handles key events for the sessions panel.

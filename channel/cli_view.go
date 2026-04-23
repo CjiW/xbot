@@ -231,6 +231,16 @@ func (m *cliModel) View() tea.View {
 		} else {
 			// 就绪态：显示消息计数 + 当前模型（如果有覆盖）
 			readyParts := []string{m.locale.StatusReady}
+			// Session indicator (for agent sessions)
+			if m.channelName == "agent" {
+				// Extract role/instance from chatID format: "channel:chatID/role:instance"
+				parts := strings.SplitN(m.chatID, "/", 2)
+				if len(parts) == 2 {
+					readyParts = append(readyParts, fmt.Sprintf("🤖 %s", parts[1]))
+				} else {
+					readyParts = append(readyParts, fmt.Sprintf("🤖 %s", m.chatID))
+				}
+			}
 			// 消息计数
 			msgCount := len(m.messages)
 			if msgCount > 0 {

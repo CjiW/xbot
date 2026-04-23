@@ -28,19 +28,12 @@ func TestCheckDangerousCommand_RunAsStillBlocksSudo(t *testing.T) {
 	}
 }
 
-func TestCheckDangerousCommand_NoPermControl_AllowsNonBareSudo(t *testing.T) {
-	blocked, reason := checkDangerousCommand(context.Background(), "sudo -n whoami", false)
-	if blocked {
-		t.Fatalf("expected sudo -n to remain allowed when permission control is disabled, got: %q", reason)
-	}
-}
-
-func TestCheckDangerousCommand_NoPermControl_BlocksBareSudo(t *testing.T) {
-	blocked, reason := checkDangerousCommand(context.Background(), "sudo whoami", false)
-	if !blocked {
-		t.Fatal("expected bare sudo to be blocked")
-	}
-	if !strings.Contains(reason, "bare sudo") {
-		t.Fatalf("unexpected reason: %q", reason)
+func TestCheckDangerousCommand_NoPermControl_AllowsAnySudo(t *testing.T) {
+	// No permission control: all sudo forms allowed (bare, -n, -S)
+	for _, cmd := range []string{"sudo whoami", "sudo -n whoami", "sudo -S whoami"} {
+		blocked, reason := checkDangerousCommand(context.Background(), cmd, false)
+		if blocked {
+			t.Fatalf("expected %q to be allowed when permission control is disabled, got: %q", cmd, reason)
+		}
 	}
 }

@@ -1248,7 +1248,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       {/* Main content: ChatSidebar + messages */}
       <div className="flex flex-1 min-h-0">
         <ChatSidebar
-          onSwitchChat={(chatID) => { setMessages([]) }}
+          onSwitchChat={() => { setMessages([]) }}
           onNewChat={() => { setMessages([]) }}
           currentChatID=""
         />

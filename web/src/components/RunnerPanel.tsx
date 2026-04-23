@@ -136,7 +136,7 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
       if (data.ok) {
         setActiveRunner(name)
       }
-    } catch {}
+    } catch { /* ignored */ }
     setActionLoading(false)
   }, [])
 
@@ -147,7 +147,7 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
       await navigator.clipboard.writeText(cmd)
       setCopied(runner.name)
       setTimeout(() => setCopied(null), 2000)
-    } catch {}
+    } catch { /* ignored */ }
   }, [buildCommand])
 
   // Delete runner
@@ -160,7 +160,7 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
         setRunners(prev => prev.filter(r => r.name !== name))
         if (activeRunner === name) setActiveRunner(null)
       }
-    } catch {}
+    } catch { /* ignored */ }
     setActionLoading(false)
     setDeleteConfirm(null)
     setMenuOpen(null)
@@ -196,7 +196,7 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
         setFormDockerImage('ubuntu:22.04')
         setFormWorkspace('')
       }
-    } catch {}
+    } catch { /* ignored */ }
     setActionLoading(false)
   }, [formName, formMode, formDockerImage, formWorkspace, fetchRunners])
 

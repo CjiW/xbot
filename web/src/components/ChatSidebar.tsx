@@ -25,10 +25,11 @@ export default function ChatSidebar({ onSwitchChat, onNewChat, currentChatID }: 
       const resp = await fetch('/api/chats')
       const data = await resp.json()
       if (data.ok) setChats(data.chats || [])
-    } catch {}
+    } catch { /* ignored */ }
     setLoading(false)
   }, [])
 
+  // Initial load — setLoading(true) is intentional to show loading state on mount
   useEffect(() => { fetchChats() }, [fetchChats])
 
   const handleSwitch = async (chatID: string) => {
@@ -36,7 +37,7 @@ export default function ChatSidebar({ onSwitchChat, onNewChat, currentChatID }: 
     try {
       await fetch(`/api/chats/${encodeURIComponent(chatID)}/switch`, { method: 'POST' })
       onSwitchChat(chatID)
-    } catch {}
+    } catch { /* ignored */ }
   }
 
   const handleCreate = async () => {
@@ -52,7 +53,7 @@ export default function ChatSidebar({ onSwitchChat, onNewChat, currentChatID }: 
         onNewChat()
         fetchChats()
       }
-    } catch {}
+    } catch { /* ignored */ }
   }
 
   const handleDelete = async (e: React.MouseEvent, chatID: string) => {
@@ -66,7 +67,7 @@ export default function ChatSidebar({ onSwitchChat, onNewChat, currentChatID }: 
         if (defaultID) onSwitchChat(defaultID)
       }
       fetchChats()
-    } catch {}
+    } catch { /* ignored */ }
   }
 
   if (collapsed) {

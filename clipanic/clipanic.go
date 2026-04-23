@@ -92,6 +92,7 @@ func ReportWithStack(where string, msg any, recovered any, stack []byte) {
 	writeMu.Lock()
 	defer writeMu.Unlock()
 	_, _ = f.WriteString(b.String())
+	_ = f.Sync()
 }
 
 func Go(where string, fn func()) {

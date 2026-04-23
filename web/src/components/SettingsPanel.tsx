@@ -193,7 +193,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [llmMaxContextSaving, setLlmMaxContextSaving] = useState(false)
 
   // Agent settings state (user-scoped, stored in user_settings table)
-  const [agentSettings, setAgentSettings] = useState<Record<string, string>>({
+  const [_agentSettings, setAgentSettings] = useState<Record<string, string>>({
     context_mode: 'auto',
     max_iterations: '2000',
     max_concurrency: '3',
@@ -205,7 +205,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     enable_masking: 'true',
     language: '',
   })
-  const [agentSaving, setAgentSaving] = useState(false)
 
   // Sessions state
   const [sessions, setSessions] = useState<SessionInfo[]>([])
@@ -472,18 +471,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
 
 
   // Agent settings save handler
-  const saveAgentSetting = useCallback(async (key: string, value: string) => {
-    setAgentSaving(true)
-    const ok = await saveSettings({ [key]: value })
-    if (ok) {
-      setAgentSettings(prev => ({ ...prev, [key]: value }))
-      showToast('设置已保存', 'success')
-    } else {
-      showToast('保存失败', 'error')
-    }
-    setAgentSaving(false)
-  }, [showToast])
-
 
   // Market functions
   const loadMarket = useCallback(async () => {
@@ -492,7 +479,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       const resp = await fetch(`/api/market?type=${marketType}&limit=50`)
       const data = await resp.json()
       if (data.ok) setMarketEntries(data.entries || [])
-    } catch {}
+    } catch { /* ignored */ }
     setMarketLoading(false)
   }, [marketType])
 
@@ -505,7 +492,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       })
       const data = await resp.json()
       if (data.ok) loadMarket()
-    } catch {}
+    } catch { /* ignored */ }
   }, [loadMarket])
 
   const handleUninstall = useCallback(async (entry: MarketEntry) => {
@@ -517,7 +504,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       })
       const data = await resp.json()
       if (data.ok) loadMarket()
-    } catch {}
+    } catch { /* ignored */ }
   }, [loadMarket])
 
   const loadMyMarket = useCallback(async () => {
@@ -526,7 +513,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       const resp = await fetch(`/api/market/my?type=${marketType}`)
       const data = await resp.json()
       if (data.ok) setMyMarketEntries(data.entries || [])
-    } catch {}
+    } catch { /* ignored */ }
     setMarketLoading(false)
   }, [marketType])
 
@@ -543,7 +530,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           e.name === entry.name && e.type === entry.type ? { ...e, published: true } : e
         ))
       }
-    } catch {}
+    } catch { /* ignored */ }
   }, [])
 
   const handleUnpublish = useCallback(async (entry: MyMarketEntry) => {
@@ -559,7 +546,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           e.name === entry.name && e.type === entry.type ? { ...e, published: false } : e
         ))
       }
-    } catch {}
+    } catch { /* ignored */ }
   }, [])
 
   // Load market when tab is opened
@@ -579,7 +566,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       const resp = await fetch('/api/sessions')
       const data = await resp.json()
       if (data.ok) setSessions(data.rooms || [])
-    } catch {}
+    } catch { /* ignored */ }
     setSessionsLoading(false)
   }, [])
 
@@ -595,10 +582,11 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       const resp = await fetch(`/api/sessions/messages?id=${encodeURIComponent(session.id)}`)
       const data = await resp.json()
       if (data.ok) setSessionMessages(data.messages || [])
-    } catch {}
+    } catch { /* ignored */ }
     setSessionMessagesLoading(false)
   }, [])
 
+  // Load session messages when a session is selected
   useEffect(() => {
     if (selectedSession) fetchSessionMessages(selectedSession)
   }, [selectedSession, fetchSessionMessages])

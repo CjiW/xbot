@@ -1230,6 +1230,7 @@ type InteractiveSessionInfo struct {
 
 // ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
 func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSessionInfo {
+	a.cleanupExpiredSessions()
 	prefix := channel + ":" + chatID + "/"
 	var results []InteractiveSessionInfo
 

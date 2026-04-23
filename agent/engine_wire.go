@@ -1463,14 +1463,14 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	} else {
 		log.Ctx(ctx).Warn("oneshot subagent returned nil output")
 		oneshotIA.mu.Unlock()
-		a.interactiveSubAgents.Delete(oneshotKey)
+		a.destroyInteractiveSession(oneshotKey)
 		return &bus.OutboundMessage{}, nil
 	}
 	oneshotIA.mu.Unlock()
-	// One-shot session stays in interactiveSubAgents for history viewing via Ctrl+T.
-	// TTL cleanup (interactiveSessionTTL) will remove it after 30 minutes.
-	// Only cascade-cancel any bg sessions spawned during this one-shot's Run().
+	// Cascade-cancel any bg sessions spawned during this one-shot's Run(),
+	// then destroy the one-shot session immediately (no TTL retention).
 	a.cancelChildSessions(oneshotKey)
+	a.destroyInteractiveSession(oneshotKey)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,

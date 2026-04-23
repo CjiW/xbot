@@ -4,8 +4,8 @@
 .DESCRIPTION
     Downloads and installs xbot-cli from GitHub Releases.
     Supports standalone and server-client modes.
-    Server installs as a Scheduled Task by default (no admin needed).
-    If running as Administrator, offers nssm as an alternative.
+    Server installs via Startup folder by default (no admin needed).
+    If running as Administrator, offers Scheduled Task or nssm as alternatives.
 .PARAMETER Version
     Specific version to install (defaults to latest release).
 .PARAMETER InstallPath
@@ -199,30 +199,87 @@ function Test-IsAdmin {
     } catch { return $false }
 }
 
+# --- Startup folder autostart (no admin required) ---
+function Install-UserAutostart {
+    param([string]$BinPath, [string]$CfgPath)
+    $workDir = $env:USERPROFILE
+
+    # Create wrapper batch in .xbot\scripts\
+    $wrapperDir = Join-Path $XbotHome "scripts"
+    if (-not (Test-Path $wrapperDir)) {
+        New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null
+    }
+    $wrapperBat = Join-Path $wrapperDir "run-server.bat"
+    Set-Content -Path $wrapperBat -Value "@echo off`r`nset XBOT_HOME=$XbotHome`r`ncd /d `"$workDir`"`r`n`"$BinPath`" serve --config `"$CfgPath`"" -Encoding ASCII
+
+    # Create VBS launcher (runs batch hidden, no console window flash)
+    $vbsLauncher = Join-Path $wrapperDir "start-xbot-hidden.vbs"
+    Set-Content -Path $vbsLauncher -Value "Set WshShell = CreateObject(`"WScript.Shell`")`r`nWshShell.Run chr(34) & `"$wrapperBat`" & Chr(34), 0, False" -Encoding ASCII
+
+    # Place VBS shortcut in user's Startup folder (auto-runs at login, no admin needed)
+    $startupFolder = [Environment]::GetFolderPath("Startup")
+    $shortcutPath = Join-Path $startupFolder "xbot-server.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = "wscript.exe"
+    $shortcut.Arguments = "`"$vbsLauncher`""
+    $shortcut.WorkingDirectory = $wrapperDir
+    $shortcut.Description = "xbot AI Agent Server"
+    $shortcut.WindowStyle = 7  # Minimized
+    $shortcut.Save()
+    Write-Info "Autostart shortcut created in Startup folder (no admin needed)"
+
+    # Remove any leftover scheduled task from previous installs
+    Unregister-ScheduledTask -TaskName "xbot-server" -Confirm:$false -ErrorAction SilentlyContinue
+
+    if (-not $NonInteractive) {
+        try {
+            Start-Process -FilePath "wscript.exe" -ArgumentList "`"$vbsLauncher`"" -WindowStyle Hidden
+            Write-Info "Server started (background)"
+        } catch {
+            Write-Warn "Could not auto-start. It will start at next login."
+        }
+    } else {
+        Write-Info "NONINTERACTIVE: skipped auto-start"
+    }
+}
+
+# --- Scheduled Task (requires admin or relaxed policy) ---
 function Install-ScheduledTask {
     param([string]$BinPath, [string]$CfgPath)
     $taskName = "xbot-server"
     $workDir = $env:USERPROFILE
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+
+    # Remove old Startup folder shortcut if migrating to Scheduled Task
+    $startupFolder = [Environment]::GetFolderPath("Startup")
+    $oldShortcut = Join-Path $startupFolder "xbot-server.lnk"
+    if (Test-Path $oldShortcut) { Remove-Item $oldShortcut -Force -ErrorAction SilentlyContinue }
+
     $wrapperDir = Join-Path $XbotHome "scripts"
     if (-not (Test-Path $wrapperDir)) {
         New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null
     }
     $wrapperScript = Join-Path $wrapperDir "run-server.bat"
     Set-Content -Path $wrapperScript -Value "@echo off`r`nset XBOT_HOME=$XbotHome`r`ncd /d `"$workDir`"`r`n`"$BinPath`" serve --config `"$CfgPath`"" -Encoding ASCII
-    $action = New-ScheduledTaskAction -Execute $wrapperScript -WorkingDirectory $workDir
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+    $taskCreated = $false
     try {
+        $action = New-ScheduledTaskAction -Execute $wrapperScript -WorkingDirectory $workDir
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "xbot AI Agent Server" -Force
-        Write-Info "Scheduled Task '$taskName' registered (starts at logon, no admin needed)"
+        Write-Info "Scheduled Task '$taskName' registered"
+        $taskCreated = $true
     } catch {
-        schtasks.exe /Create /SC ONLOGON /TN $taskName /TR "`"$wrapperScript`"" /F
+        # Fallback to schtasks.exe
+        schtasks.exe /Create /SC ONLOGON /TN $taskName /TR "`"$wrapperScript`"" /F 2>$null
         if ($LASTEXITCODE -eq 0) {
             Write-Info "Scheduled Task '$taskName' created (via schtasks.exe)"
-        } else {
-            Write-Err "Failed to create scheduled task: $_"
+            $taskCreated = $true
         }
+    }
+    if (-not $taskCreated) {
+        return $false
     }
     if (-not $NonInteractive) {
         try {
@@ -234,6 +291,7 @@ function Install-ScheduledTask {
     } else {
         Write-Info "NONINTERACTIVE: skipped auto-start"
     }
+    return $true
 }
 
 function Ensure-Nssm {
@@ -297,33 +355,47 @@ function Install-ServiceNssm {
 
 function Install-WindowsService {
     param([string]$BinPath, [string]$CfgPath)
+
+    # Non-admin: use Startup folder (guaranteed no-elevated-privilege method)
     if ($NonInteractive -or -not (Test-IsAdmin)) {
-        Install-ScheduledTask -BinPath $BinPath -CfgPath $CfgPath
+        Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
         return
     }
+
+    # Admin: offer full choice
     Write-Host ""
     Write-Host "Choose service method:" -ForegroundColor Cyan
-    Write-Host "  1) Scheduled Task (recommended) - No admin needed, starts at logon" -ForegroundColor Cyan
-    Write-Host "  2) nssm service               - Real Windows service, needs admin" -ForegroundColor Cyan
-    Write-Host "  3) Skip" -ForegroundColor Cyan
-    $svcChoice = Read-Host "Select [1/2/3] (default 1)"
+    Write-Host "  1) Scheduled Task (recommended) - Starts at logon, robust restart" -ForegroundColor Cyan
+    Write-Host "  2) nssm service               - Real Windows service, auto-start at boot" -ForegroundColor Cyan
+    Write-Host "  3) Startup folder             - No special permissions needed" -ForegroundColor Cyan
+    Write-Host "  4) Skip" -ForegroundColor Cyan
+    $svcChoice = Read-Host "Select [1/2/3/4] (default 1)"
     switch ($svcChoice) {
         "2" {
             $nssmPath = Ensure-Nssm
             if ($nssmPath) {
                 Install-ServiceNssm -NssmPath $nssmPath -BinPath $BinPath -CfgPath $CfgPath
             } else {
-                Write-Warn "nssm not available, falling back to Scheduled Task"
-                Install-ScheduledTask -BinPath $BinPath -CfgPath $CfgPath
+                Write-Warn "nssm not available, falling back to Startup folder"
+                Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
             }
             return
         }
         "3" {
+            Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
+            return
+        }
+        "4" {
             Write-Info "Skipping service install. Start manually: $BinPath serve --config $CfgPath"
             return
         }
         default {
-            Install-ScheduledTask -BinPath $BinPath -CfgPath $CfgPath
+            # Try Scheduled Task first; fall back to Startup folder if access denied
+            $ok = Install-ScheduledTask -BinPath $BinPath -CfgPath $CfgPath
+            if (-not $ok) {
+                Write-Warn "Scheduled Task failed (access denied). Falling back to Startup folder..."
+                Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
+            }
             return
         }
     }
@@ -425,10 +497,18 @@ Write-Info "Config: $ConfigPath"
 
 if ($selectedMode -eq "server-client") {
     Write-Host ""
-    Write-Host "  Manage the server:" -ForegroundColor Cyan
-    Write-Host "    Stop:   schtasks.exe /End /TN xbot-server" -ForegroundColor DarkGray
-    Write-Host "    Start:  Start-ScheduledTask -TaskName xbot-server" -ForegroundColor DarkGray
-    Write-Host "    Remove: Unregister-ScheduledTask -TaskName xbot-server" -ForegroundColor DarkGray
+    if (Test-IsAdmin) {
+        Write-Host "  Manage the server:" -ForegroundColor Cyan
+        Write-Host "    Stop:   schtasks.exe /End /TN xbot-server  OR  net stop xbot-server" -ForegroundColor DarkGray
+        Write-Host "    Start:  Start-ScheduledTask -TaskName xbot-server  OR  net start xbot-server" -ForegroundColor DarkGray
+        Write-Host "    Remove: Unregister-ScheduledTask -TaskName xbot-server" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Manage the server:" -ForegroundColor Cyan
+        Write-Host "    Stop:   Task Manager > xbot-cli.exe > End task" -ForegroundColor DarkGray
+        Write-Host "    Start:  wscript `"`"$(Join-Path $XbotHome 'scripts\start-xbot-hidden.vbs')`"" -ForegroundColor DarkGray
+        $startupFolder = [Environment]::GetFolderPath("Startup")
+        Write-Host "    Remove: del `"$startupFolder\xbot-server.lnk`"" -ForegroundColor DarkGray
+    }
     Write-Host ""
     Write-Info "Web UI: http://localhost:$selectedPort"
     Write-Info "Logs: $XbotHome\logs\xbot-server.log"

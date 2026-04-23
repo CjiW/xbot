@@ -38,7 +38,7 @@ In `server-client` mode, the installer will:
 - generate a random admin token
 - write/update `~/.xbot/config.json`
 - configure CLI default remote connection
-- install a local service (systemd on Linux / launchd on macOS)
+- install a local service (Startup folder on Windows / systemd on Linux / launchd on macOS)
 
 
 ```powershell

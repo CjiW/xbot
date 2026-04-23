@@ -155,6 +155,10 @@ write_config_jq() {
 
     _set_if_missing admin token "$token"
     _set_if_missing agent work_dir "$HOME"
+    _set_if_missing llm provider "openai"
+    _set_if_missing llm model "gpt-4o-mini"
+    _set_if_missing llm api_key ""
+    _set_if_missing llm base_url ""
 
     if [ "$mode" = "server-client" ]; then
         _set_if_missing server host "127.0.0.1"
@@ -196,6 +200,7 @@ cfg.setdefault('web', {})
 cfg.setdefault('cli', {})
 cfg.setdefault('admin', {})
 cfg.setdefault('agent', {})
+cfg.setdefault('llm', {})
 changes, preserved = [], []
 def set_if_missing(s, k, v):
     if k not in cfg[s] or cfg[s][k] in (None, ''):
@@ -207,6 +212,10 @@ def set_always(s, k, v):
     (changes if old != v else preserved).append(f'{s}.{k}={v}' + (f' (was {old})' if old != v else ''))
 set_if_missing('admin', 'token', token)
 set_if_missing('agent', 'work_dir', home)
+set_if_missing('llm', 'provider', 'openai')
+set_if_missing('llm', 'model', 'gpt-4o-mini')
+set_if_missing('llm', 'api_key', '')
+set_if_missing('llm', 'base_url', '')
 if mode == 'server-client':
     set_if_missing('server', 'host', '127.0.0.1')
     set_always('server', 'port', port)

@@ -146,7 +146,7 @@ function Write-Config {
             $cfg = $raw | ConvertFrom-Json | ConvertTo-Ht
         } catch { $cfg = @{} }
     }
-    foreach ($section in @("server", "web", "cli", "admin", "agent")) {
+    foreach ($section in @("server", "web", "cli", "admin", "agent", "llm")) {
         if (-not $cfg.ContainsKey($section)) { $cfg[$section] = @{} }
     }
     $changes = [System.Collections.ArrayList]::new()
@@ -174,6 +174,10 @@ function Write-Config {
     $adminToken = $cfg["admin"]["token"]
     if (-not $adminToken) { $adminToken = $Token }
     Set-IfMissing "agent" "work_dir" $env:USERPROFILE
+    Set-IfMissing "llm" "provider" "openai"
+    Set-IfMissing "llm" "model" "gpt-4o-mini"
+    Set-IfMissing "llm" "api_key" ""
+    Set-IfMissing "llm" "base_url" ""
     if ($Mode -eq "server-client") {
         Set-IfMissing "server" "host" "127.0.0.1"
         Set-Always  "server" "port" $Port

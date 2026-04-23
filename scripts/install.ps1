@@ -204,7 +204,6 @@ function Install-ScheduledTask {
     $taskName = "xbot-server"
     $workDir = $env:USERPROFILE
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    schtasks.exe /Delete /TN $taskName /F 2>$null
     $wrapperDir = Join-Path $XbotHome "scripts"
     if (-not (Test-Path $wrapperDir)) {
         New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null
@@ -442,3 +441,7 @@ Write-Host ""
 Write-Host "  Project:  https://github.com/$REPO" -ForegroundColor DarkGray
 Write-Host "  License:  MIT" -ForegroundColor DarkGray
 Write-Host ""
+
+# Ensure clean exit code (native exe calls like schtasks.exe may leave $LASTEXITCODE non-zero)
+$global:LASTEXITCODE = 0
+exit 0

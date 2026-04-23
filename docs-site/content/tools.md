@@ -24,7 +24,6 @@ xbot includes ~50 built-in tools the agent can call during conversations. This p
 | Tool | Description |
 |------|-------------|
 | `Shell` | Execute shell commands. Configurable timeout (default 120s), background mode, `run_as` user switching |
-| `shell_env` | Environment variable management (`export VAR=value`), auto-persisted to `~/.xbot_env` |
 
 ## Web & Search
 

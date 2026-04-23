@@ -157,7 +157,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A-05**: Add detailed comments for `limitMarkdownTables` table detection logic (`channel/feishu.go`)
 - **A-06**: Add comments explaining De Morgan's law application in subagent loader (`tools/subagent_loader.go`)
 - **A-07**: Add `filepath.ToSlash` cross-platform comment in `globToFindArgs` (`tools/glob.go`)
-- **A-08**: Add comments explaining `parseEnvFileLines` export prefix stripping loop (`tools/shell_env.go`)
 - **A-09**: Add retention rationale comments for Heading5–Heading9 in block type map (`tools/feishu_mcp/block_type_map.go`)
 - **A-10**: Add `executeInSandbox` host path convention comment (`tools/cd.go`)
 - **A-11**: Add `offloadMaxLimit` selection rationale comment (`tools/offload_recall.go`)

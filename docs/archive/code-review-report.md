@@ -241,7 +241,6 @@
 | L-26 | `llm/openai.go` | `buildThinkingOptions` 未知模式静默忽略 |
 | L-27 | `tools/cd.go` | 沙箱模式下 CurrentDir 使用宿主机路径做 Prefix 检查，语义不清晰 |
 | L-28 | `tools/glob.go` | `globToFindArgs` 不处理含 `\` 的 pattern（已有 filepath.ToSlash 保护） |
-| L-29 | `tools/shell_env.go` | `parseEnvFileLines` 行为正确但建议添加注释 |
 | L-30 | `tools/workspace_scope.go` | `SanitizeWorkspaceKey` 未限制用户 ID 长度 |
 | L-31 | `tools/offload_recall.go` | `offloadMaxLimit = 16000` 无注释说明选择依据 |
 | L-32 | `tools/feishu_mcp/block_type_map.go` | Heading5~Heading9 常量可能是死代码 |

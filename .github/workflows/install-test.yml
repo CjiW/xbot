@@ -286,7 +286,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test Windows server-client install (Scheduled Task)
+      - name: Test Windows server-client install (autostart)
         env:
           MODE: server-client
           PORT: "6666"
@@ -317,6 +317,22 @@ jobs:
           $wrapperContent | Should -Match "xbot-cli.exe"
           $wrapperContent | Should -Match "serve"
           Write-Host "✅ Wrapper script has correct content"
-          $task = Get-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
-          $task | Should -Not -BeNullOrEmpty
-          Write-Host "✅ Scheduled Task registered"
+          # Verify autostart method: Scheduled Task (admin) or Startup folder shortcut (non-admin)
+          $isAdmin = $false
+          try {
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+            $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          } catch {}
+          if ($isAdmin) {
+            $task = Get-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
+            $task | Should -Not -BeNullOrEmpty
+            Write-Host "✅ Scheduled Task registered (admin)"
+          } else {
+            $shortcutPath = Join-Path ([Environment]::GetFolderPath("Startup")) "xbot-server.lnk"
+            Test-Path $shortcutPath | Should -BeTrue
+            Write-Host "✅ Startup folder shortcut created (non-admin)"
+            $vbsPath = Join-Path $env:XBOT_HOME "scripts\start-xbot-hidden.vbs"
+            Test-Path $vbsPath | Should -BeTrue
+            Write-Host "✅ VBS hidden launcher created"
+          }

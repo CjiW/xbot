@@ -294,6 +294,7 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			"phase":     msg.payload.Phase,
 			"iteration": msg.payload.Iteration,
 		}).Error("handleProgressMsg: received progress with empty ChatID — this is a programming error")
+		return
 	}
 	if msg.payload != nil && msg.payload.ChatID != "" {
 		currentKey := m.channelName + ":" + m.chatID

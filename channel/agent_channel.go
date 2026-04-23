@@ -96,15 +96,24 @@ func (ac *AgentChannel) Send(msg bus.OutboundMessage) (string, error) {
 	req := &rpcRequest{task: msg.Content, replyCh: replyCh}
 
 	ac.mu.Lock()
-	closed := ac.closed.Load()
-	ac.mu.Unlock()
-	if closed {
+	if ac.closed.Load() {
+		ac.mu.Unlock()
 		return "", fmt.Errorf("agent channel %s is closed", ac.name)
 	}
+	// Fast path: try non-blocking send while holding lock (prevents send-on-closed-channel).
+	// inbox buffer=16 makes this succeed in almost all cases.
 	select {
 	case ac.inbox <- req:
-	case <-ac.ctx.Done():
-		return "", fmt.Errorf("agent channel %s is stopped", ac.name)
+		ac.mu.Unlock()
+	default:
+		ac.mu.Unlock()
+		// Slow path: inbox full, wait with context cancellation guard.
+		// Stop() may close inbox while we wait — ac.ctx.Done() prevents hang.
+		select {
+		case ac.inbox <- req:
+		case <-ac.ctx.Done():
+			return "", fmt.Errorf("agent channel %s is stopped", ac.name)
+		}
 	}
 
 	select {

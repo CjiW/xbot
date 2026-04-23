@@ -33,6 +33,7 @@ jobs:
 
       - name: Package frontend dist
         run: |
+          mkdir -p dist
           cd web
           tar czf ../dist/xbot-web-dist.tar.gz -C dist .
 

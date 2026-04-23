@@ -315,6 +315,7 @@ func (a *Agent) buildMainRunConfig(
 					}
 					if remoteCLICh != nil {
 						payload := &channelpkg.WsProgressPayload{
+							ChatID:    progressKey,
 							Phase:     string(s.Phase),
 							Iteration: s.Iteration,
 							Thinking:  s.ThinkingContent,

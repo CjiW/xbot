@@ -186,6 +186,8 @@ func (m *cliModel) persistCLISettingsValues(values map[string]string) {
 // This pattern appears in theme change, locale change, resize, and tool-summary toggle.
 func (m *cliModel) invalidateAllCache(updateViewport bool) {
 	m.renderCacheValid = false
+	m.lastViewportContent = "" // Force viewport refresh on next updateViewportContent
+	m.lastViewportWidth = 0
 	for i := range m.messages {
 		m.messages[i].dirty = true
 	}
@@ -349,11 +351,10 @@ func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
 			}
 		}
 
-		// Deduplicate: remove trailing tool_summary message if its iterations
-		// overlap with the restored iteration history. This prevents showing
-		// both a static Tools block and a live progress block for the same iterations.
-		// Searches from the end because tool_summary may be followed by assistant content.
-		m.dedupToolSummary()
+		// Deduplicate: remove ALL tool_summary messages. When progress is
+		// active, the progress block owns iteration display — any static
+		// tool_summary would duplicate content with mismatched iteration numbers.
+		m.removeAllToolSummaries()
 	}
 
 	m.invalidateAllCache(false)
@@ -367,21 +368,19 @@ func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
 // restoring active progress. The last tool_summary in messages comes from
 // intermediate assistant messages (postToolProcessing) of the in-progress turn.
 // The progress snapshot's IterationHistory contains the same data plus live state,
-// so we always remove the tool_summary to avoid rendering both Tools and Progress blocks.
-// Searches from the end because tool_summary may be followed by assistant content.
-func (m *cliModel) dedupToolSummary() {
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		msg := &m.messages[i]
-		if msg.role == "tool_summary" {
-			m.messages = append(m.messages[:i], m.messages[i+1:]...)
-			return
-		}
-		// Stop searching at user/system messages — tool_summary is always
-		// adjacent to the progress block (no other message types between).
-		if msg.role == "user" || msg.role == "system" {
-			return
+// removeAllToolSummaries removes ALL tool_summary messages from m.messages.
+// Used when restoring active progress on session switch: the progress block
+// owns iteration display entirely, and any static tool_summary from
+// ConvertMessagesToHistory would duplicate content with mismatched iteration numbers.
+func (m *cliModel) removeAllToolSummaries() {
+	filtered := m.messages[:0] // reuse backing array
+	for _, msg := range m.messages {
+		if msg.role != "tool_summary" {
+			filtered = append(filtered, msg)
 		}
 	}
+	m.messages = filtered
+	m.renderCacheValid = false
 }
 
 // endAgentTurn resets all agent-turn tracking state and returns to idle.

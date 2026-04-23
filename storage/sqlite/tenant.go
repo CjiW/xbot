@@ -93,6 +93,21 @@ func (s *TenantService) DeleteTenant(tenantID int64) error {
 	return nil
 }
 
+// GetTenantIDByChannelChatID looks up the tenant ID for (channel, chatID) without creating one.
+// Returns (0, nil) if not found.
+func (s *TenantService) GetTenantIDByChannelChatID(channel, chatID string) (int64, error) {
+	conn := s.db.Conn()
+	var tenantID int64
+	err := conn.QueryRow(
+		"SELECT id FROM tenants WHERE channel = ? AND chat_id = ?",
+		channel, chatID,
+	).Scan(&tenantID)
+	if err != nil {
+		return 0, nil // not found
+	}
+	return tenantID, nil
+}
+
 // ListTenants returns all tenants
 func (s *TenantService) ListTenants() ([]TenantInfo, error) {
 	conn := s.db.Conn()

@@ -396,6 +396,11 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 		} else {
 			// Not busy: stop typewriter chain
 			m.typewriterTickActive = false
+			// Still refresh viewport if messages were added/changed (e.g. assistant
+			// reply arrived via handleAgentMessage after PhaseDone cleared progress).
+			if !m.renderCacheValid {
+				m.updateViewportContent()
+			}
 		}
 
 		// §Q Flush message queue on tick (not in cliProgressMsg/cliOutboundMsg).
@@ -458,17 +463,15 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 	case splashDoneMsg:
 		// §14 启动画面结束确认
 		m.splashDone = true
-		cmds = append(cmds, idleTickCmd())
-		// If progress was restored before splash ended (reconnect with active turn),
-		// start the fast tick chain immediately so the spinner animates without
-		// waiting for the 3s idle tick self-heal.
-		if m.typing && m.progress != nil && !m.fastTickActive {
+		if m.typing && m.progress != nil {
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
+		} else {
+			cmds = append(cmds, idleTickCmd())
 		}
 
 	case suHistoryLoadMsg:
-		m.handleSuHistoryLoad(msg)
+		cmds = append(cmds, m.handleSuHistoryLoad(msg)...)
 
 	case cliToastMsg:
 		cmds = append(cmds, m.handleToastMsg(msg)...)

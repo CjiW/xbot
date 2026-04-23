@@ -610,6 +610,14 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 			}
 		}
 
+		// Update ThinkingContent so PhaseDone progress carries the final reply.
+		// recordAssistantMsg is not called for final text responses (handleFinalResponse
+		// returns directly), so ThinkingContent must be set here for SubAgent
+		// session viewers that synthesize assistant messages from PhaseDone payload.
+		if s.structuredProgress != nil && cleanContent != "" {
+			s.structuredProgress.ThinkingContent = cleanContent
+		}
+
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:     s.cfg.Channel,
 			ChatID:      s.cfg.ChatID,

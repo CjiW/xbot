@@ -470,6 +470,7 @@ type wsMessage struct {
 
 // WsProgressPayload — structured progress data (corresponds to agent.StructuredProgress).
 type WsProgressPayload struct {
+	ChatID         string              `json:"chat_id,omitempty"`
 	Phase          string              `json:"phase,omitempty"`
 	Iteration      int                 `json:"iteration"`
 	ActiveTools    []WsToolProgress    `json:"active_tools,omitempty"`
@@ -891,6 +892,8 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		Content:         content,
 		TS:              time.Now().Unix(),
 		ProgressHistory: msg.Metadata["progress_history"],
+		Channel:         msg.Channel,
+		ChatID:          msg.ChatID,
 	}
 
 	targetClientID := msg.ChatID
@@ -1769,6 +1772,8 @@ func (c *RemoteCLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 		Content:         content,
 		TS:              time.Now().Unix(),
 		ProgressHistory: msg.Metadata["progress_history"],
+		Channel:         msg.Channel,
+		ChatID:          msg.ChatID,
 	}
 
 	if !c.hub.sendToClient(targetClientID, wsMsg) {

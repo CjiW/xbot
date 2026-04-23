@@ -117,6 +117,8 @@ type wsIncomingMessage struct {
 	ProgressHistory string                     `json:"progress_history,omitempty"`
 	Result          json.RawMessage            `json:"result,omitempty"`
 	Error           string                     `json:"error,omitempty"`
+	Channel         string                     `json:"channel,omitempty"`
+	ChatID          string                     `json:"chat_id,omitempty"`
 }
 
 // wsOutgoingMessage represents a message sent to the server.
@@ -451,8 +453,12 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 		case "text":
 			outMsg := bus.OutboundMessage{
 				Content:  msg.Content,
-				Channel:  "remote",
+				Channel:  msg.Channel,
+				ChatID:   msg.ChatID,
 				Metadata: make(map[string]string),
+			}
+			if outMsg.Channel == "" {
+				outMsg.Channel = "remote"
 			}
 			if msg.ID != "" {
 				outMsg.Metadata["message_id"] = msg.ID
@@ -482,6 +488,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			b.dispatchProgress(convertWsProgressToCLI(msg.Progress))
 		case "stream_content":
 			b.dispatchProgress(&channel.CLIProgressPayload{
+				ChatID:                 msg.Progress.ChatID,
 				StreamContent:          msg.Progress.GetStreamContent(),
 				ReasoningStreamContent: msg.Progress.GetReasoningStreamContent(),
 			})
@@ -565,11 +572,14 @@ func convertWsProgressToCLI(wp *channel.WsProgressPayload) *channel.CLIProgressP
 		return nil
 	}
 	payload := &channel.CLIProgressPayload{
-		Phase:            wp.Phase,
-		Iteration:        wp.Iteration,
-		Thinking:         wp.Thinking,
-		Reasoning:        wp.Reasoning,
-		HistoryCompacted: wp.HistoryCompacted,
+		ChatID:                 wp.ChatID,
+		Phase:                  wp.Phase,
+		Iteration:              wp.Iteration,
+		Thinking:               wp.Thinking,
+		Reasoning:              wp.Reasoning,
+		StreamContent:          wp.StreamContent,
+		ReasoningStreamContent: wp.ReasoningStreamContent,
+		HistoryCompacted:       wp.HistoryCompacted,
 	}
 	for _, t := range wp.ActiveTools {
 		payload.ActiveTools = append(payload.ActiveTools, channel.CLIToolProgress{

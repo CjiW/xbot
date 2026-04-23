@@ -375,13 +375,10 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 				m.lastSeenIteration = lastIter
 			}
 		}
-		// Deduplicate: remove trailing tool_summary if it overlaps with
-		// the restored iteration history. History load may have produced a
-		// tool_summary from incremental assistant messages (postToolProcessing),
-		// and the progress snapshot's IterationHistory contains the same data.
-		// Without dedup, the user sees both a static Tools block and a live
-		// progress block rendering the same iterations.
-		m.dedupToolSummary()
+		// Deduplicate: remove ALL tool_summary messages. When progress is
+		// active, the progress block owns iteration display — any static
+		// tool_summary would duplicate content with mismatched iteration numbers.
+		m.removeAllToolSummaries()
 	}
 
 	// Preserve StartedAt across progress updates so live timers don't reset.
@@ -618,6 +615,30 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 					m.needFlushQueue = true
 				}
 			}
+
+			// For agent sessions (interactive SubAgent viewer), the outbound
+			// message goes back to the parent agent's channel/chatID — it never
+			// arrives as a cliOutboundMsg for this session view. So we must
+			// synthesize the assistant message from the progress payload's final
+			// content (Thinking field carries the last clean assistant text).
+			// For main sessions, handleAgentMessage handles this and will
+			// relocate the tool_summary before the assistant reply.
+			if m.channelName == "agent" && !m.typing {
+				assistantContent := msg.payload.Thinking
+				if assistantContent == "" {
+					assistantContent = msg.payload.StreamContent
+				}
+				if assistantContent != "" {
+					m.messages = append(m.messages, cliMessage{
+						role:      "assistant",
+						content:   assistantContent,
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.renderCacheValid = false
+				}
+			}
+
 			m.relayoutViewport()
 		}
 	}
@@ -690,13 +711,14 @@ func (m *cliModel) handleUpdateCheck(msg cliUpdateCheckMsg) {
 }
 
 // handleSuHistoryLoad processes /su user switch history load results.
-func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
+// Returns tea.Cmds to start the tick chain when active progress is restored.
+func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) []tea.Cmd {
 	m.suLoading = false
 
 	// Stale result guard: if user switched away from the target session
 	// while the async load was in-flight, discard the result.
 	if msg.channelName != m.channelName || msg.chatID != m.chatID {
-		return
+		return nil
 	}
 
 	if msg.err != nil {
@@ -724,12 +746,18 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 	m.viewport.GotoBottom()
 
 	// Restore active progress for seamless session switch.
-	// When switching to a session with an active agent turn (e.g. mid-iteration
-	// after CLI restart, or switching from another session), apply the progress
-	// snapshot so the user sees live iteration status without waiting for the
-	// next progress event. This makes session switches feel instantaneous.
-	if msg.activeProgress != nil && msg.activeProgress.Phase != "done" {
-		m.startAgentTurn()
+	// msg.activeProgress (from GetActiveProgress RPC) is the authoritative source:
+	// if the server says the turn is done or gone, any saved state from
+	// restoreSession() is stale and must be discarded.
+	var cmds []tea.Cmd
+	switch {
+	case msg.activeProgress != nil && msg.activeProgress.Phase != "done":
+		// Turn is still active on the server. Use the server snapshot regardless
+		// of whether restoreSession() also restored state — the server snapshot
+		// has the freshest progress data.
+		if !m.typing {
+			m.startAgentTurn()
+		}
 		m.progress = msg.activeProgress
 
 		// Restore StartedAt for active tools so live elapsed timers work.
@@ -740,7 +768,8 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 			}
 		}
 
-		// Restore iteration history from the progress snapshot.
+		// Rebuild iteration history from server snapshot (authoritative).
+		m.iterationHistory = nil
 		if len(msg.activeProgress.IterationHistory) > 0 {
 			for _, ih := range msg.activeProgress.IterationHistory {
 				snap := cliIterationSnapshot{
@@ -763,11 +792,45 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 					m.lastSeenIteration = lastIter
 				}
 			}
-			// Deduplicate: remove trailing tool_summary if its iterations
-			// are covered by the restored iterationHistory.
-			m.dedupToolSummary()
+		}
+		// When turn is still active, remove ALL tool_summary messages from
+		// loaded history. ConvertMessagesToHistory produces tool_summary from
+		// intermediate DB messages with globally-cumulative iteration numbers
+		// that don't match the progress block's per-turn iteration numbers.
+		// The active progress block owns iteration display entirely — any
+		// static tool_summary would duplicate content with mismatched numbers.
+		m.removeAllToolSummaries()
+
+		// Always emit a tickCmd to guarantee the fast tick chain is running.
+		// fastTickActive may already be true (inherited from previous session view),
+		// but the actual tickCmd message in the BubbleTea queue may have been
+		// consumed without re-emitting (e.g. during splash animation early-return).
+		// An extra tickCmd is harmless — it just produces one redundant cliTickMsg
+		// that finds fastTickActive=true and re-emits its own tickCmd.
+		m.fastTickActive = true
+		cmds = append(cmds, tickCmd())
+
+	default:
+		// Turn is not active (nil or PhaseDone). If restoreSession() restored
+		// a stale typing=true state, clear it — the server snapshot is authoritative.
+		if m.typing {
+			m.endAgentTurn(m.agentTurnID)
+		}
+		// Reload history to pick up messages that arrived while we were viewing
+		// another session (e.g. the assistant's final reply was filtered out by
+		// ChatID check during the agent session view).
+		if loader := m.channel.config.DynamicHistoryLoader; loader != nil {
+			ch, cid := m.channelName, m.chatID
+			cmds = append(cmds, func() tea.Msg {
+				history, err := loader(ch, cid)
+				if err != nil {
+					return cliHistoryReloadMsg{err: err}
+				}
+				return cliHistoryReloadMsg{history: history}
+			})
 		}
 	}
+	return cmds
 }
 
 // handleHistoryReload rebuilds m.messages from session storage after context compression.
@@ -815,22 +878,22 @@ func (m *cliModel) handleSplashTick(msg splashTickMsg) (tea.Model, tea.Cmd) {
 	if m.ready && msg.frame >= 20 {
 		// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
 		m.splashDone = true
-		cmds = append(cmds, idleTickCmd())
-		// If progress was restored during splash (reconnect with active turn),
-		// start the fast tick chain immediately for spinner animation.
-		if m.typing && m.progress != nil && !m.fastTickActive {
+		if m.typing && m.progress != nil {
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
+		} else {
+			cmds = append(cmds, idleTickCmd())
 		}
 		return m, tea.Batch(cmds...)
 	}
 	// 兜底上限：~2 秒（40 帧）
 	if msg.frame >= 40 {
 		m.splashDone = true
-		cmds = append(cmds, idleTickCmd())
-		if m.typing && m.progress != nil && !m.fastTickActive {
+		if m.typing && m.progress != nil {
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
+		} else {
+			cmds = append(cmds, idleTickCmd())
 		}
 		return m, tea.Batch(cmds...)
 	}

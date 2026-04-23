@@ -32,11 +32,38 @@ Inherits parent's: HookChain (same pointer), LLMFactory, skill catalog, tool con
 
 Max nesting depth: 6. Three levels: main → SubAgent → SubSubAgent.
 
+## Interactive SubAgent Architecture
+
+Interactive SubAgents maintain persistent multi-turn sessions via `InteractiveAgent` structs stored in `Agent.interactiveSubAgents` (sync.Map). Key flows:
+
+- **Spawn**: `SpawnInteractiveSession` → creates session, eager-saves user message + final assistant reply to `ia.messages` + DB
+- **Send**: `SendToInteractiveSession` → eager-saves user message, runs agent loop, eager-saves final assistant reply
+- **Inspect/Tail**: read-only access to `ia.messages`
+- **Unload**: `destroyInteractiveSession` → saves memory, cleans DB, removes from map
+
+### Interactive Session Key Format
+
+`interactiveKey = channel:chatID/roleName:instance`
+
+### Remote Mode Persistence
+
+In remote mode, SubAgent messages must be eagerly persisted (not deferred):
+- User messages saved immediately in `SpawnInteractiveSession`/`SendToInteractiveSession` before `Run()`
+- Final assistant reply appended to `ia.messages` and persisted after `Run()` completes
+- `GetOrCreateSession` may return stale tenant after server restart — call `Clear()` to reset
+- Placeholder sessions must include user message (not just system prompt)
+
+### OutboundMessage Routing
+
+SubAgent outbound messages go to **parent's channel/chatID** (never the agent session view). The CLI detects these and routes accordingly.
+
 ## Interactive SubAgent Pitfalls
 
-- **Never hold `ia.mu` while calling Run()** — deadlock via nested SpawnInteractiveSession → cleanupExpiredSessions (`interactive.go:440`)
-- SubAgent errors invisible as Go error — must embed in Content (`interactive.go:338`)
-- Progress tree corruption from stale closures — rebuild ProgressNotifier from current ctx (`interactive.go:446`)
+- **Never hold `ia.mu` while calling Run()** — deadlock via nested SpawnInteractiveSession → cleanupExpiredSessions
+- SubAgent errors invisible as Go error — must embed in Content
+- Progress tree corruption from stale closures — rebuild ProgressNotifier from current ctx
+- **`handleFinalResponse` must set `ThinkingContent`** on the prompt data — otherwise PhaseDone assistant synthesis has empty content
+- **Stream content updates must snapshot** — `StreamContentFunc`/`ReasoningStreamContentFunc` must update `lastProgressSnapshot` for CLI to render
 
 ## Context Management
 

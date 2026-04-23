@@ -1006,7 +1006,11 @@ func main() {
 						Label:   label,
 						Active:  isActive,
 					})
-					// SubAgent sessions for this tenant
+					// SubAgent sessions: only list for the current workdir tenant.
+					// Other tenants' agent sessions are not relevant to this context.
+					if t.ChatID != absWorkDir {
+						continue
+					}
 					sessions := app.backend.ListInteractiveSessions(t.Channel, t.ChatID)
 					for _, s := range sessions {
 						agentKey := s.Role + ":" + s.Instance

@@ -75,10 +75,27 @@ func (a *Agent) cleanupExpiredSessions() {
 				"role":      ia.roleName,
 				"idle_time": now.Sub(lastUsed).String(),
 			}).Info("Cleaning up expired interactive session")
-			a.interactiveSubAgents.Delete(key)
+			a.destroyInteractiveSession(key)
 		}
 		return true
 	})
+}
+
+// destroyInteractiveSession removes all resources for an interactive SubAgent session:
+// interactiveSubAgents entry, progress snapshot/iteration history, and tenant session (DB).
+// This ensures the next SubAgent with the same role/instance starts with a clean slate.
+func (a *Agent) destroyInteractiveSession(key string) {
+	a.interactiveSubAgents.Delete(key)
+
+	// Clean up progress snapshot and iteration history
+	agentProgressKey := "agent:" + key
+	a.lastProgressSnapshot.Delete(agentProgressKey)
+	a.iterationHistories.Delete(agentProgressKey)
+
+	// Destroy tenant session (cache + DB with CASCADE to messages)
+	if a.multiSession != nil {
+		_ = a.multiSession.DestroySession("agent", key)
+	}
 }
 
 // interactiveKey 生成 interactive session 在 map 中的 key。
@@ -144,28 +161,61 @@ func (a *Agent) SpawnInteractiveSession(
 	}
 	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true, subModel)
 
+	// Update placeholder with system prompt + user message so CLI session viewer
+	// can display them while Run() is executing (before the full session data
+	// replaces the placeholder).
+	if len(cfg.Messages) > 0 {
+		placeholder.systemPrompt = cfg.Messages[0]
+	}
+	if len(cfg.Messages) > 1 {
+		placeholder.messages = []llm.ChatMessage{cfg.Messages[1]}
+	}
+
 	// Interactive SubAgent gets its own TenantSession for message persistence.
 	// Channel="agent", ChatID=key → messages saved to DB like normal sessions.
 	agentTenantSession, err := a.multiSession.GetOrCreateSession("agent", key)
 	if err != nil {
-		a.interactiveSubAgents.Delete(key)
+		a.destroyInteractiveSession(key)
 		return nil, fmt.Errorf("create agent tenant session: %w", err)
 	}
 	cfg.Session = agentTenantSession
 
+	// Clear any stale messages from a previous session with the same key.
+	// This can happen after server restart (DB retains old tenant data) or
+	// if destroyInteractiveSession's DeleteTenant failed silently.
+	_ = agentTenantSession.Clear()
+
+	// Eager-save user message so get_history returns it during Run().
+	// Without this, the CLI shows "已加载 0 条历史消息" and the DB has no
+	// user message turn boundary. Run()'s incremental persistence skips
+	// messages[0:lastPersistedCount] which includes this user message.
+	if err := agentTenantSession.AddMessage(llm.NewUserMessage(msg.Content)); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to eager-save interactive agent user message")
+	}
+
 	// Interactive SubAgent gets its own ProgressEventHandler so its progress
 	// is pushed to CLI directly with its own ChatID — same pipeline as main session.
 	// CLI filters by m.chatID so only the currently viewed session's progress is shown.
+	// Supports both local CLIChannel and remote RemoteCLIChannel (xbot-cli serve mode).
 	if a.channelFinder != nil && !background {
 		if ch, ok := a.channelFinder("cli"); ok {
-			if cliCh, ok := ch.(*channelpkg.CLIChannel); ok {
+			var localCh *channelpkg.CLIChannel
+			var remoteCh *channelpkg.RemoteCLIChannel
+			if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+				localCh = cc
+			} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+				remoteCh = rc
+			}
+			if localCh != nil || remoteCh != nil {
 				agentProgressKey := "agent:" + key
 				cfg.ProgressEventHandler = func(event *ProgressEvent) {
 					if event == nil || event.Structured == nil {
 						return
 					}
 					s := event.Structured
-					payload := &channelpkg.CLIProgressPayload{
+
+					// Build CLI payload (used for snapshot storage + local CLI)
+					cliPayload := &channelpkg.CLIProgressPayload{
 						ChatID:           agentProgressKey,
 						Phase:            string(s.Phase),
 						Iteration:        s.Iteration,
@@ -174,38 +224,124 @@ func (a *Agent) SpawnInteractiveSession(
 						HistoryCompacted: s.HistoryCompacted,
 					}
 					for _, t := range s.ActiveTools {
-						payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
+						cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
 							Name: t.Name, Label: t.Label, Status: string(t.Status),
 							Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
 						})
 					}
 					for _, t := range s.CompletedTools {
-						payload.CompletedTools = append(payload.CompletedTools, channelpkg.CLIToolProgress{
+						cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
 							Name: t.Name, Label: t.Label, Status: string(t.Status),
 							Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
 						})
 					}
 					if len(s.Todos) > 0 {
-						payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+						cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
 						for i, td := range s.Todos {
-							payload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+							cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
 						}
 					}
 					if s.TokenUsage != nil {
-						payload.TokenUsage = &channelpkg.CLITokenUsage{
+						cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
 							PromptTokens: s.TokenUsage.PromptTokens, CompletionTokens: s.TokenUsage.CompletionTokens,
 							TotalTokens: s.TokenUsage.TotalTokens, CacheHitTokens: s.TokenUsage.CacheHitTokens,
 						}
 					}
-					cliCh.SendProgress(key, payload)
+
+					// Send to CLI (local or remote)
+					if localCh != nil {
+						localCh.SendProgress(key, cliPayload)
+					} else if remoteCh != nil {
+						// Remote CLI: route via Hub using the main session's chatID
+						// (the WS client only subscribes to the main session chatID).
+						// The payload.ChatID carries the agent session key for
+						// CLI-side filtering (handleProgressMsg checks ChatID).
+						wsPayload := &channelpkg.WsProgressPayload{
+							ChatID:    agentProgressKey,
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+						}
+						for _, t := range s.ActiveTools {
+							wsPayload.ActiveTools = append(wsPayload.ActiveTools, channelpkg.WsToolProgress{
+								Name: t.Name, Label: t.Label, Status: string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+							})
+						}
+						for _, t := range s.CompletedTools {
+							wsPayload.CompletedTools = append(wsPayload.CompletedTools, channelpkg.WsToolProgress{
+								Name: t.Name, Label: t.Label, Status: string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+							})
+						}
+						remoteCh.SendProgress(originChatID, wsPayload)
+					}
+
+					// Save snapshot + track iteration history for mid-session reconnect.
+					// Same logic as main session in engine_wire.go.
+					if prevSnap, loaded := a.lastProgressSnapshot.Load(agentProgressKey); loaded {
+						prev := prevSnap.(*channelpkg.CLIProgressPayload)
+						if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
+							histPtr, _ := a.iterationHistories.LoadOrStore(agentProgressKey, &[]channelpkg.CLIProgressPayload{})
+							hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
+							already := false
+							for _, h := range hist {
+								if h.Iteration == prev.Iteration {
+									already = true
+									break
+								}
+							}
+							if !already {
+								updated := append(hist, *prev)
+								a.iterationHistories.Store(agentProgressKey, &updated)
+							}
+						}
+					}
+					a.lastProgressSnapshot.Store(agentProgressKey, cliPayload)
+					log.WithFields(log.Fields{
+						"key":       agentProgressKey,
+						"phase":     cliPayload.Phase,
+						"iteration": cliPayload.Iteration,
+						"active":    len(cliPayload.ActiveTools),
+						"completed": len(cliPayload.CompletedTools),
+					}).Info("SubAgent: stored progress snapshot")
 				}
 				// Also wire stream callbacks for real-time rendering
 				cfg.Stream = true
-				cfg.StreamContentFunc = func(content string) {
-					cliCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, StreamContent: content})
-				}
-				cfg.StreamReasoningFunc = func(content string) {
-					cliCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
+				if localCh != nil {
+					cfg.StreamContentFunc = func(content string) {
+						localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, StreamContent: content})
+						// Update snapshot so GetActiveProgress returns latest stream content
+						// for CLI session switch mid-stream.
+						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+							snap.(*channelpkg.CLIProgressPayload).StreamContent = content
+						}
+					}
+					cfg.StreamReasoningFunc = func(content string) {
+						localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
+						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+							snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
+						}
+					}
+				} else if remoteCh != nil {
+					cfg.StreamContentFunc = func(content string) {
+						remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{
+							ChatID:        agentProgressKey,
+							StreamContent: content,
+						})
+						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+							snap.(*channelpkg.CLIProgressPayload).StreamContent = content
+						}
+					}
+					cfg.StreamReasoningFunc = func(content string) {
+						remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{
+							ChatID:                 agentProgressKey,
+							ReasoningStreamContent: content,
+						})
+						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+							snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
+						}
+					}
 				}
 			}
 		}
@@ -347,7 +483,7 @@ func (a *Agent) SpawnInteractiveSession(
 					runCancel()
 					// Cascade: clean up children and remove self from panel
 					a.cancelChildSessions(key)
-					a.interactiveSubAgents.Delete(key)
+					a.destroyInteractiveSession(key)
 					// Notify parent
 					if notifyMgr != nil {
 						notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
@@ -398,7 +534,7 @@ func (a *Agent) SpawnInteractiveSession(
 					return
 				}
 				a.cancelChildSessions(key)
-				a.interactiveSubAgents.Delete(key)
+				a.destroyInteractiveSession(key)
 				log.WithFields(log.Fields{
 					"role":     roleName,
 					"instance": instance,
@@ -427,8 +563,12 @@ func (a *Agent) SpawnInteractiveSession(
 
 			// Store messages
 			var newMsgs []llm.ChatMessage
+			// Include the original user message so GetAgentSessionDump shows it
+			if preLen > 1 {
+				newMsgs = append(newMsgs, cfg.Messages[1])
+			}
 			if len(out.Messages) > preLen {
-				newMsgs = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
+				newMsgs = append(newMsgs, out.Messages[preLen:]...)
 			}
 			placeholder.messages = newMsgs
 			if len(cfg.Messages) > 0 {
@@ -453,7 +593,7 @@ func (a *Agent) SpawnInteractiveSession(
 	out := Run(subCtx, cfg)
 
 	if out.Error != nil {
-		a.interactiveSubAgents.Delete(key) // 清理占位符
+		a.destroyInteractiveSession(key) // 清理占位符 + tenant session
 		// BUG FIX: 在 Content 中附加错误标注，确保主 Agent LLM 能识别异常状态
 		content := out.Content
 		if content == "" {
@@ -466,8 +606,13 @@ func (a *Agent) SpawnInteractiveSession(
 
 	// --- 阶段 4：替换占位符为完整 session 数据 ---
 	var newMessages []llm.ChatMessage
+	// Include the original user message (cfg.Messages[1]) so GetAgentSessionDump
+	// shows what the parent agent sent. cfg.Messages[0] is system prompt (stored separately).
+	if preLen > 1 {
+		newMessages = append(newMessages, cfg.Messages[1])
+	}
 	if len(out.Messages) > preLen {
-		newMessages = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
+		newMessages = append(newMessages, out.Messages[preLen:]...)
 	}
 
 	ia := &interactiveAgent{
@@ -483,6 +628,13 @@ func (a *Agent) SpawnInteractiveSession(
 		ia.systemPrompt = cfg.Messages[0]
 	}
 	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
+	// Append final assistant reply so GetAgentSessionDumpByFullKey returns it.
+	// out.Messages (from Run) excludes the final text-only response — it's only
+	// in out.Content / buildOutput. Without this, switching away and back loses
+	// the assistant's final reply.
+	if out.Content != "" {
+		ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
+	}
 	a.interactiveSubAgents.Store(key, ia)
 
 	// Persist final assistant message with iteration history as Detail,
@@ -571,6 +723,13 @@ func (a *Agent) SendToInteractiveSession(
 	newMessages = append(newMessages, llm.NewUserMessage(msg.Content))
 	cfg.Messages = newMessages
 
+	// Eager-save user message so get_history returns it during Run().
+	if cfg.Session != nil {
+		if err := cfg.Session.AddMessage(llm.NewUserMessage(msg.Content)); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to eager-save interactive agent user message (send)")
+		}
+	}
+
 	ia.mu.Unlock()
 
 	// --- 阶段 2：锁外构建上下文和执行 ---
@@ -632,13 +791,22 @@ func (a *Agent) SendToInteractiveSession(
 	}
 
 	// 追加新增对话消息到 ia.messages
+	// Include the user message sent via action=send so GetAgentSessionDump shows it.
+	// cfg.Messages[preLen-1] is the last element before Run, which is the user message
+	// appended at line ~670 (newMessages = append(..., llm.NewUserMessage(msg.Content)))
+	if preLen > 0 {
+		lastBeforeRun := cfg.Messages[preLen-1]
+		if lastBeforeRun.Role == "user" {
+			ia.messages = append(ia.messages, lastBeforeRun)
+		}
+	}
 	if len(out.Messages) > preLen {
 		ia.messages = append(ia.messages, out.Messages[preLen:]...)
-	} else {
-		// out.Messages 为空（无 Memory），从 Run 输出推断
-		if out.Content != "" {
-			ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
-		}
+	}
+	// Append final assistant reply (missing from out.Messages when
+	// handleFinalResponse returns directly without appending to s.messages).
+	if out.Content != "" {
+		ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
 	}
 	// Save iteration history for inspect
 	if len(out.IterationHistory) > 0 {
@@ -881,9 +1049,9 @@ func (a *Agent) cancelChildSessions(parentKey string) {
 		return true
 	})
 	for _, c := range children {
-		a.interactiveSubAgents.Delete(c.key)
 		// Recurse: cancel grandchildren before they become orphaned
 		a.cancelChildSessions(c.key)
+		a.destroyInteractiveSession(c.key)
 		log.WithFields(log.Fields{
 			"parent": c.parentKey,
 			"child":  c.key,
@@ -937,7 +1105,7 @@ func (a *Agent) UnloadInteractiveSession(
 	}
 
 	// 清理
-	a.interactiveSubAgents.Delete(key)
+	a.destroyInteractiveSession(key)
 
 	log.WithField("role", roleName).Info("Interactive session unloaded")
 	return nil

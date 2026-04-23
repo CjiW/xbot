@@ -679,13 +679,16 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		// Filter: CLI sessions belong to the operator (cli_user).
-		// Other channels: only show tenants where chatID matches the user.
+		// Filter: skip agent tenants — they are internal bookkeeping for
+		// interactive SubAgent persistence and listed separately via
+		// ListInteractiveSessions. The CLI session panel decides which
+		// tenants' SubAgent sessions to show based on the active workdir.
 		var filtered []sqlite.TenantInfo
 		for _, t := range tenants {
-			if (t.Channel == "cli" && isAdmin(senderID)) || t.ChatID == bizID {
-				filtered = append(filtered, t)
+			if t.Channel == "agent" {
+				continue
 			}
+			filtered = append(filtered, t)
 		}
 		type tenantJSON struct {
 			ID           int64  `json:"id"`
@@ -722,7 +725,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.ChatID == "" {
 			p.ChatID = bizID
 		}
-		if !isAdmin(senderID) && p.ChatID != bizID {
+		// Agent sessions (channel="agent") are child resources of the
+		// parent CLI session. Admin users can access them; the chatID is
+		// an interactiveKey (e.g. "cli:/path/role:instance") that never
+		// matches bizID.
+		if !isAdmin(senderID) && p.ChatID != bizID && p.Channel != "agent" {
 			return nil, fmt.Errorf("access denied")
 		}
 		history, err := backend.GetHistory(p.Channel, p.ChatID)
@@ -786,7 +793,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.Channel == "" {
 			p.Channel = "web"
 		}
-		if !isAdmin(senderID) && p.ChatID != bizID {
+		if !isAdmin(senderID) && p.ChatID != bizID && p.Channel != "agent" {
 			return nil, fmt.Errorf("access denied")
 		}
 		progress := backend.GetActiveProgress(p.Channel, p.ChatID)

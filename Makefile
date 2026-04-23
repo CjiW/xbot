@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build run dev clean ci clean-memory web-build web-lint web-dev
+.PHONY: fmt lint test build run dev clean ci clean-memory web-build web-lint web-dev install-cli
 
 BINARY_NAME := xbot
 
@@ -42,4 +42,8 @@ web-lint:
 
 web-dev:
 	cd web && yarn dev
+
+install-cli:
+	go build -ldflags "$(LDFLAGS)" -o /tmp/xbot-cli ./cmd/xbot-cli
+	sudo mv /tmp/xbot-cli /usr/local/bin/
 

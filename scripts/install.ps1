@@ -490,20 +490,55 @@ try {
 # Stop running xbot-cli processes and scheduled task before overwriting the binary
 $binPath = Join-Path $InstallPath $BINARY
 if (Test-Path $binPath) {
-    # Stop scheduled task if it's running
+    Write-Info "Checking for running xbot-cli..."
+    # Stop and disable scheduled task to prevent auto-restart
     try {
         Stop-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
+        Disable-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
     } catch {}
-    # Kill any running xbot-cli processes (server or standalone)
+    # Kill ALL xbot-cli processes (by full path match for accuracy)
     $procs = Get-Process -Name "xbot-cli" -ErrorAction SilentlyContinue
     if ($procs) {
         Write-Info "Stopping running xbot-cli process(es)..."
-        $procs | Stop-Process -Force
-        Start-Sleep -Milliseconds 500
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        # Wait up to 5 seconds for process to fully exit and release file handles
+        $waited = 0
+        while ((Get-Process -Name "xbot-cli" -ErrorAction SilentlyContinue) -and ($waited -lt 5000)) {
+            Start-Sleep -Milliseconds 500
+            $waited += 500
+        }
     }
 }
 
-Copy-Item $tmpFile $binPath -Force
+# Copy with retry — Windows may hold the file handle briefly after process exit
+$copied = $false
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+        Copy-Item $tmpFile $binPath -Force -ErrorAction Stop
+        $copied = $true
+        break
+    } catch {
+        if ($attempt -lt 5) {
+            Write-Warn "File locked, retrying ($attempt/5)..."
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+if (-not $copied) {
+    # Last resort: rename old file and copy new one
+    Write-Warn "File still locked, renaming old binary..."
+    $oldFile = "$binPath.old"
+    Move-Item $binPath $oldFile -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    try {
+        Copy-Item $tmpFile $binPath -Force -ErrorAction Stop
+        Remove-Item $oldFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        # Put old file back if copy still fails
+        if (Test-Path $oldFile) { Move-Item $oldFile $binPath -Force -ErrorAction SilentlyContinue }
+        throw "Cannot replace xbot-cli.exe after 5 retries: $_"
+    }
+}
 Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
 
 Write-Host ""

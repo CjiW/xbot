@@ -407,11 +407,17 @@ main() {
 
     # Stop running xbot-cli before overwriting the binary
     if [ -x "${INSTALL_PATH}/${BINARY}" ]; then
+        info "Checking for running xbot-cli..."
         if systemctl --user status "$SERVICE_NAME" >/dev/null 2>&1; then
             systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
         fi
+        # Kill any running instances
         pkill -f "${INSTALL_PATH}/${BINARY}" 2>/dev/null || true
-        sleep 0.5
+        # Wait for process to fully exit
+        for i in 1 2 3 4 5; do
+            pgrep -f "${INSTALL_PATH}/${BINARY}" >/dev/null 2>&1 || break
+            sleep 1
+        done
     fi
 
     # Install binary to user-local directory (no sudo)

@@ -81,6 +81,37 @@ func (a *Agent) cleanupExpiredSessions() {
 	})
 }
 
+// recordIterationSnapshot appends the previous snapshot to iteration history if the
+// shouldAppend predicate returns true. Uses CAS loop to avoid TOCTOU races on sync.Map.
+func (a *Agent) recordIterationSnapshot(key string, current *channelpkg.CLIProgressPayload, shouldAppend func(prev *channelpkg.CLIProgressPayload) bool) {
+	prevSnap, loaded := a.lastProgressSnapshot.Load(key)
+	if !loaded {
+		return
+	}
+	prev := prevSnap.(*channelpkg.CLIProgressPayload)
+	if !shouldAppend(prev) {
+		return
+	}
+	for {
+		histPtr, _ := a.iterationHistories.LoadOrStore(key, &[]channelpkg.CLIProgressPayload{})
+		hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
+		already := false
+		for _, h := range hist {
+			if h.Iteration == prev.Iteration {
+				already = true
+				break
+			}
+		}
+		if already {
+			return
+		}
+		updated := append(hist, *prev)
+		if a.iterationHistories.CompareAndSwap(key, histPtr, &updated) {
+			return
+		}
+	}
+}
+
 // wireSubAgentCLIProgress sets up ProgressEventHandler and stream callbacks on cfg
 // so the SubAgent's progress is pushed to CLI (both local and remote) with its own
 // ChatID. This enables Ctrl+T session switching to show real-time progress for both
@@ -164,24 +195,9 @@ func (a *Agent) wireSubAgentCLIProgress(key, originChatID string, cfg *RunConfig
 		}
 
 		// Save snapshot + track iteration history for mid-session reconnect.
-		if prevSnap, loaded := a.lastProgressSnapshot.Load(agentProgressKey); loaded {
-			prev := prevSnap.(*channelpkg.CLIProgressPayload)
-			if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
-				histPtr, _ := a.iterationHistories.LoadOrStore(agentProgressKey, &[]channelpkg.CLIProgressPayload{})
-				hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
-				already := false
-				for _, h := range hist {
-					if h.Iteration == prev.Iteration {
-						already = true
-						break
-					}
-				}
-				if !already {
-					updated := append(hist, *prev)
-					a.iterationHistories.Store(agentProgressKey, &updated)
-				}
-			}
-		}
+		a.recordIterationSnapshot(agentProgressKey, cliPayload, func(prev *channelpkg.CLIProgressPayload) bool {
+			return s.Iteration > prev.Iteration && prev.Iteration >= 0
+		})
 		a.lastProgressSnapshot.Store(agentProgressKey, cliPayload)
 	}
 
@@ -191,26 +207,34 @@ func (a *Agent) wireSubAgentCLIProgress(key, originChatID string, cfg *RunConfig
 		cfg.StreamContentFunc = func(content string) {
 			localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, StreamContent: content})
 			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-				snap.(*channelpkg.CLIProgressPayload).StreamContent = content
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.StreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
 			}
 		}
 		cfg.StreamReasoningFunc = func(content string) {
 			localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
 			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-				snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.ReasoningStreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
 			}
 		}
 	} else if remoteCh != nil {
 		cfg.StreamContentFunc = func(content string) {
 			remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{ChatID: agentProgressKey, StreamContent: content})
 			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-				snap.(*channelpkg.CLIProgressPayload).StreamContent = content
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.StreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
 			}
 		}
 		cfg.StreamReasoningFunc = func(content string) {
 			remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
 			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-				snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.ReasoningStreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
 			}
 		}
 	}

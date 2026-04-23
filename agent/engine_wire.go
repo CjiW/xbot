@@ -293,24 +293,9 @@ func (a *Agent) buildMainRunConfig(
 						}
 						cliCh.SendProgress(chatID, payload)
 						// Save snapshot + track iteration history for mid-session reconnect.
-						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
-							prev := prevSnap.(*channelpkg.CLIProgressPayload)
-							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
-								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
-								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
-								already := false
-								for _, h := range hist {
-									if h.Iteration == prev.Iteration {
-										already = true
-										break
-									}
-								}
-								if !already {
-									updated := append(hist, *prev)
-									a.iterationHistories.Store(progressKey, &updated)
-								}
-							}
-						}
+						a.recordIterationSnapshot(progressKey, payload, func(prev *channelpkg.CLIProgressPayload) bool {
+							return s.Iteration > prev.Iteration && prev.Iteration >= 0
+						})
 						a.lastProgressSnapshot.Store(progressKey, payload)
 					}
 					if remoteCLICh != nil {
@@ -417,24 +402,9 @@ func (a *Agent) buildMainRunConfig(
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
 							}
 						}
-						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
-							prev := prevSnap.(*channelpkg.CLIProgressPayload)
-							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
-								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
-								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
-								already := false
-								for _, h := range hist {
-									if h.Iteration == prev.Iteration {
-										already = true
-										break
-									}
-								}
-								if !already {
-									updated := append(hist, *prev)
-									a.iterationHistories.Store(progressKey, &updated)
-								}
-							}
-						}
+						a.recordIterationSnapshot(progressKey, cliPayload, func(prev *channelpkg.CLIProgressPayload) bool {
+							return s.Iteration > prev.Iteration && prev.Iteration >= 0
+						})
 						a.lastProgressSnapshot.Store(progressKey, cliPayload)
 						log.WithFields(log.Fields{
 							"key":       progressKey,
@@ -523,26 +493,9 @@ func (a *Agent) buildMainRunConfig(
 						// Track iteration history: when iteration advances, snapshot the
 						// PREVIOUS iteration into the history list for mid-session reconnect.
 						cliSnapshot := payload.ToCLIProgressPayload()
-						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
-							prev := prevSnap.(*channelpkg.CLIProgressPayload)
-							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
-								// Iteration advanced — save previous iteration to history
-								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
-								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
-								// Only append if this iteration isn't already recorded
-								already := false
-								for _, h := range hist {
-									if h.Iteration == prev.Iteration {
-										already = true
-										break
-									}
-								}
-								if !already {
-									updated := append(hist, *prev)
-									a.iterationHistories.Store(progressKey, &updated)
-								}
-							}
-						}
+						a.recordIterationSnapshot(progressKey, cliSnapshot, func(prev *channelpkg.CLIProgressPayload) bool {
+							return s.Iteration > prev.Iteration && prev.Iteration >= 0
+						})
 						// Save current iteration snapshot
 						a.lastProgressSnapshot.Store(progressKey, cliSnapshot)
 					}

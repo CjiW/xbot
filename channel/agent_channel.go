@@ -96,15 +96,14 @@ func (ac *AgentChannel) Send(msg bus.OutboundMessage) (string, error) {
 	req := &rpcRequest{task: msg.Content, replyCh: replyCh}
 
 	ac.mu.Lock()
-	if ac.closed.Load() {
-		ac.mu.Unlock()
+	closed := ac.closed.Load()
+	ac.mu.Unlock()
+	if closed {
 		return "", fmt.Errorf("agent channel %s is closed", ac.name)
 	}
 	select {
 	case ac.inbox <- req:
-		ac.mu.Unlock()
 	case <-ac.ctx.Done():
-		ac.mu.Unlock()
 		return "", fmt.Errorf("agent channel %s is stopped", ac.name)
 	}
 

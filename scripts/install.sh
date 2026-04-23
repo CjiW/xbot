@@ -3,7 +3,8 @@ set -euo pipefail
 
 REPO="CjiW/xbot"
 BINARY="xbot-cli"
-INSTALL_PATH="${INSTALL_PATH:-/usr/local/bin}"
+# Default to user-local install (no sudo required)
+INSTALL_PATH="${INSTALL_PATH:-$HOME/.local/bin}"
 XBOT_HOME="${XBOT_HOME:-$HOME/.xbot}"
 CONFIG_PATH="${CONFIG_PATH:-$XBOT_HOME/config.json}"
 SERVICE_NAME="xbot-server"
@@ -50,7 +51,15 @@ resolve_version() {
     echo "$tag"
 }
 
+# Non-interactive: use MODE env var. Interactive: prompt user.
 ask_mode() {
+    if [ -n "${MODE:-}" ]; then
+        case "$MODE" in
+            standalone|server-client) echo "$MODE" ;;
+            *) error "Invalid MODE='${MODE}'. Use 'standalone' or 'server-client'." ;;
+        esac
+        return
+    fi
     echo "Choose install mode:" >&2
     echo "  1) standalone      - CLI runs locally in-process" >&2
     echo "  2) server-client   - install local server service, CLI connects remotely" >&2
@@ -63,19 +72,23 @@ ask_mode() {
     esac
 }
 
+# Generate random hex token without external dependencies
 random_token() {
-    if command -v python3 >/dev/null 2>&1; then
-        python3 - <<'PY'
-import secrets
-print(secrets.token_hex(16))
-PY
-        return
-    fi
     if command -v openssl >/dev/null 2>&1; then
         openssl rand -hex 16
         return
     fi
-    error "Need python3 or openssl to generate random token"
+    # Fallback: read from /dev/urandom (available on all Linux/macOS)
+    if [ -r /dev/urandom ]; then
+        od -A n -t x1 -N 16 /dev/urandom | tr -d ' \n'
+        return
+    fi
+    # Last resort: python3
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import secrets; print(secrets.token_hex(16))'
+        return
+    fi
+    error "Cannot generate random token: need openssl, /dev/urandom, or python3"
 }
 
 backup_config() {
@@ -89,47 +102,110 @@ backup_config() {
     fi
 }
 
+# Write config.json using jq (preferred) or python3 fallback.
 write_config() {
     local mode="$1" port="$2" token="$3"
     mkdir -p "$XBOT_HOME"
-    require_cmd python3
+
+    if command -v jq >/dev/null 2>&1; then
+        write_config_jq "$mode" "$port" "$token"
+    elif command -v python3 >/dev/null 2>&1; then
+        write_config_python3 "$mode" "$port" "$token"
+    else
+        error "Need jq or python3 to write config.json"
+    fi
+}
+
+write_config_jq() {
+    local mode="$1" port="$2" token="$3"
+    local changes=() preserved=()
+
+    # Create config if missing or invalid
+    if [ ! -f "$CONFIG_PATH" ] || ! jq empty "$CONFIG_PATH" 2>/dev/null; then
+        echo '{}' > "$CONFIG_PATH"
+    fi
+
+    # Ensure top-level sections exist
+    jq '{server: .server // {}, web: .web // {}, cli: .cli // {}, admin: .admin // {}, agent: .agent // {}} * .' \
+        "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+
+    _set_if_missing() {
+        local section="$1" key="$2" value="$3"
+        local current
+        current=$(jq -r ".${section}.${key} // empty" "$CONFIG_PATH" 2>/dev/null)
+        if [ -z "$current" ]; then
+            jq --arg v "$value" ".${section}.${key} = \$v" "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+            changes+=("${section}.${key}=${value}")
+        else
+            preserved+=("${section}.${key}=${current}")
+        fi
+    }
+
+    _set_always() {
+        local section="$1" key="$2" value="$3"
+        local old
+        old=$(jq -r ".${section}.${key} // empty" "$CONFIG_PATH" 2>/dev/null)
+        jq --arg v "$value" ".${section}.${key} = \$v" "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+        if [ "$old" != "$value" ]; then
+            changes+=("${section}.${key}=${value} (was ${old})")
+        else
+            preserved+=("${section}.${key}=${old}")
+        fi
+    }
+
+    _set_if_missing admin token "$token"
+    _set_if_missing agent work_dir "$HOME"
+
+    if [ "$mode" = "server-client" ]; then
+        _set_if_missing server host "127.0.0.1"
+        _set_always server port "$port"
+        _set_always web enable true
+        _set_if_missing web host "127.0.0.1"
+        _set_always web port "$port"
+        _set_always cli server_url "ws://127.0.0.1:${port}"
+        local admin_token
+        admin_token=$(jq -r '.admin.token // empty' "$CONFIG_PATH")
+        _set_always cli token "${admin_token:-$token}"
+    else
+        local admin_token
+        admin_token=$(jq -r '.admin.token // empty' "$CONFIG_PATH")
+        _set_if_missing cli token "${admin_token:-$token}"
+    fi
+
+    for item in "${changes[@]+"${changes[@]}"}"; do
+        [ -n "$item" ] && info "Config set: $item"
+    done
+    for item in "${preserved[@]+"${preserved[@]}"}"; do
+        [ -n "$item" ] && warn "Config preserved: $item"
+    done
+}
+
+write_config_python3() {
+    local mode="$1" port="$2" token="$3"
     python3 - "$CONFIG_PATH" "$mode" "$port" "$token" "$HOME" <<'PY'
 import json, os, sys
 path, mode, port, token, home = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
 if os.path.exists(path):
     with open(path, 'r', encoding='utf-8') as f:
-        try:
-            cfg = json.load(f)
-        except Exception:
-            cfg = {}
+        try: cfg = json.load(f)
+        except Exception: cfg = {}
 else:
     cfg = {}
-
 cfg.setdefault('server', {})
 cfg.setdefault('web', {})
 cfg.setdefault('cli', {})
 cfg.setdefault('admin', {})
 cfg.setdefault('agent', {})
-changes = []
-preserved = []
-
-def set_if_missing(section, key, value):
-    if key not in cfg[section] or cfg[section][key] in (None, ''):
-        cfg[section][key] = value
-        changes.append(f'{section}.{key}={value}')
+changes, preserved = [], []
+def set_if_missing(s, k, v):
+    if k not in cfg[s] or cfg[s][k] in (None, ''):
+        cfg[s][k] = v; changes.append(f'{s}.{k}={v}')
     else:
-        preserved.append(f'{section}.{key}={cfg[section][key]}')
-
-def set_always(section, key, value):
-    old = cfg[section].get(key)
-    cfg[section][key] = value
-    if old != value:
-        changes.append(f'{section}.{key}={value} (was {old})')
-    else:
-        preserved.append(f'{section}.{key}={old}')
-
+        preserved.append(f'{s}.{k}={cfg[s][k]}')
+def set_always(s, k, v):
+    old = cfg[s].get(k); cfg[s][k] = v
+    (changes if old != v else preserved).append(f'{s}.{k}={v}' + (f' (was {old})' if old != v else ''))
 set_if_missing('admin', 'token', token)
-# Ensure agent.work_dir is set to user home so server has a stable working directory
 set_if_missing('agent', 'work_dir', home)
 if mode == 'server-client':
     set_if_missing('server', 'host', '127.0.0.1')
@@ -141,18 +217,10 @@ if mode == 'server-client':
     set_always('cli', 'token', cfg['admin'].get('token') or token)
 else:
     set_if_missing('cli', 'token', cfg['admin'].get('token') or token)
-
 with open(path, 'w', encoding='utf-8') as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
-
-print('CONFIG_CHANGES_BEGIN')
-for item in changes:
-    print(item)
-print('CONFIG_CHANGES_END')
-print('CONFIG_PRESERVED_BEGIN')
-for item in preserved:
-    print(item)
-print('CONFIG_PRESERVED_END')
+for c in changes: print(f'[INFO] Config set: {c}')
+for p in preserved: print(f'[WARN] Config preserved: {p}', file=sys.stderr)
 PY
 }
 
@@ -170,44 +238,49 @@ download_web_dist() {
     fi
 }
 
-write_systemd_unit() {
+# --- User-level systemd service (no sudo required) ---
+write_systemd_user_unit() {
     local bin_path="$1" config_path="$2" unit_file="$3"
-    local install_user
-    install_user="$(id -un)"
-    local xbot_home
+    local xbot_home work_dir
     xbot_home="$(cd "$XBOT_HOME" && pwd)"
-    local work_dir
     work_dir="$HOME"
+    mkdir -p "$HOME/.config/systemd/user"
     cat > "$unit_file" <<EOF_UNIT
 [Unit]
-Description=xbot Agent Server
-After=network.target
+Description=xbot Agent Server (user)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=${install_user}
 Environment=XBOT_HOME=${xbot_home}
+Environment=PATH=${INSTALL_PATH}:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=${work_dir}
 ExecStart=${bin_path} serve --config ${config_path}
 Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 EOF_UNIT
 }
 
-install_systemd() {
+install_systemd_user() {
     local bin_path="$1" config_path="$2"
     [ "$(uname -s)" = "Linux" ] || return 0
-    info "Installing/updating systemd service (requires passwordless sudo -n)..."
-    write_systemd_unit "$bin_path" "$config_path" "$XBOT_HOME/${SERVICE_NAME}.service"
-    sudo -n install -d /etc/systemd/system
-    sudo -n install -m 0644 "$XBOT_HOME/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
-    sudo -n systemctl daemon-reload
-    sudo -n systemctl enable "$SERVICE_NAME"
-    sudo -n systemctl restart "$SERVICE_NAME"
-    info "systemd service installed/updated and restarted: ${SERVICE_NAME}"
+    info "Installing systemd --user service (no sudo required)..."
+    write_systemd_user_unit "$bin_path" "$config_path" "$HOME/.config/systemd/user/${SERVICE_NAME}.service"
+    info "systemd --user unit written: ${SERVICE_NAME}.service"
+    if [ -z "${NONINTERACTIVE:-}" ]; then
+        systemctl --user daemon-reload
+        systemctl --user enable "$SERVICE_NAME"
+        systemctl --user restart "$SERVICE_NAME"
+        info "systemd --user service started: ${SERVICE_NAME}"
+        info "  Logs: journalctl --user -u ${SERVICE_NAME} -f"
+    else
+        info "NONINTERACTIVE: skipped daemon-reload/enable/start"
+    fi
+    info "  Stop: systemctl --user stop ${SERVICE_NAME}"
 }
 
 install_launchd() {
@@ -237,9 +310,51 @@ install_launchd() {
   <key>StandardErrorPath</key><string>${XBOT_HOME}/logs/xbot-server.err</string>
 </dict></plist>
 EOF_PLIST
-    launchctl unload -w "$plist" >/dev/null 2>&1 || true
-    launchctl load -w "$plist"
-    info "launchd service installed/updated and restarted: com.xbot.server"
+    info "launchd plist written: ${plist}"
+    if [ -z "${NONINTERACTIVE:-}" ]; then
+        launchctl unload -w "$plist" >/dev/null 2>&1 || true
+        launchctl load -w "$plist"
+        info "launchd service loaded: com.xbot.server"
+    else
+        info "NONINTERACTIVE: skipped launchctl load"
+    fi
+    info "  Logs: ${XBOT_HOME}/logs/xbot-server.log"
+    info "  Stop: launchctl unload -w ${plist}"
+}
+
+add_to_path() {
+    case ":${PATH}:" in
+        *":${INSTALL_PATH}:"*) return 0 ;;
+    esac
+    local profile=""
+    if [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "${SHELL:-}")" = "zsh" ]; then
+        profile="$HOME/.zshrc"
+    else
+        profile="$HOME/.bashrc"
+    fi
+    if [ -f "$profile" ]; then
+        if ! grep -qF "$INSTALL_PATH" "$profile" 2>/dev/null; then
+            echo "" >> "$profile"
+            echo "# Added by xbot installer" >> "$profile"
+            echo "export PATH=\"${INSTALL_PATH}:\$PATH\"" >> "$profile"
+            info "Added ${INSTALL_PATH} to PATH in ${profile}"
+        fi
+    fi
+    export PATH="${INSTALL_PATH}:${PATH}"
+}
+
+# Ensure systemd --user lingering is enabled (so service runs at boot without login)
+enable_linger() {
+    [ "$(uname -s)" = "Linux" ] || return 0
+    [ -z "${NONINTERACTIVE:-}" ] || return 0
+    if command -v loginctl >/dev/null 2>&1; then
+        if loginctl enable-linger "$(id -un)" 2>/dev/null; then
+            info "Enabled lingering: server will start at boot"
+        else
+            warn "Could not enable linger (server starts on first login instead)"
+            warn "  Run: loginctl enable-linger $(id -un)"
+        fi
+    fi
 }
 
 main() {
@@ -264,8 +379,8 @@ main() {
     MODE=$(ask_mode)
     TOKEN=$(random_token)
     PORT="$DEFAULT_PORT"
-    if [ "$MODE" = "server-client" ]; then
-        printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: "
+    if [ "$MODE" = "server-client" ] && [ -z "${NONINTERACTIVE:-}" ]; then
+        printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: " >&2
         read -r input_port
         PORT="${input_port:-$DEFAULT_PORT}"
     fi
@@ -290,36 +405,27 @@ main() {
         fi
     fi
 
+    # Install binary to user-local directory (no sudo)
     chmod +x "${TMPDIR}/${BINARY}"
-    if [ ! -d "$INSTALL_PATH" ]; then
-        if mkdir -p "$INSTALL_PATH" 2>/dev/null; then
-            :
-        else
-            warn "Cannot create ${INSTALL_PATH} directly, using sudo..."
-            sudo mkdir -p "$INSTALL_PATH"
-        fi
-    fi
-    if [ -w "$INSTALL_PATH" ]; then
-        mv "${TMPDIR}/${BINARY}" "${INSTALL_PATH}/${BINARY}"
-    else
-        warn "No write permission to ${INSTALL_PATH}, using sudo..."
-        sudo mv "${TMPDIR}/${BINARY}" "${INSTALL_PATH}/${BINARY}"
-    fi
+    mkdir -p "$INSTALL_PATH"
+    mv "${TMPDIR}/${BINARY}" "${INSTALL_PATH}/${BINARY}"
+    info "Binary installed to ${INSTALL_PATH}/${BINARY}"
+
+    add_to_path
 
     backup_config
-    CONFIG_UPDATE_OUTPUT="$(write_config "$MODE" "$PORT" "$TOKEN" "$HOME")"
-    echo "$CONFIG_UPDATE_OUTPUT" | sed -n '/^CONFIG_CHANGES_BEGIN$/,/^CONFIG_CHANGES_END$/p' | sed '1d;$d' | while IFS= read -r line; do
-        [ -n "$line" ] && info "Config set: $line"
-    done
-    echo "$CONFIG_UPDATE_OUTPUT" | sed -n '/^CONFIG_PRESERVED_BEGIN$/,/^CONFIG_PRESERVED_END$/p' | sed '1d;$d' | while IFS= read -r line; do
-        [ -n "$line" ] && warn "Config preserved: $line"
-    done
+    write_config "$MODE" "$PORT" "$TOKEN"
 
     if [ "$MODE" = "server-client" ]; then
         download_web_dist "$VERSION" "$XBOT_HOME/web/dist"
         case "$(uname -s)" in
-            Linux) install_systemd "${INSTALL_PATH}/${BINARY}" "$CONFIG_PATH" ;;
-            Darwin) install_launchd "${INSTALL_PATH}/${BINARY}" "$CONFIG_PATH" ;;
+            Linux)
+                install_systemd_user "${INSTALL_PATH}/${BINARY}" "$CONFIG_PATH"
+                enable_linger
+                ;;
+            Darwin)
+                install_launchd "${INSTALL_PATH}/${BINARY}" "$CONFIG_PATH"
+                ;;
         esac
     fi
 
@@ -330,9 +436,26 @@ main() {
     if [ "$MODE" = "server-client" ]; then
         info "Web UI: http://localhost:${PORT}"
         info "CLI will connect to the configured local server (see ${CONFIG_PATH})"
-        info "Use '${BINARY}' for client, '${BINARY} serve --config ${CONFIG_PATH}' for manual server start"
+        case "$(uname -s)" in
+            Linux)
+                info "Service: systemd --user (${SERVICE_NAME})"
+                info "  Logs:  journalctl --user -u ${SERVICE_NAME} -f"
+                info "  Stop:  systemctl --user stop ${SERVICE_NAME}"
+                info "  Start: systemctl --user start ${SERVICE_NAME}"
+                ;;
+            Darwin)
+                info "Service: launchd (com.xbot.server)"
+                info "  Logs:  ${XBOT_HOME}/logs/xbot-server.log"
+                info "  Stop:  launchctl unload -w ~/Library/LaunchAgents/com.xbot.server.plist"
+                ;;
+        esac
     else
         info "Run '${BINARY}' to start."
+    fi
+    if ! command -v "$BINARY" >/dev/null 2>&1; then
+        echo ""
+        warn "Note: ${INSTALL_PATH} is not yet in your shell PATH."
+        warn "  Restart your shell or run: export PATH=\"${INSTALL_PATH}:\$PATH\""
     fi
     echo ""
 }

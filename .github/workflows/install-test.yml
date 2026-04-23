@@ -1,0 +1,322 @@
+name: Install Script Tests
+
+on:
+  push:
+    branches: [master, feat/install-no-sudo-ci-test]
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/install.ps1'
+      - '.github/workflows/install-test.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/install.ps1'
+      - '.github/workflows/install-test.yml'
+  workflow_dispatch:
+
+jobs:
+  # ── Linux ──────────────────────────────────────────────
+  linux-standalone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test standalone install (non-interactive)
+        env:
+          MODE: standalone
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          test -x "${INSTALL_PATH}/xbot-cli"
+          echo "✅ Binary installed"
+          jq empty "${XBOT_HOME}/config.json"
+          echo "✅ Config valid"
+          server_url=$(jq -r '.cli.server_url // empty' "${XBOT_HOME}/config.json")
+          if [ -n "$server_url" ]; then
+            echo "❌ Expected no server_url in standalone mode, got: $server_url"
+            exit 1
+          fi
+          echo "✅ Standalone mode correct"
+          token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          [ -n "$token" ] && [ "$token" != "null" ]
+          echo "✅ Admin token set"
+
+  linux-server-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test server-client install (non-interactive)
+        env:
+          MODE: server-client
+          PORT: "9999"
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          test -x "${INSTALL_PATH}/xbot-cli"
+          echo "✅ Binary installed"
+          jq empty "${XBOT_HOME}/config.json"
+          echo "✅ Config valid"
+          port=$(jq -r '.server.port' "${XBOT_HOME}/config.json")
+          [ "$port" = "9999" ]
+          echo "✅ Port configured"
+          server_url=$(jq -r '.cli.server_url' "${XBOT_HOME}/config.json")
+          [ "$server_url" = "ws://127.0.0.1:9999" ]
+          echo "✅ Server URL configured"
+          web_enable=$(jq -r '.web.enable' "${XBOT_HOME}/config.json")
+          [ "$web_enable" = "true" ]
+          echo "✅ Web enabled"
+          token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          [ -n "$token" ] && [ "$token" != "null" ]
+          echo "✅ Admin token set"
+          unit_file="${HOME}/.config/systemd/user/xbot-server.service"
+          test -f "$unit_file"
+          echo "✅ systemd --user unit created"
+          grep -q "ExecStart=.*/xbot-cli serve" "$unit_file"
+          echo "✅ Unit file has correct ExecStart"
+          grep -q "WantedBy=default.target" "$unit_file"
+          echo "✅ Unit file uses default.target (user-level)"
+          grep -q "Type=simple" "$unit_file"
+          echo "✅ Unit file has Type=simple"
+
+  linux-config-preserve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test config preservation on reinstall
+        env:
+          MODE: server-client
+          PORT: "8888"
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          first_token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          echo "First token: $first_token"
+          jq '.server.custom_field = "preserve_me"' "${XBOT_HOME}/config.json" > "${XBOT_HOME}/config.json.tmp"
+          mv "${XBOT_HOME}/config.json.tmp" "${XBOT_HOME}/config.json"
+          bash scripts/install.sh
+          second_token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          custom=$(jq -r '.server.custom_field' "${XBOT_HOME}/config.json")
+          [ "$first_token" = "$second_token" ]
+          echo "✅ Token preserved on reinstall"
+          [ "$custom" = "preserve_me" ]
+          echo "✅ Custom fields preserved on reinstall"
+          port=$(jq -r '.server.port' "${XBOT_HOME}/config.json")
+          [ "$port" = "8888" ]
+          echo "✅ Port updated on reinstall"
+          ls "${XBOT_HOME}/config.json.bak."* >/dev/null 2>&1
+          echo "✅ Backup created on reinstall"
+
+  linux-port-default:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test default port (8082)
+        env:
+          MODE: server-client
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          port=$(jq -r '.server.port' "${XBOT_HOME}/config.json")
+          [ "$port" = "8082" ]
+          echo "✅ Default port 8082 applied"
+
+  # ── macOS ──────────────────────────────────────────────
+  macos-standalone:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test macOS standalone install
+        env:
+          MODE: standalone
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          test -x "${INSTALL_PATH}/xbot-cli"
+          echo "✅ Binary installed"
+          jq empty "${XBOT_HOME}/config.json"
+          echo "✅ Config valid"
+          agent_workdir=$(jq -r '.agent.work_dir' "${XBOT_HOME}/config.json")
+          [ -n "$agent_workdir" ]
+          echo "✅ agent.work_dir set"
+          server_url=$(jq -r '.cli.server_url // empty' "${XBOT_HOME}/config.json")
+          if [ -n "$server_url" ]; then
+            echo "❌ Expected no server_url in standalone mode, got: $server_url"
+            exit 1
+          fi
+          echo "✅ Standalone mode correct (no server_url)"
+          token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          [ -n "$token" ] && [ "$token" != "null" ]
+          echo "✅ Admin token set"
+
+  macos-server-client:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test macOS server-client install (launchd)
+        env:
+          MODE: server-client
+          PORT: "7777"
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          test -x "${INSTALL_PATH}/xbot-cli"
+          echo "✅ Binary installed"
+          jq empty "${XBOT_HOME}/config.json"
+          echo "✅ Config valid"
+          port=$(jq -r '.server.port' "${XBOT_HOME}/config.json")
+          [ "$port" = "7777" ]
+          echo "✅ Port configured"
+          server_url=$(jq -r '.cli.server_url' "${XBOT_HOME}/config.json")
+          [ "$server_url" = "ws://127.0.0.1:7777" ]
+          echo "✅ Server URL configured"
+          web_enable=$(jq -r '.web.enable' "${XBOT_HOME}/config.json")
+          [ "$web_enable" = "true" ]
+          echo "✅ Web enabled"
+          token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          [ -n "$token" ] && [ "$token" != "null" ]
+          echo "✅ Admin token set"
+          plist="$HOME/Library/LaunchAgents/com.xbot.server.plist"
+          test -f "$plist"
+          echo "✅ launchd plist created"
+          grep -q "RunAtLoad" "$plist"
+          echo "✅ Plist has RunAtLoad"
+          grep -q "KeepAlive" "$plist"
+          echo "✅ Plist has KeepAlive"
+          grep -q "xbot-cli" "$plist"
+          echo "✅ Plist references xbot-cli binary"
+          grep -q "serve" "$plist"
+          echo "✅ Plist has serve argument"
+
+  macos-config-preserve:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test macOS config preservation on reinstall
+        env:
+          MODE: server-client
+          PORT: "5555"
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          first_token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          jq '.agent.custom_setting = "keep_me"' "${XBOT_HOME}/config.json" > "${XBOT_HOME}/config.json.tmp"
+          mv "${XBOT_HOME}/config.json.tmp" "${XBOT_HOME}/config.json"
+          bash scripts/install.sh
+          second_token=$(jq -r '.admin.token' "${XBOT_HOME}/config.json")
+          custom=$(jq -r '.agent.custom_setting' "${XBOT_HOME}/config.json")
+          [ "$first_token" = "$second_token" ]
+          echo "✅ Token preserved on reinstall"
+          [ "$custom" = "keep_me" ]
+          echo "✅ Custom fields preserved on reinstall"
+          port=$(jq -r '.server.port' "${XBOT_HOME}/config.json")
+          [ "$port" = "5555" ]
+          echo "✅ Port updated on reinstall"
+          ls "${XBOT_HOME}/config.json.bak."* >/dev/null 2>&1
+          echo "✅ Backup created on reinstall"
+          plist="$HOME/Library/LaunchAgents/com.xbot.server.plist"
+          test -f "$plist"
+          echo "✅ launchd plist still exists after reinstall"
+
+  macos-port-default:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test macOS default port (8082)
+        env:
+          MODE: server-client
+          VERSION: v0.0.23
+          INSTALL_PATH: ${{ github.workspace }}/test-install/bin
+          XBOT_HOME: ${{ github.workspace }}/test-install/.xbot
+          NONINTERACTIVE: "1"
+        run: |
+          bash scripts/install.sh
+          port=$(jq -r '.server.port' "${XBOT_HOME}/config.json")
+          [ "$port" = "8082" ]
+          echo "✅ Default port 8082 applied"
+
+  # ── Windows ────────────────────────────────────────────
+  windows-standalone:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Windows standalone install
+        env:
+          MODE: standalone
+          VERSION: v0.0.23
+          INSTALL_PATH: D:\test-install\bin
+          XBOT_HOME: D:\test-install\.xbot
+        shell: pwsh
+        run: |
+          .\scripts\install.ps1 -NonInteractive
+          $binPath = Join-Path $env:INSTALL_PATH "xbot-cli.exe"
+          Test-Path $binPath | Should -BeTrue
+          Write-Host "✅ Binary installed"
+          $configPath = Join-Path $env:XBOT_HOME "config.json"
+          Test-Path $configPath | Should -BeTrue
+          $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+          $cfg.cli.server_url | Should -BeNullOrEmpty
+          Write-Host "✅ Standalone mode correct (no server_url)"
+          $cfg.admin.token | Should -Not -BeNullOrEmpty
+          Write-Host "✅ Admin token set"
+          $cfg.agent.work_dir | Should -Not -BeNullOrEmpty
+          Write-Host "✅ agent.work_dir set"
+
+  windows-server-client:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Windows server-client install (Scheduled Task)
+        env:
+          MODE: server-client
+          PORT: "6666"
+          VERSION: v0.0.23
+          INSTALL_PATH: D:\test-install\bin
+          XBOT_HOME: D:\test-install\.xbot
+        shell: pwsh
+        run: |
+          .\scripts\install.ps1 -NonInteractive
+          $binPath = Join-Path $env:INSTALL_PATH "xbot-cli.exe"
+          Test-Path $binPath | Should -BeTrue
+          Write-Host "✅ Binary installed"
+          $configPath = Join-Path $env:XBOT_HOME "config.json"
+          Test-Path $configPath | Should -BeTrue
+          $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+          $cfg.server.port | Should -Be 6666
+          Write-Host "✅ Port configured"
+          $cfg.cli.server_url | Should -Be "ws://127.0.0.1:6666"
+          Write-Host "✅ Server URL configured"
+          $cfg.web.enable | Should -BeTrue
+          Write-Host "✅ Web enabled"
+          $cfg.admin.token | Should -Not -BeNullOrEmpty
+          Write-Host "✅ Admin token set"
+          $wrapper = Join-Path $env:XBOT_HOME "scripts\run-server.bat"
+          Test-Path $wrapper | Should -BeTrue
+          Write-Host "✅ Wrapper script created"
+          $wrapperContent = Get-Content $wrapper -Raw
+          $wrapperContent | Should -Match "xbot-cli.exe"
+          $wrapperContent | Should -Match "serve"
+          Write-Host "✅ Wrapper script has correct content"
+          $task = Get-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
+          $task | Should -Not -BeNullOrEmpty
+          Write-Host "✅ Scheduled Task registered"

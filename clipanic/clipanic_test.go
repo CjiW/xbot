@@ -72,27 +72,33 @@ func TestGoWritesLogAndSwallowsPanic(t *testing.T) {
 	EnableFileLogging(logPath)
 	defer DisableFileLogging()
 
-	done := make(chan struct{})
 	Go("worker.loop", func() {
-		defer close(done)
 		panic("worker boom")
 	})
 
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for worker goroutine")
+	// Go() launches a goroutine with defer Recover(...).
+	// Recover writes the log synchronously under writeMu before the goroutine exits.
+	// We can't observe goroutine completion directly, so poll for the log file.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		if !strings.Contains(content, "where=worker.loop") {
+			t.Fatalf("expected worker where in panic log, got: %s", content)
+		}
+		if !strings.Contains(content, "panic=worker boom") {
+			t.Fatalf("expected worker panic in panic log, got: %s", content)
+		}
+		return // success
 	}
-
+	// Try one final read for a better error message
 	data, err := os.ReadFile(logPath)
 	if err != nil {
-		t.Fatalf("read panic log: %v", err)
+		t.Fatalf("timed out: panic log file not created: %v", err)
 	}
-	content := string(data)
-	if !strings.Contains(content, "where=worker.loop") {
-		t.Fatalf("expected worker where in panic log, got: %s", content)
-	}
-	if !strings.Contains(content, "panic=worker boom") {
-		t.Fatalf("expected worker panic in panic log, got: %s", content)
-	}
+	t.Fatalf("timed out: log file exists but missing expected content: %s", string(data))
 }

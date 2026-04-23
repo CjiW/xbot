@@ -81,6 +81,141 @@ func (a *Agent) cleanupExpiredSessions() {
 	})
 }
 
+// wireSubAgentCLIProgress sets up ProgressEventHandler and stream callbacks on cfg
+// so the SubAgent's progress is pushed to CLI (both local and remote) with its own
+// ChatID. This enables Ctrl+T session switching to show real-time progress for both
+// interactive and one-shot SubAgents.
+func (a *Agent) wireSubAgentCLIProgress(key, originChatID string, cfg *RunConfig) {
+	if a.channelFinder == nil {
+		return
+	}
+	ch, ok := a.channelFinder("cli")
+	if !ok {
+		return
+	}
+	var localCh *channelpkg.CLIChannel
+	var remoteCh *channelpkg.RemoteCLIChannel
+	if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+		localCh = cc
+	} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+		remoteCh = rc
+	}
+	if localCh == nil && remoteCh == nil {
+		return
+	}
+
+	agentProgressKey := "agent:" + key
+	cfg.ProgressEventHandler = func(event *ProgressEvent) {
+		if event == nil || event.Structured == nil {
+			return
+		}
+		s := event.Structured
+
+		cliPayload := &channelpkg.CLIProgressPayload{
+			ChatID: agentProgressKey, Phase: string(s.Phase),
+			Iteration: s.Iteration, Thinking: s.ThinkingContent,
+			Reasoning: s.ReasoningContent, HistoryCompacted: s.HistoryCompacted,
+		}
+		for _, t := range s.ActiveTools {
+			cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
+				Name: t.Name, Label: t.Label, Status: string(t.Status),
+				Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+			})
+		}
+		for _, t := range s.CompletedTools {
+			cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
+				Name: t.Name, Label: t.Label, Status: string(t.Status),
+				Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+			})
+		}
+		if len(s.Todos) > 0 {
+			cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+			for i, td := range s.Todos {
+				cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+			}
+		}
+		if s.TokenUsage != nil {
+			cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
+				PromptTokens: s.TokenUsage.PromptTokens, CompletionTokens: s.TokenUsage.CompletionTokens,
+				TotalTokens: s.TokenUsage.TotalTokens, CacheHitTokens: s.TokenUsage.CacheHitTokens,
+			}
+		}
+
+		if localCh != nil {
+			localCh.SendProgress(key, cliPayload)
+		} else if remoteCh != nil {
+			wsPayload := &channelpkg.WsProgressPayload{
+				ChatID: agentProgressKey, Phase: string(s.Phase),
+				Iteration: s.Iteration, Thinking: s.ThinkingContent,
+			}
+			for _, t := range s.ActiveTools {
+				wsPayload.ActiveTools = append(wsPayload.ActiveTools, channelpkg.WsToolProgress{
+					Name: t.Name, Label: t.Label, Status: string(t.Status),
+					Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+				})
+			}
+			for _, t := range s.CompletedTools {
+				wsPayload.CompletedTools = append(wsPayload.CompletedTools, channelpkg.WsToolProgress{
+					Name: t.Name, Label: t.Label, Status: string(t.Status),
+					Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+				})
+			}
+			remoteCh.SendProgress(originChatID, wsPayload)
+		}
+
+		// Save snapshot + track iteration history for mid-session reconnect.
+		if prevSnap, loaded := a.lastProgressSnapshot.Load(agentProgressKey); loaded {
+			prev := prevSnap.(*channelpkg.CLIProgressPayload)
+			if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
+				histPtr, _ := a.iterationHistories.LoadOrStore(agentProgressKey, &[]channelpkg.CLIProgressPayload{})
+				hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
+				already := false
+				for _, h := range hist {
+					if h.Iteration == prev.Iteration {
+						already = true
+						break
+					}
+				}
+				if !already {
+					updated := append(hist, *prev)
+					a.iterationHistories.Store(agentProgressKey, &updated)
+				}
+			}
+		}
+		a.lastProgressSnapshot.Store(agentProgressKey, cliPayload)
+	}
+
+	// Wire stream callbacks for real-time rendering
+	cfg.Stream = true
+	if localCh != nil {
+		cfg.StreamContentFunc = func(content string) {
+			localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, StreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				snap.(*channelpkg.CLIProgressPayload).StreamContent = content
+			}
+		}
+		cfg.StreamReasoningFunc = func(content string) {
+			localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
+			}
+		}
+	} else if remoteCh != nil {
+		cfg.StreamContentFunc = func(content string) {
+			remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{ChatID: agentProgressKey, StreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				snap.(*channelpkg.CLIProgressPayload).StreamContent = content
+			}
+		}
+		cfg.StreamReasoningFunc = func(content string) {
+			remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
+			}
+		}
+	}
+}
+
 // destroyInteractiveSession removes all resources for an interactive SubAgent session:
 // interactiveSubAgents entry, progress snapshot/iteration history, and tenant session (DB).
 // This ensures the next SubAgent with the same role/instance starts with a clean slate.
@@ -193,158 +328,9 @@ func (a *Agent) SpawnInteractiveSession(
 		log.Ctx(ctx).WithError(err).Warn("Failed to eager-save interactive agent user message")
 	}
 
-	// Interactive SubAgent gets its own ProgressEventHandler so its progress
-	// is pushed to CLI directly with its own ChatID — same pipeline as main session.
-	// CLI filters by m.chatID so only the currently viewed session's progress is shown.
-	// Supports both local CLIChannel and remote RemoteCLIChannel (xbot-cli serve mode).
-	if a.channelFinder != nil && !background {
-		if ch, ok := a.channelFinder("cli"); ok {
-			var localCh *channelpkg.CLIChannel
-			var remoteCh *channelpkg.RemoteCLIChannel
-			if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-				localCh = cc
-			} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
-				remoteCh = rc
-			}
-			if localCh != nil || remoteCh != nil {
-				agentProgressKey := "agent:" + key
-				cfg.ProgressEventHandler = func(event *ProgressEvent) {
-					if event == nil || event.Structured == nil {
-						return
-					}
-					s := event.Structured
-
-					// Build CLI payload (used for snapshot storage + local CLI)
-					cliPayload := &channelpkg.CLIProgressPayload{
-						ChatID:           agentProgressKey,
-						Phase:            string(s.Phase),
-						Iteration:        s.Iteration,
-						Thinking:         s.ThinkingContent,
-						Reasoning:        s.ReasoningContent,
-						HistoryCompacted: s.HistoryCompacted,
-					}
-					for _, t := range s.ActiveTools {
-						cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
-							Name: t.Name, Label: t.Label, Status: string(t.Status),
-							Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
-						})
-					}
-					for _, t := range s.CompletedTools {
-						cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
-							Name: t.Name, Label: t.Label, Status: string(t.Status),
-							Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
-						})
-					}
-					if len(s.Todos) > 0 {
-						cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
-						for i, td := range s.Todos {
-							cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
-						}
-					}
-					if s.TokenUsage != nil {
-						cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
-							PromptTokens: s.TokenUsage.PromptTokens, CompletionTokens: s.TokenUsage.CompletionTokens,
-							TotalTokens: s.TokenUsage.TotalTokens, CacheHitTokens: s.TokenUsage.CacheHitTokens,
-						}
-					}
-
-					// Send to CLI (local or remote)
-					if localCh != nil {
-						localCh.SendProgress(key, cliPayload)
-					} else if remoteCh != nil {
-						// Remote CLI: route via Hub using the main session's chatID
-						// (the WS client only subscribes to the main session chatID).
-						// The payload.ChatID carries the agent session key for
-						// CLI-side filtering (handleProgressMsg checks ChatID).
-						wsPayload := &channelpkg.WsProgressPayload{
-							ChatID:    agentProgressKey,
-							Phase:     string(s.Phase),
-							Iteration: s.Iteration,
-							Thinking:  s.ThinkingContent,
-						}
-						for _, t := range s.ActiveTools {
-							wsPayload.ActiveTools = append(wsPayload.ActiveTools, channelpkg.WsToolProgress{
-								Name: t.Name, Label: t.Label, Status: string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
-							})
-						}
-						for _, t := range s.CompletedTools {
-							wsPayload.CompletedTools = append(wsPayload.CompletedTools, channelpkg.WsToolProgress{
-								Name: t.Name, Label: t.Label, Status: string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
-							})
-						}
-						remoteCh.SendProgress(originChatID, wsPayload)
-					}
-
-					// Save snapshot + track iteration history for mid-session reconnect.
-					// Same logic as main session in engine_wire.go.
-					if prevSnap, loaded := a.lastProgressSnapshot.Load(agentProgressKey); loaded {
-						prev := prevSnap.(*channelpkg.CLIProgressPayload)
-						if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
-							histPtr, _ := a.iterationHistories.LoadOrStore(agentProgressKey, &[]channelpkg.CLIProgressPayload{})
-							hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
-							already := false
-							for _, h := range hist {
-								if h.Iteration == prev.Iteration {
-									already = true
-									break
-								}
-							}
-							if !already {
-								updated := append(hist, *prev)
-								a.iterationHistories.Store(agentProgressKey, &updated)
-							}
-						}
-					}
-					a.lastProgressSnapshot.Store(agentProgressKey, cliPayload)
-					log.WithFields(log.Fields{
-						"key":       agentProgressKey,
-						"phase":     cliPayload.Phase,
-						"iteration": cliPayload.Iteration,
-						"active":    len(cliPayload.ActiveTools),
-						"completed": len(cliPayload.CompletedTools),
-					}).Info("SubAgent: stored progress snapshot")
-				}
-				// Also wire stream callbacks for real-time rendering
-				cfg.Stream = true
-				if localCh != nil {
-					cfg.StreamContentFunc = func(content string) {
-						localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, StreamContent: content})
-						// Update snapshot so GetActiveProgress returns latest stream content
-						// for CLI session switch mid-stream.
-						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-							snap.(*channelpkg.CLIProgressPayload).StreamContent = content
-						}
-					}
-					cfg.StreamReasoningFunc = func(content string) {
-						localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
-						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-							snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
-						}
-					}
-				} else if remoteCh != nil {
-					cfg.StreamContentFunc = func(content string) {
-						remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{
-							ChatID:        agentProgressKey,
-							StreamContent: content,
-						})
-						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-							snap.(*channelpkg.CLIProgressPayload).StreamContent = content
-						}
-					}
-					cfg.StreamReasoningFunc = func(content string) {
-						remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{
-							ChatID:                 agentProgressKey,
-							ReasoningStreamContent: content,
-						})
-						if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
-							snap.(*channelpkg.CLIProgressPayload).ReasoningStreamContent = content
-						}
-					}
-				}
-			}
-		}
+	// Wire CLI progress + stream callbacks (shared with one-shot SubAgents)
+	if !background {
+		a.wireSubAgentCLIProgress(key, originChatID, &cfg)
 	}
 
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），

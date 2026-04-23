@@ -1460,7 +1460,7 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	}
 
 	// Register one-shot subagent in interactiveSubAgents so it's visible
-	// in the task & agents panel. Removed immediately after Run completes.
+	// in the Ctrl+T panel. Kept after completion for history viewing; TTL cleans it up.
 	oneshotInstance := fmt.Sprintf("oneshot-%s-%d", roleName, time.Now().UnixNano())
 	oneshotKey := interactiveKey(originChannel, originChatID, roleName, oneshotInstance)
 	oneshotIA := &interactiveAgent{
@@ -1472,6 +1472,23 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		task:       task,
 	}
 	a.interactiveSubAgents.Store(oneshotKey, oneshotIA)
+
+	// Create TenantSession for message persistence (same as interactive SubAgents).
+	agentTenantSession, err := a.multiSession.GetOrCreateSession("agent", oneshotKey)
+	if err != nil {
+		a.interactiveSubAgents.Delete(oneshotKey)
+		return nil, fmt.Errorf("create oneshot agent tenant session: %w", err)
+	}
+	cfg.Session = agentTenantSession
+	_ = agentTenantSession.Clear()
+
+	// Eager-save user message so get_history returns it during Run().
+	if err := agentTenantSession.AddMessage(llm.NewUserMessage(task)); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to eager-save oneshot agent user message")
+	}
+
+	// Wire CLI progress + stream callbacks so Ctrl+T shows real-time progress.
+	a.wireSubAgentCLIProgress(oneshotKey, originChatID, &cfg)
 
 	// Wire incremental snapshot callback so iteration history is available
 	// during Run() for panel preview and inspect — not only after completion.
@@ -1497,11 +1514,10 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		return &bus.OutboundMessage{}, nil
 	}
 	oneshotIA.mu.Unlock()
-	// One-shot agents are ephemeral: remove immediately after completion.
-	// Unlike interactive sessions, there's no "send more messages" use case.
-	// Also cascade: cancel any bg sessions spawned during this one-shot's Run().
+	// One-shot session stays in interactiveSubAgents for history viewing via Ctrl+T.
+	// TTL cleanup (interactiveSessionTTL) will remove it after 30 minutes.
+	// Only cascade-cancel any bg sessions spawned during this one-shot's Run().
 	a.cancelChildSessions(oneshotKey)
-	a.interactiveSubAgents.Delete(oneshotKey)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,

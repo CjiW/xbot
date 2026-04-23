@@ -487,7 +487,23 @@ try {
     Write-Warn "Checksum verification skipped"
 }
 
-Copy-Item $tmpFile (Join-Path $InstallPath $BINARY) -Force
+# Stop running xbot-cli processes and scheduled task before overwriting the binary
+$binPath = Join-Path $InstallPath $BINARY
+if (Test-Path $binPath) {
+    # Stop scheduled task if it's running
+    try {
+        Stop-ScheduledTask -TaskName "xbot-server" -ErrorAction SilentlyContinue
+    } catch {}
+    # Kill any running xbot-cli processes (server or standalone)
+    $procs = Get-Process -Name "xbot-cli" -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Info "Stopping running xbot-cli process(es)..."
+        $procs | Stop-Process -Force
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+Copy-Item $tmpFile $binPath -Force
 Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
 
 Write-Host ""

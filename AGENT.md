@@ -38,6 +38,7 @@
 - **`maybeCompress` must NEVER use pure local token estimation.** Token counts must come from API responses (`lastPromptTokens`/`lastCompletionTokens`). The `no_data` fallback (no API data) skips all compress/masking checks with `totalTokens=0`. Tests must set `cfg.LastPromptTokens` to simulate a previous Run.
 - **`buildToolContextExtras` uses `TenantSession.MemoryService()` for `MemorySvc`/`TenantID`, NOT `LettaMemory` type assertion.** These are tenant-level fields that work for all memory providers. Only LettaMemory-specific fields (CoreMemory, ArchivalMemory, ToolIndexer) stay inside the type assertion.
 - **`ObservationMaskStore` and `OffloadStore` both persist to disk.** Mask uses `~/.xbot/mask/{tenantID}/{id}.json`, Offload uses `~/.xbot/offload_store/{session}/{id}.json`. `Recall` falls back to disk on memory miss. Both cleaned on compress and `/clear`.
+- **`lastPersistedCount` MUST be updated after every compression path.** `runCompression`, `handleInputTooLong`, and `context_window_exceeded` handler all replace `s.messages` with a compressed `LLMView` (much shorter). If `lastPersistedCount` is not reset to `len(s.messages)`, `postToolProcessing`'s incremental persistence check (`len(s.messages) > s.lastPersistedCount`) will never be true, and all messages after compression are silently lost on restart. Set it only after successful `Session.Clear() + AddMessage()` writes.
 
 ### Startup
 - `NewOpenAILLM` loads model list asynchronously. `ListModels()` returns fallback immediately.

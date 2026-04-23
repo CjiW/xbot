@@ -448,14 +448,19 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		if clearErr := s.cfg.Session.Clear(); clearErr != nil {
 			log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for force compression, skipping persistence")
 		} else {
+			allOk := true
 			for _, msg := range result.SessionView {
 				if err := assertNoSystemPersist(msg); err != nil {
 					continue
 				}
 				if addErr := s.cfg.Session.AddMessage(msg); addErr != nil {
 					log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
+					allOk = false
 					break
 				}
+			}
+			if allOk {
+				s.lastPersistedCount = len(s.messages)
 			}
 		}
 	}
@@ -573,11 +578,17 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 					s.lastMsgCountAtLLMCall = len(s.messages)
 					if s.cfg.Session != nil {
 						_ = s.cfg.Session.Clear()
+						sessionWriteOk := true
 						for _, msg := range result.SessionView {
 							if err := assertNoSystemPersist(msg); err != nil {
 								continue
 							}
-							_ = s.cfg.Session.AddMessage(msg)
+							if err := s.cfg.Session.AddMessage(msg); err != nil {
+								sessionWriteOk = false
+							}
+						}
+						if sessionWriteOk {
+							s.lastPersistedCount = len(s.messages)
 						}
 					}
 					log.Ctx(ctx).Info("Forced compression completed after context_window_exceeded, retrying")
@@ -939,6 +950,12 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 				if hook := cm.SessionHook(); hook != nil {
 					hook.AfterPersist(ctx, s.cfg.Session, result)
 				}
+				// Update the persistence watermark to match the new (compressed) message
+				// slice length. Without this, postToolProcessing's incremental persist
+				// check (len(s.messages) > s.lastPersistedCount) will never be true again
+				// because s.messages shrank but lastPersistedCount still points to the old
+				// (larger) index, causing all subsequent messages to be lost on restart.
+				s.lastPersistedCount = len(s.messages)
 			} else {
 				log.Ctx(ctx).Warn("Auto compaction persistence failed, using in-memory result only")
 			}

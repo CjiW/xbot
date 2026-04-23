@@ -356,13 +356,23 @@ function Install-ServiceNssm {
 function Install-WindowsService {
     param([string]$BinPath, [string]$CfgPath)
 
-    # Non-admin: use Startup folder (guaranteed no-elevated-privilege method)
-    if ($NonInteractive -or -not (Test-IsAdmin)) {
+    # Non-admin: always use Startup folder (guaranteed no-elevated-privilege method)
+    if (-not (Test-IsAdmin)) {
         Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
         return
     }
 
-    # Admin: offer full choice
+    # Admin + NonInteractive: Scheduled Task (works when admin)
+    if ($NonInteractive) {
+        $ok = Install-ScheduledTask -BinPath $BinPath -CfgPath $CfgPath
+        if (-not $ok) {
+            Write-Warn "Scheduled Task failed, falling back to Startup folder..."
+            Install-UserAutostart -BinPath $BinPath -CfgPath $CfgPath
+        }
+        return
+    }
+
+    # Admin + Interactive: offer full choice
     Write-Host ""
     Write-Host "Choose service method:" -ForegroundColor Cyan
     Write-Host "  1) Scheduled Task (recommended) - Starts at logon, robust restart" -ForegroundColor Cyan

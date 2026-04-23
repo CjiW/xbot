@@ -223,8 +223,21 @@ func (m *BackgroundTaskManager) Adopt(
 		StartedAt:  time.Now(),
 		ExitCode:   -1,
 		Output:     partialOutput,
+		sessionKey: sessionKey,
 		process:    proc,
 		exitCodeCh: exitCodeCh,
+	}
+
+	// Safety timeout context (24h max lifetime)
+	safetyCtx, safetyCancel := context.WithTimeout(context.Background(), maxBgTaskLifetime)
+	// User-facing cancel context
+	_, cancel := context.WithCancel(safetyCtx)
+	task.cancel = func() {
+		task.mu.Lock()
+		task.killed = true
+		task.mu.Unlock()
+		cancel()
+		safetyCancel()
 	}
 
 	m.mu.Lock()
@@ -233,6 +246,9 @@ func (m *BackgroundTaskManager) Adopt(
 	m.mu.Unlock()
 
 	go func() {
+		defer cancel()
+		defer safetyCancel()
+
 		var exitCode int
 
 		if exitCodeCh != nil {
@@ -241,6 +257,7 @@ func (m *BackgroundTaskManager) Adopt(
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
 
+		loop:
 			select {
 			case code := <-exitCodeCh:
 				exitCode = code
@@ -255,20 +272,32 @@ func (m *BackgroundTaskManager) Adopt(
 						default:
 							exitCode = 0 // heuristic fallback
 						}
-						break
+						break loop
 					}
-					<-ticker.C
+					select {
+					case <-ticker.C:
+					case <-safetyCtx.Done():
+						break loop
+					}
 				}
+			case <-safetyCtx.Done():
+				// Context cancelled (Kill/CleanupSession) — break out
 			}
 		} else {
 			// No channel provided — use isProcessAlive polling heuristic.
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
 
-			for range ticker.C {
-				if !isProcessAlive(proc.Pid) {
-					exitCode = 0
-					break
+		loop2:
+			for {
+				select {
+				case <-ticker.C:
+					if !isProcessAlive(proc.Pid) {
+						exitCode = 0
+						break loop2
+					}
+				case <-safetyCtx.Done():
+					break loop2
 				}
 			}
 		}
@@ -290,6 +319,11 @@ func (m *BackgroundTaskManager) Adopt(
 		if wasKilled {
 			task.Status = BgTaskKilled
 			task.Error = "killed by user"
+			task.ExitCode = -1
+		} else if safetyCtx.Err() != nil {
+			// safetyCtx expired (24h max lifetime) — process may still be running
+			task.Status = BgTaskError
+			task.Error = "task exceeded maximum lifetime"
 			task.ExitCode = -1
 		} else {
 			task.Status = BgTaskDone
@@ -403,6 +437,48 @@ func (m *BackgroundTaskManager) ListRunning(sessionKey string) []*BackgroundTask
 		}
 	}
 	return tasks
+}
+
+// ListAllForSession returns all tasks for a session (running + done + error).
+// Used by task panel to show completed tasks as well.
+func (m *BackgroundTaskManager) ListAllForSession(sessionKey string) []*BackgroundTask {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ids := m.sessions[sessionKey]
+	tasks := make([]*BackgroundTask, 0, len(ids))
+	for _, id := range ids {
+		if t, ok := m.tasks[id]; ok {
+			tasks = append(tasks, t)
+		}
+	}
+	return tasks
+}
+
+// RemoveCompletedTasks removes all non-running tasks for a session.
+// Called when the bg tasks panel closes to prevent stale completed tasks from
+// accumulating indefinitely. Running tasks are preserved.
+func (m *BackgroundTaskManager) RemoveCompletedTasks(sessionKey string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ids := m.sessions[sessionKey]
+	var running []string
+	for _, id := range ids {
+		if t, ok := m.tasks[id]; ok {
+			t.mu.Lock()
+			status := t.Status
+			t.mu.Unlock()
+			if status == BgTaskRunning {
+				running = append(running, id)
+			} else {
+				delete(m.tasks, id)
+			}
+		}
+	}
+	if len(running) < len(ids) {
+		m.sessions[sessionKey] = running
+	}
 }
 
 // OnComplete registers a callback for task completion in a session.

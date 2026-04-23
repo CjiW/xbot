@@ -21,8 +21,8 @@ func TestCLISettingScope_KnownKeys(t *testing.T) {
 		"theme":               "user",
 		"language":            "user",
 		"runner_server":       "user",
-		"llm_provider":        "global",
-		"llm_model":           "global",
+		"llm_provider":        "subscription",
+		"llm_model":           "subscription",
 		"default_user":        "global",
 		"privileged_user":     "global",
 		"subscription_manage": "action",
@@ -982,7 +982,7 @@ func TestCLISettingScopeClassification(t *testing.T) {
 	}{
 		{key: "theme", scope: "user"},
 		{key: "runner_token", scope: "user"},
-		{key: "llm_model", scope: "global"},
+		{key: "llm_model", scope: "subscription"},
 		{key: "enable_stream", scope: "global"},
 		{key: "subscription_manage", scope: "action"},
 	}

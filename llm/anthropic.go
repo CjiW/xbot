@@ -86,10 +86,13 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 }
 
 // ListModels 返回可用模型列表
+// Anthropic has no /v1/models API, so we only return the configured model.
+// This prevents Ctrl+N from cycling through fake hardcoded model names.
 func (a *AnthropicLLM) ListModels() []string {
-	result := make([]string, len(a.models))
-	copy(result, a.models)
-	return result
+	if a.defaultModel != "" {
+		return []string{a.defaultModel}
+	}
+	return nil
 }
 
 // GetDefaultModel 返回默认模型
@@ -196,8 +199,17 @@ type anthropicResp struct {
 }
 
 // toAnthropicMessages 将业务消息转为 Anthropic 格式（跳过 system 消息，由 buildAnthropicSystem 处理）。
-func toAnthropicMessages(messages []ChatMessage) []anthropicMessage {
+// thinkingEnabled controls whether assistant messages get a thinking content block.
+// Anthropic requires all assistant messages to include thinking blocks when thinking is enabled,
+// even if the original reasoning content was lost (e.g. after compression).
+func toAnthropicMessages(messages []ChatMessage, thinkingEnabled bool) []anthropicMessage {
 	var msgs []anthropicMessage
+
+	// anthropicThinkingBlock represents a thinking content block in assistant messages.
+	type anthropicThinkingBlock struct {
+		Type     string `json:"type"`
+		Thinking string `json:"thinking"`
+	}
 
 	i := 0
 	for i < len(messages) {
@@ -211,13 +223,25 @@ func toAnthropicMessages(messages []ChatMessage) []anthropicMessage {
 			i++
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
-				blocks := make([]interface{}, 0, 1+len(msg.ToolCalls))
+				blocks := make([]interface{}, 0, 2+len(msg.ToolCalls))
+				// Anthropic requires thinking block before tool_use blocks when thinking is enabled
+				if thinkingEnabled {
+					blocks = append(blocks, anthropicThinkingBlock{
+						Type:     "thinking",
+						Thinking: msg.ReasoningContent,
+					})
+				} else if msg.ReasoningContent != "" {
+					blocks = append(blocks, anthropicThinkingBlock{
+						Type:     "thinking",
+						Thinking: msg.ReasoningContent,
+					})
+				}
 				if msg.Content != "" {
 					blocks = append(blocks, anthropicTextBlock{Type: "text", Text: msg.Content})
 				}
 				for _, tc := range msg.ToolCalls {
 					input := json.RawMessage(tc.Arguments)
-					if len(input) == 0 {
+					if len(input) == 0 || !json.Valid(input) {
 						input = json.RawMessage("{}")
 					}
 					blocks = append(blocks, anthropicToolUseBlock{
@@ -226,6 +250,17 @@ func toAnthropicMessages(messages []ChatMessage) []anthropicMessage {
 						Name:  tc.Name,
 						Input: input,
 					})
+				}
+				msgs = append(msgs, anthropicMessage{Role: "assistant", Content: blocks})
+			} else if thinkingEnabled || msg.ReasoningContent != "" {
+				// Text-only assistant message: need blocks for thinking + text
+				blocks := make([]interface{}, 0, 2)
+				blocks = append(blocks, anthropicThinkingBlock{
+					Type:     "thinking",
+					Thinking: msg.ReasoningContent,
+				})
+				if msg.Content != "" {
+					blocks = append(blocks, anthropicTextBlock{Type: "text", Text: msg.Content})
 				}
 				msgs = append(msgs, anthropicMessage{Role: "assistant", Content: blocks})
 			} else {
@@ -378,7 +413,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		"tools_count": len(tools),
 	}).Debug("[LLM] Starting non-stream request")
 
-	anthropicMsgs := toAnthropicMessages(messages)
+	anthropicMsgs := toAnthropicMessages(messages, thinkingMode != "" && thinkingMode != "disabled")
 	body := anthropicReq{
 		Model:     model,
 		MaxTokens: a.getMaxTokens(),
@@ -506,7 +541,7 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		"tools_count": len(tools),
 	}).Debug("[LLM] Starting stream request")
 
-	anthropicMsgs := toAnthropicMessages(messages)
+	anthropicMsgs := toAnthropicMessages(messages, thinkingMode != "" && thinkingMode != "disabled")
 	body := anthropicReq{
 		Model:     model,
 		MaxTokens: a.getMaxTokens(),
@@ -605,10 +640,11 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 		}
 
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "data: ") {
+		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimPrefix(data, " ") // tolerate both "data:" and "data: "
 		if data == "[DONE]" || data == "" {
 			if lastUsage != nil {
 				eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}
@@ -661,7 +697,7 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					tc := &ToolCall{
 						ID:        ev.ContentBlock.ID,
 						Name:      ev.ContentBlock.Name,
-						Arguments: string(ev.ContentBlock.Input),
+						Arguments: "", // input_json_delta events will build up the arguments
 					}
 					toolCallsByIndex[ev.Index] = tc
 					eventChan <- StreamEvent{

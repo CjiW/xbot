@@ -24,8 +24,10 @@
 ### Concurrency
 - **Never `defer` semaphore release inside a loop.** Deadlock when iterations exceed capacity. Release immediately after Generate completes.
 - Non-blocking channel sends: always use `select` with `ctx.Done()` to prevent blocking on full channels during shutdown.
+- **User-scoped semaphores must not be hardcoded to capacity 1 when one sender can own multiple independent chats/sessions (for example remote CLI windows authenticated as `admin`).** Size them from configured concurrency or key them by session, otherwise different windows will block each other and look like a leaked semaphore.
 
 ### Subscription & Model Resolution
+- **`user_llm_subscriptions` DB is the single source of truth for ALL LLM config** (provider, model, base_url, api_key, max_output_tokens, thinking_mode). These keys are subscription-scoped — they must NOT appear in `settingHandlerRegistry`, `CLIRuntimeSettingKeys`, or `user_settings` table. Adding them back would cause startup `applyRuntimeSettings` to overwrite DB with stale values (e.g. name→provider, max_output_tokens→8192).
 - **CLI subscriptions are in config.json, server subscriptions are in DB (`user_llm_subscriptions`).** `GetLLMForModel` must check both — `configSubsFn` (CLI) and `subscriptionSvc` (DB).
 - **`UpdateCachedModels(subID)` nil-derefs if subID not in DB.** Always nil-check `sub` after `Get()`. Config subs have IDs not in DB.
 - **`OnModelsLoaded` callback runs in `NewOpenAILLM`'s async goroutine** — must be concurrency-safe.
@@ -35,7 +37,8 @@
 ### Context Management & Token Estimation
 - **`maybeCompress` must NEVER use pure local token estimation.** Token counts must come from API responses (`lastPromptTokens`/`lastCompletionTokens`). The `no_data` fallback (no API data) skips all compress/masking checks with `totalTokens=0`. Tests must set `cfg.LastPromptTokens` to simulate a previous Run.
 - **`buildToolContextExtras` uses `TenantSession.MemoryService()` for `MemorySvc`/`TenantID`, NOT `LettaMemory` type assertion.** These are tenant-level fields that work for all memory providers. Only LettaMemory-specific fields (CoreMemory, ArchivalMemory, ToolIndexer) stay inside the type assertion.
-- **`ObservationMaskStore` and `OffloadStore` both persist to disk.** Mask uses `{WorkDir}/.xbot/mask_store/{id}.json`, Offload uses `{WorkDir}/.xbot/offload_store/{session}/{id}.json`. `Recall` falls back to disk on memory miss. Both cleaned on compress and `/clear`.
+- **`ObservationMaskStore` and `OffloadStore` both persist to disk.** Mask uses `~/.xbot/mask/{tenantID}/{id}.json`, Offload uses `~/.xbot/offload_store/{session}/{id}.json`. `Recall` falls back to disk on memory miss. Both cleaned on compress and `/clear`.
+- **`lastPersistedCount` MUST be updated after every compression path.** `runCompression`, `handleInputTooLong`, and `context_window_exceeded` handler all replace `s.messages` with a compressed `LLMView` (much shorter). If `lastPersistedCount` is not reset to `len(s.messages)`, `postToolProcessing`'s incremental persistence check (`len(s.messages) > s.lastPersistedCount`) will never be true, and all messages after compression are silently lost on restart. Set it only after successful `Session.Clear() + AddMessage()` writes.
 
 ### Startup
 - `NewOpenAILLM` loads model list asynchronously. `ListModels()` returns fallback immediately.
@@ -45,6 +48,9 @@
 - **`parseKeyInput` with modifiers must NOT set `Text` field.** `Key.String()` returns `Text` if non-empty (ultraviolet `key.go:392`), bypassing `Keystroke()`. `{Code:'c', Text:"c", Mod:ModCtrl}.String()` → `"c"` not `"ctrl+c"`, breaking cancel.
 - **Iteration snapshot deduplication**: PhaseDone + handleAgentMessage can both snapshot the same iteration. Always dedup by iteration number, preferring PhaseDone (has reasoning from server).
 - **`ElapsedWall` must be set in ALL snapshot paths** — missing it causes total time to fall back to summing only last iteration's tool.Elapsed.
+- **SubAgent remote mode: `convertWsProgressToCLI` must copy StreamContent/ReasoningStreamContent** from WsProgressPayload to CLIProgressPayload — otherwise stream content never reaches CLI.
+- **SubAgent remote mode: tick chain breakage** — `tickCmd()` injection must be unconditional (not gated on `!m.fastTickActive`) in splashDoneMsg, PhaseDone return, and history reload paths. Conditional injection causes chain to break during session switches.
+- **SubAgent session view: viewport freeze on return** — when main session's turn ended while viewing agent session, PhaseDone is detected on return but assistant reply is missing. Tick handler with `busy=false` must check `!m.renderCacheValid` as fallback.
 
 ### Windows
 - `syscall.PROCESS_QUERY_LIMITED_INFORMATION` and `STILL_ACTIVE` not in Go stdlib — define as uint32 constants.

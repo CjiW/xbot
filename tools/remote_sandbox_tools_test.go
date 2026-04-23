@@ -24,13 +24,22 @@ func newRemoteMockSandbox(workspace string) *MockSandbox {
 
 	mock.ExecFunc = func(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
 		args := spec.Args
-		// Parse shell -l -c "..." invocation
+		// Parse shell invocation.
+		// Unix: <shell> -l -c "..."
 		if len(args) >= 4 && args[1] == "-l" && args[2] == "-c" {
 			return execSimulated(mock, args[3], spec.Dir, workspace)
 		}
+		// Windows PowerShell: powershell.exe -Command "..."
+		if len(args) >= 3 && strings.EqualFold(args[1], "-Command") {
+			return execSimulated(mock, args[2], spec.Dir, workspace)
+		}
 		// Direct command invocation
 		if len(args) >= 1 {
-			return execSimulated(mock, strings.Join(args[1:], " "), spec.Dir, workspace)
+			start := 1
+			if len(args) == 1 {
+				start = 0
+			}
+			return execSimulated(mock, strings.Join(args[start:], " "), spec.Dir, workspace)
 		}
 		return &ExecResult{ExitCode: 127, Stderr: "mock: unknown command"}, nil
 	}

@@ -3,6 +3,7 @@ import type { TiptapEditorHandle } from './components/TiptapEditor'
 import type { PresetCommand } from './types'
 import ProgressPanel from './components/ProgressPanel'
 import AssistantTurn from './components/AssistantTurn'
+import ChatSidebar from './components/ChatSidebar'
 
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -1244,6 +1245,15 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         </div>
       )}
 
+      {/* Main content: ChatSidebar + messages */}
+      <div className="flex flex-1 min-h-0">
+        <ChatSidebar
+          onSwitchChat={() => { setMessages([]) }}
+          onNewChat={() => { setMessages([]) }}
+          currentChatID=""
+        />
+        <div className="flex flex-col flex-1 min-w-0">
+
       {/* Messages */}
       <div
         ref={messagesContainerRef}
@@ -1388,9 +1398,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             </button>
           )}
         </div>
-      </div>
+	      </div>
+	      </div>{/* end flex-1 inner column */}
+	      </div>{/* end ChatSidebar + content row */}
 
-      {/* Toast notifications */}
+	      {/* Toast notifications */}
       <div className="fixed top-4 right-4 z-50 space-y-2">
         {toasts.map(toast => (
           <div

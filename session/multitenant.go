@@ -671,6 +671,50 @@ func (m *MultiTenantSession) cleanupInactiveResources() {
 	}
 }
 
+// DestroySession completely removes a tenant session: cache eviction, DB deletion
+// (with CASCADE to messages), and MCP cleanup. Used when SubAgent sessions end
+// their lifecycle to prevent stale data leaking into future sessions with the
+// same role/instance key.
+func (m *MultiTenantSession) DestroySession(channel, chatID string) error {
+	key := channel + ":" + chatID
+
+	m.mu.Lock()
+	sess, ok := m.tenantCache[key]
+	if ok {
+		delete(m.tenantCache, key)
+	}
+	onEvict := m.onSessionEvict
+	m.mu.Unlock()
+
+	if !ok {
+		// Not in cache — still try to delete from DB in case it exists there.
+		tenantID, err := m.tenantSvc.GetTenantIDByChannelChatID(channel, chatID)
+		if err != nil || tenantID == 0 {
+			return nil // doesn't exist, nothing to do
+		}
+		_ = m.tenantSvc.DeleteTenant(tenantID)
+		return nil
+	}
+
+	// Close MCP connections outside lock
+	sess.Close()
+
+	// Delete from DB (CASCADE removes all messages)
+	_ = m.tenantSvc.DeleteTenant(sess.TenantID())
+
+	// Notify Registry to clean up session-scoped activations
+	if onEvict != nil {
+		onEvict(key)
+	}
+
+	log.WithFields(log.Fields{
+		"session":   key,
+		"tenant_id": sess.TenantID(),
+	}).Info("Tenant session destroyed")
+
+	return nil
+}
+
 // InvalidateAll 使所有缓存会话的 MCP 连接失效，强制下次使用时重新加载
 func (m *MultiTenantSession) InvalidateAll() {
 	m.mu.Lock()
@@ -823,7 +867,8 @@ func (m *MultiTenantSession) GetMemoryStats(ctx context.Context, channel, chatID
 }
 
 // TrimHistory deletes messages newer than or equal to the given cutoff timestamp
-// for the tenant identified by channel and chatID.
+// for the tenant identified by channel and chatID, and clears the cached token
+// state so maybeCompress doesn't use stale values from before the rewind.
 func (m *MultiTenantSession) TrimHistory(channel, chatID string, cutoff time.Time) error {
 	if cutoff.IsZero() {
 		return nil
@@ -833,5 +878,13 @@ func (m *MultiTenantSession) TrimHistory(channel, chatID string, cutoff time.Tim
 		return fmt.Errorf("get tenant: %w", err)
 	}
 	_, err = m.sessionSvc.PurgeNewerThanOrEqual(tenantID, cutoff)
-	return err
+	if err != nil {
+		return err
+	}
+	// Clear token state so maybeCompress doesn't use stale values from before
+	// the rewind (would otherwise trigger incorrect compression on next Run).
+	if err := m.memorySvc.SetTokenState(context.Background(), tenantID, 0, 0); err != nil {
+		log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to clear token state after trim")
+	}
+	return nil
 }

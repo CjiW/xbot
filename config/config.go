@@ -169,7 +169,7 @@ type AgentConfig struct {
 	EnableAutoCompress   *bool   `json:"enable_auto_compress,omitempty"`
 	MaxContextTokens     int     `json:"max_context_tokens"`
 	CompressionThreshold float64 `json:"compression_threshold"`
-	DynamicMaxTokens     *bool   `json:"dynamic_max_tokens,omitempty"` // nil = true (default)
+	DynamicMaxTokens     *bool   `json:"dynamic_max_tokens,omitempty"` // DEPRECATED: no longer used, kept for config.json compat
 
 	PurgeOldMessages bool `json:"purge_old_messages"`
 
@@ -413,11 +413,6 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Agent.EnableAutoCompress = &b
 		}
 	}
-	if v := os.Getenv("AGENT_DYNAMIC_MAX_TOKENS"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.Agent.DynamicMaxTokens = &b
-		}
-	}
 	if v := os.Getenv("AGENT_MAX_CONTEXT_TOKENS"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxContextTokens == 0 {
 			cfg.Agent.MaxContextTokens = i
@@ -636,15 +631,6 @@ func (a AgentConfig) EffectiveEnableAutoCompress() bool {
 	return *a.EnableAutoCompress
 }
 
-// EffectiveDynamicMaxTokens returns whether dynamic max_tokens adjustment is enabled.
-// Default: true (enabled). Set agent.dynamic_max_tokens=false in config.json to disable.
-func (a AgentConfig) EffectiveDynamicMaxTokens() bool {
-	if a.DynamicMaxTokens == nil {
-		return true
-	}
-	return *a.DynamicMaxTokens
-}
-
 // Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。
 // 这保证了：config.json 提供持久化配置，环境变量用于临时覆盖（如 CI/Docker）。
 func Load() *Config {
@@ -763,11 +749,14 @@ func Load() *Config {
 	if cfg.Agent.MaxSubAgentDepth == 0 {
 		cfg.Agent.MaxSubAgentDepth = 6
 	}
+	// Server.Host/Port defaults follow Web.Host/Port since all traffic
+	// (HTTP API, WebSocket, runner WS) goes through the same port.
+	// Keeping them in sync avoids confusion.
 	if cfg.Server.Host == "" {
-		cfg.Server.Host = "0.0.0.0"
+		cfg.Server.Host = cfg.Web.Host // "0.0.0.0"
 	}
 	if cfg.Server.Port == 0 {
-		cfg.Server.Port = 8080
+		cfg.Server.Port = cfg.Web.Port // 8082
 	}
 	if cfg.Server.ReadTimeout == 0 {
 		cfg.Server.ReadTimeout = 30 * time.Second
@@ -780,6 +769,16 @@ func Load() *Config {
 	}
 
 	return cfg
+}
+
+// PublicWSAddr returns the WebSocket address runners should connect to.
+// Uses Sandbox.PublicURL if set, otherwise falls back to the unified
+// web server address (Server.Host:Server.Port, which defaults to Web.Host:Web.Port).
+func (c *Config) PublicWSAddr() string {
+	if c.Sandbox.PublicURL != "" {
+		return c.Sandbox.PublicURL
+	}
+	return fmt.Sprintf("ws://%s:%d", c.Server.Host, c.Server.Port)
 }
 
 // getAdminChatID 获取管理员会话 ID，实现回退逻辑

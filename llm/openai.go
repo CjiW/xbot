@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	log "xbot/logger"
@@ -20,57 +19,18 @@ import (
 
 // OpenAILLM OpenAI LLM 实现
 type OpenAILLM struct {
-	client         *openai.Client
-	mu             sync.RWMutex   // 保护 models 和 defaultModel 的并发读写（C-12）
-	models         []string       // 可用模型列表
-	defaultModel   string         // 默认模型
-	maxTokens      int            // 最大生成 token 数（用户配置值，作为上限）
-	onModelsLoaded func([]string) // callback after models loaded from API
-
-	// dynamicMaxTokens is the dynamically adjusted max_tokens for the next API call.
-	// Set by AdjustMaxTokens() based on remaining context space. Resets after each call.
-	// When 0 (default), buildParams uses the static maxTokens value.
-	// Uses atomic for thread-safety: the same OpenAILLM instance may be shared
-	// across concurrent agents (defaultLLM singleton, or per-user cached client).
-	dynamicMaxTokens atomic.Int64
+	client            *openai.Client
+	mu                sync.RWMutex   // 保护 models 和 defaultModel 的并发读写（C-12）
+	models            []string       // 可用模型列表
+	defaultModel      string         // 默认模型
+	maxTokens         int            // 最大生成 token 数（用户配置值，作为上限）
+	onModelsLoaded    func([]string) // callback after models loaded from API
+	onModelsLoadError func(error)    // callback after models load fails
+	modelsLoaded      bool           // true after first ListModels() triggers async fetch
 
 	// maxTokensUpgrade tracks models that reject the legacy max_tokens param
 	// and need the newer max_completion_tokens. Learned at runtime via 400 errors.
 	maxTokensUpgrade sync.Map // model -> bool
-}
-
-// MaxTokensAdjuster is an optional interface that LLM clients can implement
-// to support dynamic max_tokens adjustment based on remaining context space.
-// The engine calls AdjustMaxTokens before each API call when the feature is enabled.
-type MaxTokensAdjuster interface {
-	AdjustMaxTokens(inputTokens, maxContextTokens int)
-}
-
-// AdjustMaxTokens dynamically adjusts the max_tokens parameter for the next API call.
-// inputTokens: the token count from the previous API call (or estimated).
-// maxContextTokens: the model's context window size (MaxContextTokens config).
-// The adjusted value is: min(configuredMaxTokens, maxContextTokens - inputTokens - safetyMargin)
-// This prevents context_window_exceeded errors by leaving room for the response.
-func (o *OpenAILLM) AdjustMaxTokens(inputTokens, maxContextTokens int) {
-	if maxContextTokens <= 0 || inputTokens <= 0 {
-		return
-	}
-	// Safety margin: 10% of context window or at least 2048 tokens.
-	// Accounts for token counting inaccuracies, tool result growth, and
-	// the next iteration's input increase.
-	safetyMargin := maxContextTokens / 10
-	if safetyMargin < 2048 {
-		safetyMargin = 2048
-	}
-	available := maxContextTokens - inputTokens - safetyMargin
-	if available <= 0 {
-		available = 256 // minimum: let the model at least respond with something
-	}
-	if available < o.maxTokens {
-		o.dynamicMaxTokens.Store(int64(available))
-	}
-	// else: context is small enough, use the full configured maxTokens
-	// (dynamicMaxTokens stays 0, which means "use static value")
 }
 
 // OpenAIConfig OpenAI 配置
@@ -139,19 +99,11 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 		o.mu.Unlock()
 	}
 
-	// Load model list asynchronously to avoid blocking startup.
-	// The fallback model above ensures ListModels() works before API responds.
-	onError := cfg.OnModelsLoadError
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := o.LoadModelsFromAPI(ctx); err != nil {
-			log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
-			if onError != nil {
-				onError(err)
-			}
-		}
-	}()
+	// Lazy: don't fire LoadModelsFromAPI in constructor.
+	// Trigger on first ListModels() call instead, so unused clients
+	// (e.g. subscriptions for users who haven't sent a message yet)
+	// don't spam the API on startup.
+	o.onModelsLoadError = cfg.OnModelsLoadError
 
 	return o
 }
@@ -174,12 +126,44 @@ var stainlessHeaders = []string{
 }
 
 // ListModels 获取可用模型列表
+// Triggers an async model list fetch on the first call (lazy loading).
 func (o *OpenAILLM) ListModels() []string {
 	o.mu.RLock()
-	defer o.mu.RUnlock()
 	result := make([]string, len(o.models))
 	copy(result, o.models)
+	loaded := o.modelsLoaded
+	o.mu.RUnlock()
+
+	// Lazy load: trigger async fetch on first call.
+	if !loaded {
+		o.triggerModelLoad()
+	}
+
 	return result
+}
+
+// triggerModelLoad fires a one-time async model list fetch.
+// Subsequent calls are no-ops once modelsLoaded is set.
+func (o *OpenAILLM) triggerModelLoad() {
+	o.mu.Lock()
+	if o.modelsLoaded {
+		o.mu.Unlock()
+		return
+	}
+	o.modelsLoaded = true
+	onError := o.onModelsLoadError
+	o.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := o.LoadModelsFromAPI(ctx); err != nil {
+			log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
+			if onError != nil {
+				onError(err)
+			}
+		}
+	}()
 }
 
 // GetDefaultModel 获取默认模型
@@ -561,13 +545,7 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	// runtime and switch to max_completion_tokens (see isMaxTokensParamError).
 	// Note: some providers (GLM) silently ignore max_completion_tokens without
 	// error, so max_tokens is the safer default.
-	// Determine max_tokens: use dynamic value if set (from AdjustMaxTokens),
-	// otherwise fall back to the static configured value.
-	// Swap(0) atomically reads and resets in one operation.
-	effectiveMaxTokens := int(o.dynamicMaxTokens.Swap(0))
-	if effectiveMaxTokens <= 0 {
-		effectiveMaxTokens = o.maxTokens
-	}
+	effectiveMaxTokens := o.maxTokens
 
 	// Clamp to model's max output token limit to prevent API errors.
 	// Models not in this table are left unclamped — the API will return

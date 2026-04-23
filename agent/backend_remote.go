@@ -12,6 +12,7 @@ import (
 
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/clipanic"
 	"xbot/config"
 	"xbot/event"
 	llm "xbot/llm"
@@ -55,6 +56,10 @@ type RemoteBackend struct {
 	// readPump lifecycle — WaitGroup ensures old readPump exits
 	// before reconnect spawns a new one, preventing goroutine leaks.
 	readPumpWg sync.WaitGroup
+
+	// Event seq tracking — tracks the highest seq from server events
+	// so that on reconnect we send last_seq and only replay missed events.
+	lastSeq atomic.Uint64
 
 	// Outbound message callback (for final agent replies)
 	outboundMu sync.RWMutex
@@ -107,10 +112,13 @@ type wsIncomingMessage struct {
 	Content         string                     `json:"content,omitempty"`
 	OriginalContent string                     `json:"original_content,omitempty"`
 	TS              int64                      `json:"ts,omitempty"`
+	Seq             uint64                     `json:"seq,omitempty"`
 	Progress        *channel.WsProgressPayload `json:"progress,omitempty"`
 	ProgressHistory string                     `json:"progress_history,omitempty"`
 	Result          json.RawMessage            `json:"result,omitempty"`
 	Error           string                     `json:"error,omitempty"`
+	Channel         string                     `json:"channel,omitempty"`
+	ChatID          string                     `json:"chat_id,omitempty"`
 }
 
 // wsOutgoingMessage represents a message sent to the server.
@@ -156,10 +164,13 @@ func (b *RemoteBackend) Stop() {
 			b.conn = nil
 		}
 		b.connMu.Unlock()
-		// Unblock all pending RPC calls
+		// Unblock all pending RPC calls (non-blocking write, consistent with readPump)
 		b.rpcMu.Lock()
 		for id, ch := range b.pending {
-			close(ch)
+			select {
+			case ch <- &rpcResponse{Error: "connection closed"}:
+			default:
+			}
 			delete(b.pending, id)
 		}
 		b.rpcMu.Unlock()
@@ -338,7 +349,40 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 	}
 	log.Info("Connected to remote xbot server")
 	b.setConnState("connected")
+
+	// Send sync message so server replays missed events from eventStream buffer.
+	// This enables mid-turn reconnect: a new CLI terminal sees recent progress/stream
+	// events without waiting for the 2s timeout fallback.
+	syncMsg := struct {
+		Type    string `json:"type"`
+		LastSeq uint64 `json:"last_seq"`
+	}{
+		Type:    "sync",
+		LastSeq: b.lastSeq.Load(),
+	}
+	if err := conn.WriteJSON(syncMsg); err != nil {
+		log.WithError(err).Warn("Failed to send sync message")
+	}
+
 	return nil
+}
+
+// SubscribeChat sends a subscribe message to the server so the Hub routes
+// server-pushed events (progress, stream, outbound) to this WS client.
+// Must be called after connect() with the business chatID (e.g. "/home/user").
+func (b *RemoteBackend) SubscribeChat(chatID string) {
+	b.connMu.Lock()
+	conn := b.conn
+	b.connMu.Unlock()
+	if conn == nil {
+		return
+	}
+	subMsg := wsOutgoingMessage{Type: "subscribe", ChatID: chatID}
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(subMsg); err != nil {
+		log.WithError(err).Warn("Failed to send subscribe message")
+	}
+	conn.SetWriteDeadline(time.Time{})
 }
 
 // ---------------------------------------------------------------------------
@@ -370,9 +414,15 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 				log.WithError(err).Info("WS connection closed")
 			}
 			// Unblock all pending RPC callers so they don't hang until timeout.
+			// Use non-blocking write instead of close(ch) to avoid double-close
+			// panic if Stop() runs concurrently (both hold rpcMu but close on
+			// buffered-chan can still race if channel is already drained).
 			b.rpcMu.Lock()
 			for id, ch := range b.pending {
-				close(ch)
+				select {
+				case ch <- &rpcResponse{Error: "connection lost"}:
+				default:
+				}
 				delete(b.pending, id)
 			}
 			b.rpcMu.Unlock()
@@ -388,14 +438,27 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			log.WithError(err).Debug("Invalid WS message from server")
 			continue
 		}
+		// Track highest seq for reconnect sync.
+		if msg.Seq > 0 {
+			for {
+				old := b.lastSeq.Load()
+				if msg.Seq <= old || b.lastSeq.CompareAndSwap(old, msg.Seq) {
+					break
+				}
+			}
+		}
 		switch msg.Type {
 		case "rpc_response":
 			b.handleRPCResponse(&msg)
 		case "text":
 			outMsg := bus.OutboundMessage{
 				Content:  msg.Content,
-				Channel:  "remote",
+				Channel:  msg.Channel,
+				ChatID:   msg.ChatID,
 				Metadata: make(map[string]string),
+			}
+			if outMsg.Channel == "" {
+				outMsg.Channel = "remote"
 			}
 			if msg.ID != "" {
 				outMsg.Metadata["message_id"] = msg.ID
@@ -411,6 +474,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
+							clipanic.Report("agent.RemoteBackend.OnOutbound", outMsg, r)
 							log.WithField("panic", r).Warn("RemoteBackend outbound callback panicked")
 						}
 					}()
@@ -424,6 +488,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			b.dispatchProgress(convertWsProgressToCLI(msg.Progress))
 		case "stream_content":
 			b.dispatchProgress(&channel.CLIProgressPayload{
+				ChatID:                 msg.Progress.ChatID,
 				StreamContent:          msg.Progress.GetStreamContent(),
 				ReasoningStreamContent: msg.Progress.GetReasoningStreamContent(),
 			})
@@ -445,7 +510,15 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 					cb := b.outboundCb
 					b.outboundMu.RUnlock()
 					if cb != nil {
-						cb(outMsg)
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									clipanic.Report("agent.RemoteBackend.OnAskUser", outMsg, r)
+									log.WithField("panic", r).Warn("RemoteBackend ask_user callback panicked")
+								}
+							}()
+							cb(outMsg)
+						}()
 					} else {
 						log.Warn("Received ask_user but no outbound callback registered")
 					}
@@ -485,6 +558,7 @@ func (b *RemoteBackend) dispatchProgress(payload *channel.CLIProgressPayload) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					clipanic.Report("agent.RemoteBackend.OnProgress", payload, r)
 					log.WithField("panic", r).Warn("RemoteBackend progress callback panicked")
 				}
 			}()
@@ -498,10 +572,14 @@ func convertWsProgressToCLI(wp *channel.WsProgressPayload) *channel.CLIProgressP
 		return nil
 	}
 	payload := &channel.CLIProgressPayload{
-		Phase:     wp.Phase,
-		Iteration: wp.Iteration,
-		Thinking:  wp.Thinking,
-		Reasoning: wp.Reasoning,
+		ChatID:                 wp.ChatID,
+		Phase:                  wp.Phase,
+		Iteration:              wp.Iteration,
+		Thinking:               wp.Thinking,
+		Reasoning:              wp.Reasoning,
+		StreamContent:          wp.StreamContent,
+		ReasoningStreamContent: wp.ReasoningStreamContent,
+		HistoryCompacted:       wp.HistoryCompacted,
 	}
 	for _, t := range wp.ActiveTools {
 		payload.ActiveTools = append(payload.ActiveTools, channel.CLIToolProgress{
@@ -720,6 +798,59 @@ func (b *RemoteBackend) callRPCString(method string, params any) (string, error)
 	return s, nil
 }
 
+func (b *RemoteBackend) GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool) {
+	raw, err := b.callRPC("get_session_messages", map[string]any{
+		"channel": channelName, "chat_id": chatID,
+		"role": roleName, "instance": instance,
+	})
+	if err != nil {
+		return nil, false
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var msgs []SessionMessage
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		return nil, false
+	}
+	return msgs, true
+}
+
+func (b *RemoteBackend) GetAgentSessionDump(channelName, chatID, roleName, instance string) (*AgentSessionDump, bool) {
+	raw, err := b.callRPC("get_agent_session_dump", map[string]any{
+		"channel": channelName, "chat_id": chatID,
+		"role": roleName, "instance": instance,
+	})
+	if err != nil {
+		return nil, false
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var dump AgentSessionDump
+	if err := json.Unmarshal(raw, &dump); err != nil {
+		return nil, false
+	}
+	return &dump, true
+}
+
+func (b *RemoteBackend) GetAgentSessionDumpByFullKey(fullKey string) (*AgentSessionDump, bool) {
+	raw, err := b.callRPC("get_agent_session_dump_by_full_key", map[string]any{
+		"full_key": fullKey,
+	})
+	if err != nil {
+		return nil, false
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var dump AgentSessionDump
+	if err := json.Unmarshal(raw, &dump); err != nil {
+		return nil, false
+	}
+	return &dump, true
+}
+
 func (b *RemoteBackend) callRPCInt(method string, params any) (int, error) {
 	raw, err := b.callRPC(method, params)
 	if err != nil {
@@ -805,29 +936,29 @@ func (b *RemoteBackend) ClearProxyLLM(senderID string) {
 }
 
 func (b *RemoteBackend) SetUserModel(senderID, model string) error {
-	return b.callRPCVoid("set_user_model", map[string]string{"model": model})
+	return b.callRPCVoid("set_user_model", map[string]string{"model": model, "sender_id": senderID})
 }
 
 // SwitchModel switches the active model for a user (memory-only, like LLMFactory.SwitchModel).
 // Unlike SetUserModel, this does not require an existing LLMConfig.
 func (b *RemoteBackend) SwitchModel(senderID, model string) error {
-	return b.callRPCVoid("switch_model", map[string]string{"model": model})
+	return b.callRPCVoid("switch_model", map[string]string{"model": model, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetUserMaxContext(senderID string, maxContext int) error {
-	return b.callRPCVoid("set_user_max_context", map[string]any{"max_context": maxContext})
+	return b.callRPCVoid("set_user_max_context", map[string]any{"max_context": maxContext, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
-	return b.callRPCVoid("set_user_max_output_tokens", map[string]any{"max_tokens": maxTokens})
+	return b.callRPCVoid("set_user_max_output_tokens", map[string]any{"max_tokens": maxTokens, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetUserThinkingMode(senderID string, mode string) error {
-	return b.callRPCVoid("set_user_thinking_mode", map[string]string{"mode": mode})
+	return b.callRPCVoid("set_user_thinking_mode", map[string]string{"mode": mode, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetLLMConcurrency(senderID string, personal int) error {
-	return b.callRPCVoid("set_llm_concurrency", map[string]any{"personal": personal})
+	return b.callRPCVoid("set_llm_concurrency", map[string]any{"personal": personal, "sender_id": senderID})
 }
 
 // ---------------------------------------------------------------------------
@@ -840,22 +971,22 @@ func (b *RemoteBackend) GetDefaultModel() string {
 }
 
 func (b *RemoteBackend) GetUserMaxContext(senderID string) int {
-	n, _ := b.callRPCInt("get_user_max_context", nil)
+	n, _ := b.callRPCInt("get_user_max_context", map[string]string{"sender_id": senderID})
 	return n
 }
 
 func (b *RemoteBackend) GetUserMaxOutputTokens(senderID string) int {
-	n, _ := b.callRPCInt("get_user_max_output_tokens", nil)
+	n, _ := b.callRPCInt("get_user_max_output_tokens", map[string]string{"sender_id": senderID})
 	return n
 }
 
 func (b *RemoteBackend) GetUserThinkingMode(senderID string) string {
-	s, _ := b.callRPCString("get_user_thinking_mode", nil)
+	s, _ := b.callRPCString("get_user_thinking_mode", map[string]string{"sender_id": senderID})
 	return s
 }
 
 func (b *RemoteBackend) GetLLMConcurrency(senderID string) int {
-	n, _ := b.callRPCInt("get_llm_concurrency", nil)
+	n, _ := b.callRPCInt("get_llm_concurrency", map[string]string{"sender_id": senderID})
 	return n
 }
 
@@ -987,7 +1118,7 @@ func (b *RemoteBackend) GetMemoryStats(ctx context.Context, ch, chatID, senderID
 }
 
 func (b *RemoteBackend) GetUserTokenUsage(senderID string) (map[string]any, error) {
-	raw, err := b.callRPC("get_user_token_usage", nil)
+	raw, err := b.callRPC("get_user_token_usage", map[string]string{"sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -1002,7 +1133,7 @@ func (b *RemoteBackend) GetUserTokenUsage(senderID string) (map[string]any, erro
 }
 
 func (b *RemoteBackend) GetDailyTokenUsage(senderID string, days int) ([]map[string]any, error) {
-	raw, err := b.callRPC("get_daily_token_usage", map[string]any{"days": days})
+	raw, err := b.callRPC("get_daily_token_usage", map[string]any{"days": days, "sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -1021,8 +1152,67 @@ func (b *RemoteBackend) GetBgTaskCount(sessionKey string) int {
 	return n
 }
 
+// BgTaskJSON is a transport-only struct for serializing background tasks over RPC.
+type BgTaskJSON struct {
+	ID         string `json:"id"`
+	Command    string `json:"command"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	Output     string `json:"output"`
+	ExitCode   int    `json:"exit_code"`
+	Error      string `json:"error,omitempty"`
+}
+
+func (b *RemoteBackend) ListBgTasks(sessionKey string) ([]BgTaskJSON, error) {
+	raw, err := b.callRPC("list_bg_tasks", map[string]string{"session_key": sessionKey})
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var result []BgTaskJSON
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal bg tasks: %w", err)
+	}
+	return result, nil
+}
+
+func (b *RemoteBackend) KillBgTask(taskID string) error {
+	return b.callRPCVoid("kill_bg_task", map[string]string{"task_id": taskID})
+}
+
+func (b *RemoteBackend) CleanupCompletedBgTasks(sessionKey string) {
+	_ = b.callRPCVoid("cleanup_completed_bg_tasks", map[string]string{"session_key": sessionKey})
+}
+
+// TenantInfo is a transport-only struct for serializing tenant info over RPC.
+type TenantInfo struct {
+	ID           int64  `json:"id"`
+	Channel      string `json:"channel"`
+	ChatID       string `json:"chat_id"`
+	CreatedAt    string `json:"created_at"`
+	LastActiveAt string `json:"last_active_at"`
+}
+
+func (b *RemoteBackend) ListTenants() ([]TenantInfo, error) {
+	raw, err := b.callRPC("list_tenants", nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var result []TenantInfo
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal tenants: %w", err)
+	}
+	return result, nil
+}
+
 func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
-	raw, err := b.callRPC("list_subscriptions", nil)
+	raw, err := b.callRPC("list_subscriptions", map[string]string{"sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -1037,7 +1227,7 @@ func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscripti
 }
 
 func (b *RemoteBackend) GetDefaultSubscription(senderID string) (*channel.Subscription, error) {
-	raw, err := b.callRPC("get_default_subscription", nil)
+	raw, err := b.callRPC("get_default_subscription", map[string]string{"sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -1059,8 +1249,8 @@ func (b *RemoteBackend) RemoveSubscription(id string) error {
 	return b.callRPCVoid("remove_subscription", map[string]string{"id": id})
 }
 
-func (b *RemoteBackend) SetDefaultSubscription(id string) error {
-	return b.callRPCVoid("set_default_subscription", map[string]string{"id": id})
+func (b *RemoteBackend) SetDefaultSubscription(id string, chatID string) error {
+	return b.callRPCVoid("set_default_subscription", map[string]string{"id": id, "chat_id": chatID})
 }
 
 func (b *RemoteBackend) RenameSubscription(id, name string) error {

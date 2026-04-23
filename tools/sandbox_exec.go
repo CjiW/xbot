@@ -51,9 +51,6 @@ func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
 	if sandbox == nil {
 		sandbox = GetSandbox()
 	}
-	if sandbox.Name() == "none" {
-		return "", fmt.Errorf("sandbox not enabled")
-	}
 
 	userID := ctx.OriginUserID
 	if userID == "" {
@@ -72,7 +69,7 @@ func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
 
 	spec := ExecSpec{
 		Command: shell,
-		Args:    []string{shell, "-l", "-c", shellCmd},
+		Args:    loginShellArgs(shell, shellCmd),
 		Shell:   false,
 		Timeout: 30 * time.Second,
 		UserID:  userID,

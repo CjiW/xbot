@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"xbot/bus"
+	channelpkg "xbot/channel"
+	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/tools"
@@ -72,10 +75,186 @@ func (a *Agent) cleanupExpiredSessions() {
 				"role":      ia.roleName,
 				"idle_time": now.Sub(lastUsed).String(),
 			}).Info("Cleaning up expired interactive session")
-			a.interactiveSubAgents.Delete(key)
+			a.destroyInteractiveSession(key)
 		}
 		return true
 	})
+}
+
+// recordIterationSnapshot appends the previous snapshot to iteration history if the
+// shouldAppend predicate returns true. Uses CAS loop to avoid TOCTOU races on sync.Map.
+func (a *Agent) recordIterationSnapshot(key string, shouldAppend func(prev *channelpkg.CLIProgressPayload) bool) {
+	prevSnap, loaded := a.lastProgressSnapshot.Load(key)
+	if !loaded {
+		return
+	}
+	prev := prevSnap.(*channelpkg.CLIProgressPayload)
+	if !shouldAppend(prev) {
+		return
+	}
+	for {
+		histPtr, _ := a.iterationHistories.LoadOrStore(key, &[]channelpkg.CLIProgressPayload{})
+		hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
+		already := false
+		for _, h := range hist {
+			if h.Iteration == prev.Iteration {
+				already = true
+				break
+			}
+		}
+		if already {
+			return
+		}
+		updated := append(hist, *prev)
+		if a.iterationHistories.CompareAndSwap(key, histPtr, &updated) {
+			return
+		}
+	}
+}
+
+// wireSubAgentCLIProgress sets up ProgressEventHandler and stream callbacks on cfg
+// so the SubAgent's progress is pushed to CLI (both local and remote) with its own
+// ChatID. This enables Ctrl+T session switching to show real-time progress for both
+// interactive and one-shot SubAgents.
+func (a *Agent) wireSubAgentCLIProgress(key, originChatID string, cfg *RunConfig) {
+	if a.channelFinder == nil {
+		return
+	}
+	ch, ok := a.channelFinder("cli")
+	if !ok {
+		return
+	}
+	var localCh *channelpkg.CLIChannel
+	var remoteCh *channelpkg.RemoteCLIChannel
+	if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+		localCh = cc
+	} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+		remoteCh = rc
+	}
+	if localCh == nil && remoteCh == nil {
+		return
+	}
+
+	agentProgressKey := "agent:" + key
+	cfg.ProgressEventHandler = func(event *ProgressEvent) {
+		if event == nil || event.Structured == nil {
+			return
+		}
+		s := event.Structured
+
+		cliPayload := &channelpkg.CLIProgressPayload{
+			ChatID: agentProgressKey, Phase: string(s.Phase),
+			Iteration: s.Iteration, Thinking: s.ThinkingContent,
+			Reasoning: s.ReasoningContent, HistoryCompacted: s.HistoryCompacted,
+		}
+		for _, t := range s.ActiveTools {
+			cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
+				Name: t.Name, Label: t.Label, Status: string(t.Status),
+				Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+			})
+		}
+		for _, t := range s.CompletedTools {
+			cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
+				Name: t.Name, Label: t.Label, Status: string(t.Status),
+				Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+			})
+		}
+		if len(s.Todos) > 0 {
+			cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+			for i, td := range s.Todos {
+				cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+			}
+		}
+		if s.TokenUsage != nil {
+			cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
+				PromptTokens: s.TokenUsage.PromptTokens, CompletionTokens: s.TokenUsage.CompletionTokens,
+				TotalTokens: s.TokenUsage.TotalTokens, CacheHitTokens: s.TokenUsage.CacheHitTokens,
+			}
+		}
+
+		if localCh != nil {
+			localCh.SendProgress(key, cliPayload)
+		} else if remoteCh != nil {
+			wsPayload := &channelpkg.WsProgressPayload{
+				ChatID: agentProgressKey, Phase: string(s.Phase),
+				Iteration: s.Iteration, Thinking: s.ThinkingContent,
+			}
+			for _, t := range s.ActiveTools {
+				wsPayload.ActiveTools = append(wsPayload.ActiveTools, channelpkg.WsToolProgress{
+					Name: t.Name, Label: t.Label, Status: string(t.Status),
+					Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+				})
+			}
+			for _, t := range s.CompletedTools {
+				wsPayload.CompletedTools = append(wsPayload.CompletedTools, channelpkg.WsToolProgress{
+					Name: t.Name, Label: t.Label, Status: string(t.Status),
+					Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+				})
+			}
+			remoteCh.SendProgress(originChatID, wsPayload)
+		}
+
+		// Save snapshot + track iteration history for mid-session reconnect.
+		a.recordIterationSnapshot(agentProgressKey, func(prev *channelpkg.CLIProgressPayload) bool {
+			return s.Iteration > prev.Iteration && prev.Iteration >= 0
+		})
+		a.lastProgressSnapshot.Store(agentProgressKey, cliPayload)
+	}
+
+	// Wire stream callbacks for real-time rendering
+	cfg.Stream = true
+	if localCh != nil {
+		cfg.StreamContentFunc = func(content string) {
+			localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, StreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.StreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
+			}
+		}
+		cfg.StreamReasoningFunc = func(content string) {
+			localCh.SendProgress(key, &channelpkg.CLIProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.ReasoningStreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
+			}
+		}
+	} else if remoteCh != nil {
+		cfg.StreamContentFunc = func(content string) {
+			remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{ChatID: agentProgressKey, StreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.StreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
+			}
+		}
+		cfg.StreamReasoningFunc = func(content string) {
+			remoteCh.SendProgress(originChatID, &channelpkg.WsProgressPayload{ChatID: agentProgressKey, ReasoningStreamContent: content})
+			if snap, ok := a.lastProgressSnapshot.Load(agentProgressKey); ok {
+				cp := *snap.(*channelpkg.CLIProgressPayload)
+				cp.ReasoningStreamContent = content
+				a.lastProgressSnapshot.Store(agentProgressKey, &cp)
+			}
+		}
+	}
+}
+
+// destroyInteractiveSession removes all resources for an interactive SubAgent session:
+// interactiveSubAgents entry, progress snapshot/iteration history, and tenant session (DB).
+// This ensures the next SubAgent with the same role/instance starts with a clean slate.
+func (a *Agent) destroyInteractiveSession(key string) {
+	a.interactiveSubAgents.Delete(key)
+
+	// Clean up progress snapshot and iteration history
+	agentProgressKey := "agent:" + key
+	a.lastProgressSnapshot.Delete(agentProgressKey)
+	a.iterationHistories.Delete(agentProgressKey)
+
+	// Destroy tenant session (cache + DB with CASCADE to messages)
+	if a.multiSession != nil {
+		_ = a.multiSession.DestroySession("agent", key)
+	}
 }
 
 // interactiveKey 生成 interactive session 在 map 中的 key。
@@ -141,10 +320,54 @@ func (a *Agent) SpawnInteractiveSession(
 	}
 	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true, subModel)
 
+	// Update placeholder with system prompt + user message so CLI session viewer
+	// can display them while Run() is executing (before the full session data
+	// replaces the placeholder).
+	if len(cfg.Messages) > 0 {
+		placeholder.systemPrompt = cfg.Messages[0]
+	}
+	if len(cfg.Messages) > 1 {
+		placeholder.messages = []llm.ChatMessage{cfg.Messages[1]}
+	}
+
+	// Interactive SubAgent gets its own TenantSession for message persistence.
+	// Channel="agent", ChatID=key → messages saved to DB like normal sessions.
+	agentTenantSession, err := a.multiSession.GetOrCreateSession("agent", key)
+	if err != nil {
+		a.destroyInteractiveSession(key)
+		return nil, fmt.Errorf("create agent tenant session: %w", err)
+	}
+	cfg.Session = agentTenantSession
+
+	// Clear any stale messages from a previous session with the same key.
+	// This can happen after server restart (DB retains old tenant data) or
+	// if destroyInteractiveSession's DeleteTenant failed silently.
+	_ = agentTenantSession.Clear()
+
+	// Eager-save user message so get_history returns it during Run().
+	// Without this, the CLI shows "已加载 0 条历史消息" and the DB has no
+	// user message turn boundary. Run()'s incremental persistence skips
+	// messages[0:lastPersistedCount] which includes this user message.
+	if err := agentTenantSession.AddMessage(llm.NewUserMessage(msg.Content)); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to eager-save interactive agent user message")
+	}
+
+	// Wire CLI progress + stream callbacks (shared with one-shot SubAgents)
+	if !background {
+		a.wireSubAgentCLIProgress(key, originChatID, &cfg)
+	}
+
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。
 	// 进度穿透：子 Agent 不仅上报自身进度，还注入回调到 subCtx 让更深层 SubAgent 也能递归穿透。
 	// Background 模式例外：bg subagent 的进度不应穿透到父 agent 的 TUI。
+
+	// Override SendFunc to route outbound via agent session's channel/chatID.
+	// This makes agent session outbound go through the same pipeline as the main session.
+	cfg.SendFunc = func(channel, chatID, content string, metadata ...map[string]string) error {
+		return a.sendMessage("agent", key, content, metadata...)
+	}
+
 	if !background {
 		if cb, ok := SubAgentProgressFromContext(ctx); ok {
 			rn := roleName
@@ -255,6 +478,7 @@ func (a *Agent) SpawnInteractiveSession(
 			startTime := time.Now()
 			defer func() {
 				if r := recover(); r != nil {
+					clipanic.Report("agent.interactive.RunBackgroundSession", fmt.Sprintf("%s:%s", roleName, instance), r)
 					log.WithFields(log.Fields{
 						"role":     roleName,
 						"instance": instance,
@@ -269,7 +493,7 @@ func (a *Agent) SpawnInteractiveSession(
 					runCancel()
 					// Cascade: clean up children and remove self from panel
 					a.cancelChildSessions(key)
-					a.interactiveSubAgents.Delete(key)
+					a.destroyInteractiveSession(key)
 					// Notify parent
 					if notifyMgr != nil {
 						notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
@@ -320,7 +544,7 @@ func (a *Agent) SpawnInteractiveSession(
 					return
 				}
 				a.cancelChildSessions(key)
-				a.interactiveSubAgents.Delete(key)
+				a.destroyInteractiveSession(key)
 				log.WithFields(log.Fields{
 					"role":     roleName,
 					"instance": instance,
@@ -349,11 +573,17 @@ func (a *Agent) SpawnInteractiveSession(
 
 			// Store messages
 			var newMsgs []llm.ChatMessage
+			// Include the original user message so GetAgentSessionDump shows it
+			if preLen > 1 {
+				newMsgs = append(newMsgs, cfg.Messages[1])
+			}
 			if len(out.Messages) > preLen {
-				newMsgs = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
+				newMsgs = append(newMsgs, out.Messages[preLen:]...)
 			}
 			placeholder.messages = newMsgs
-			placeholder.systemPrompt = cfg.Messages[0]
+			if len(cfg.Messages) > 0 {
+				placeholder.systemPrompt = cfg.Messages[0]
+			}
 			placeholder.cfg = &cfg
 			placeholder.cfg.Messages = nil
 		}()
@@ -373,7 +603,7 @@ func (a *Agent) SpawnInteractiveSession(
 	out := Run(subCtx, cfg)
 
 	if out.Error != nil {
-		a.interactiveSubAgents.Delete(key) // 清理占位符
+		a.destroyInteractiveSession(key) // 清理占位符 + tenant session
 		// BUG FIX: 在 Content 中附加错误标注，确保主 Agent LLM 能识别异常状态
 		content := out.Content
 		if content == "" {
@@ -386,8 +616,13 @@ func (a *Agent) SpawnInteractiveSession(
 
 	// --- 阶段 4：替换占位符为完整 session 数据 ---
 	var newMessages []llm.ChatMessage
+	// Include the original user message (cfg.Messages[1]) so GetAgentSessionDump
+	// shows what the parent agent sent. cfg.Messages[0] is system prompt (stored separately).
+	if preLen > 1 {
+		newMessages = append(newMessages, cfg.Messages[1])
+	}
 	if len(out.Messages) > preLen {
-		newMessages = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
+		newMessages = append(newMessages, out.Messages[preLen:]...)
 	}
 
 	ia := &interactiveAgent{
@@ -395,13 +630,38 @@ func (a *Agent) SpawnInteractiveSession(
 		instance:         instance,
 		messages:         newMessages,
 		iterationHistory: out.IterationHistory,
-		systemPrompt:     cfg.Messages[0],
 		cfg:              &cfg,
 		lastUsed:         time.Now(),
 		lastReply:        out.Content,
 	}
+	if len(cfg.Messages) > 0 {
+		ia.systemPrompt = cfg.Messages[0]
+	}
 	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
+	// Append final assistant reply so GetAgentSessionDumpByFullKey returns it.
+	// out.Messages (from Run) excludes the final text-only response — it's only
+	// in out.Content / buildOutput. Without this, switching away and back loses
+	// the assistant's final reply.
+	if out.Content != "" {
+		ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
+	}
 	a.interactiveSubAgents.Store(key, ia)
+
+	// Persist final assistant message with iteration history as Detail,
+	// same as the main agent does in handleInboundMessage (agent.go:1884).
+	// The incremental persistence in postToolProcessing saves assistant messages
+	// WITHOUT Detail — this adds the one with full iteration history.
+	if agentTenantSession != nil && out.Content != "" {
+		assistantMsg := llm.NewAssistantMessage(out.Content)
+		if len(out.IterationHistory) > 0 {
+			if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+				assistantMsg.Detail = string(jsonBytes)
+			}
+		}
+		if err := agentTenantSession.AddMessage(assistantMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to save interactive agent assistant message with detail")
+		}
+	}
 
 	log.WithFields(log.Fields{
 		"role":     roleName,
@@ -473,6 +733,13 @@ func (a *Agent) SendToInteractiveSession(
 	newMessages = append(newMessages, llm.NewUserMessage(msg.Content))
 	cfg.Messages = newMessages
 
+	// Eager-save user message so get_history returns it during Run().
+	if cfg.Session != nil {
+		if err := cfg.Session.AddMessage(llm.NewUserMessage(msg.Content)); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to eager-save interactive agent user message (send)")
+		}
+	}
+
 	ia.mu.Unlock()
 
 	// --- 阶段 2：锁外构建上下文和执行 ---
@@ -534,19 +801,42 @@ func (a *Agent) SendToInteractiveSession(
 	}
 
 	// 追加新增对话消息到 ia.messages
+	// Include the user message sent via action=send so GetAgentSessionDump shows it.
+	// cfg.Messages[preLen-1] is the last element before Run, which is the user message
+	// appended at line ~670 (newMessages = append(..., llm.NewUserMessage(msg.Content)))
+	if preLen > 0 {
+		lastBeforeRun := cfg.Messages[preLen-1]
+		if lastBeforeRun.Role == "user" {
+			ia.messages = append(ia.messages, lastBeforeRun)
+		}
+	}
 	if len(out.Messages) > preLen {
 		ia.messages = append(ia.messages, out.Messages[preLen:]...)
-	} else {
-		// out.Messages 为空（无 Memory），从 Run 输出推断
-		if out.Content != "" {
-			ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
-		}
+	}
+	// Append final assistant reply (missing from out.Messages when
+	// handleFinalResponse returns directly without appending to s.messages).
+	if out.Content != "" {
+		ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
 	}
 	// Save iteration history for inspect
 	if len(out.IterationHistory) > 0 {
 		ia.iterationHistory = append(ia.iterationHistory, out.IterationHistory...)
 	}
 	ia.lastReply = out.Content
+
+	// Persist final assistant message with iteration history as Detail,
+	// same as the main agent does in handleInboundMessage (agent.go:1884).
+	if cfg.Session != nil && out.Content != "" {
+		assistantMsg := llm.NewAssistantMessage(out.Content)
+		if len(out.IterationHistory) > 0 {
+			if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+				assistantMsg.Detail = string(jsonBytes)
+			}
+		}
+		if err := cfg.Session.AddMessage(assistantMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to save interactive agent assistant message with detail")
+		}
+	}
 
 	return out.OutboundMessage, nil
 }
@@ -769,9 +1059,9 @@ func (a *Agent) cancelChildSessions(parentKey string) {
 		return true
 	})
 	for _, c := range children {
-		a.interactiveSubAgents.Delete(c.key)
 		// Recurse: cancel grandchildren before they become orphaned
 		a.cancelChildSessions(c.key)
+		a.destroyInteractiveSession(c.key)
 		log.WithFields(log.Fields{
 			"parent": c.parentKey,
 			"child":  c.key,
@@ -825,7 +1115,7 @@ func (a *Agent) UnloadInteractiveSession(
 	}
 
 	// 清理
-	a.interactiveSubAgents.Delete(key)
+	a.destroyInteractiveSession(key)
 
 	log.WithField("role", roleName).Info("Interactive session unloaded")
 	return nil
@@ -841,7 +1131,7 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		workspaceRoot = "" // remote: no host paths
 	}
 
-	return &tools.ToolContext{
+	tc := &tools.ToolContext{
 		Ctx:                 ctx,
 		WorkingDir:          workspaceRoot, // empty for remote
 		WorkspaceRoot:       workspaceRoot,
@@ -861,6 +1151,13 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		OriginUserID:        senderID,          // 原始用户 ID
 		SenderName:          msg.SenderName,
 	}
+	// Restore parent's CWD for SubAgent directory inheritance
+	if msg.Metadata != nil {
+		if cwd, ok := msg.Metadata["parent_cwd"]; ok && cwd != "" {
+			tc.CurrentDir = cwd
+		}
+	}
+	return tc
 }
 
 // GetActiveInteractiveRoles 返回当前 session 下所有活跃的 interactive SubAgent role 名（含 instance 标识）。
@@ -933,6 +1230,7 @@ type InteractiveSessionInfo struct {
 
 // ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
 func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSessionInfo {
+	a.cleanupExpiredSessions()
 	prefix := channel + ":" + chatID + "/"
 	var results []InteractiveSessionInfo
 
@@ -992,4 +1290,139 @@ func summarizeInteractivePreviewLocked(ia *interactiveAgent) string {
 		return "Error: " + ia.lastError
 	}
 	return ia.lastReply
+}
+
+// SessionMessage represents a single message in a SubAgent conversation.
+type SessionMessage struct {
+	Role    string `json:"role"` // "user", "assistant", "system"
+	Content string `json:"content"`
+}
+
+// AgentSessionDump contains the full state of an interactive SubAgent session
+// for rendering in a viewer. Includes messages and iteration snapshots.
+type AgentSessionDump struct {
+	Messages         []SessionMessage    `json:"messages"`
+	IterationHistory []IterationSnapshot `json:"iterations"`
+}
+
+// GetAgentSessionDump returns the full session state for viewer rendering.
+func (a *Agent) GetAgentSessionDump(channel, chatID, roleName, instance string) (*AgentSessionDump, bool) {
+	key := interactiveKey(channel, chatID, roleName, instance)
+	val, ok := a.interactiveSubAgents.Load(key)
+	if !ok {
+		return nil, false
+	}
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return nil, false
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	var msgs []SessionMessage
+	if ia.systemPrompt.Content != "" {
+		msgs = append(msgs, SessionMessage{Role: "system", Content: ia.systemPrompt.Content})
+	}
+	for _, m := range ia.messages {
+		content := m.Content
+		if content == "" && len(m.ToolCalls) > 0 {
+			var toolNames []string
+			for _, tc := range m.ToolCalls {
+				toolNames = append(toolNames, tc.Name)
+			}
+			content = "[Tool calls: " + strings.Join(toolNames, ", ") + "]"
+		}
+		if content != "" {
+			msgs = append(msgs, SessionMessage{Role: string(m.Role), Content: content})
+		}
+	}
+
+	iters := make([]IterationSnapshot, len(ia.iterationHistory))
+	copy(iters, ia.iterationHistory)
+
+	return &AgentSessionDump{
+		Messages:         msgs,
+		IterationHistory: iters,
+	}, true
+}
+
+// GetAgentSessionDumpByFullKey returns the session state using the full interactiveKey
+// (e.g. "cli:/home/user/project/role:instance") directly, without needing to decompose it.
+func (a *Agent) GetAgentSessionDumpByFullKey(fullKey string) (*AgentSessionDump, bool) {
+	val, ok := a.interactiveSubAgents.Load(fullKey)
+	if !ok {
+		return nil, false
+	}
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return nil, false
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	var msgs []SessionMessage
+	if ia.systemPrompt.Content != "" {
+		msgs = append(msgs, SessionMessage{Role: "system", Content: ia.systemPrompt.Content})
+	}
+	for _, m := range ia.messages {
+		content := m.Content
+		if content == "" && len(m.ToolCalls) > 0 {
+			var toolNames []string
+			for _, tc := range m.ToolCalls {
+				toolNames = append(toolNames, tc.Name)
+			}
+			content = "[Tool calls: " + strings.Join(toolNames, ", ") + "]"
+		}
+		if content != "" {
+			msgs = append(msgs, SessionMessage{Role: string(m.Role), Content: content})
+		}
+	}
+
+	iters := make([]IterationSnapshot, len(ia.iterationHistory))
+	copy(iters, ia.iterationHistory)
+
+	return &AgentSessionDump{
+		Messages:         msgs,
+		IterationHistory: iters,
+	}, true
+}
+
+// GetSessionMessages returns the conversation history of a specific interactive SubAgent session.
+// Returns the messages and true if found, nil and false otherwise.
+func (a *Agent) GetSessionMessages(channel, chatID, roleName, instance string) ([]SessionMessage, bool) {
+	key := interactiveKey(channel, chatID, roleName, instance)
+	val, ok := a.interactiveSubAgents.Load(key)
+	if !ok {
+		return nil, false
+	}
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return nil, false
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	var msgs []SessionMessage
+	// Include system prompt if available
+	if ia.systemPrompt.Content != "" {
+		msgs = append(msgs, SessionMessage{Role: "system", Content: ia.systemPrompt.Content})
+	}
+	for _, m := range ia.messages {
+		content := m.Content
+		if content == "" && len(m.ToolCalls) > 0 {
+			// Summarize tool calls for display
+			var toolNames []string
+			for _, tc := range m.ToolCalls {
+				toolNames = append(toolNames, tc.Name)
+			}
+			content = "[Tool calls: " + strings.Join(toolNames, ", ") + "]"
+		}
+		if content != "" {
+			msgs = append(msgs, SessionMessage{Role: string(m.Role), Content: content})
+		}
+	}
+	return msgs, true
 }

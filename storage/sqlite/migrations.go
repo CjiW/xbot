@@ -117,6 +117,13 @@ func (db *DB) migrateSchema(from int) error {
 		}
 	}
 
+	// v30: add user_chats table for multi-chatroom support
+	if from < 30 {
+		if err := migrateV29ToV30(db.Conn()); err != nil {
+			return fmt.Errorf("migrate to v30: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -962,5 +969,29 @@ func migrateV28ToV29(conn *sql.DB) error {
 		return fmt.Errorf("update schema version: %w", err)
 	}
 	log.Info("Database migrated to v29: added cached_models to user_llm_subscriptions")
+	return nil
+}
+
+// migrateV29ToV30 adds user_chats table for multi-chatroom support.
+func migrateV29ToV30(conn *sql.DB) error {
+	_, err := conn.Exec(`
+	CREATE TABLE IF NOT EXISTS user_chats (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		channel TEXT NOT NULL,
+		sender_id TEXT NOT NULL,
+		chat_id TEXT NOT NULL,
+		label TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(channel, sender_id, chat_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_user_chats_sender ON user_chats(channel, sender_id);
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate v29->v30 create user_chats: %w", err)
+	}
+	if _, err := conn.Exec("UPDATE schema_version SET version = 30"); err != nil {
+		return fmt.Errorf("update schema version: %w", err)
+	}
+	log.Info("Database migrated to v30: added user_chats table")
 	return nil
 }

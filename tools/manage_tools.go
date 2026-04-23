@@ -123,6 +123,9 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 			MCPServers: make(map[string]MCPServerConfig),
 		}
 	}
+	if config.MCPServers == nil {
+		config.MCPServers = make(map[string]MCPServerConfig)
+	}
 
 	// Add/update server
 	config.MCPServers[args.Name] = cfg

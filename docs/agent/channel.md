@@ -60,3 +60,15 @@ Optional channel capabilities via interfaces in `capability.go`:
 - **Deduplication**: when `PhaseDone` and `handleAgentMessage` both snapshot the same iteration, prefer PhaseDone version (has complete reasoning from server)
 - `ElapsedWall` must be set in ALL snapshot creation paths (iteration change, PhaseDone, handleAgentMessage) — missing it causes fallback to sum only last iteration's tool.Elapsed
 - Title bar shows `[host:port]` in remote mode (parsed from `RemoteBackend.ServerURL()`)
+
+### CLI SubAgent Session Viewing (Remote Mode)
+
+When viewing an interactive SubAgent session, the CLI switches to an "agent session view":
+- `m.activeAgentSession` tracks the current agent session key (`channel:chatID/roleName:instance`)
+- Messages are loaded via `handleSuHistoryLoad` which calls `get_history` RPC
+- Outbound messages from the SubAgent are routed to the parent's chatID — CLI detects and filters
+- **`get_active_progress` RPC bypasses bizID check for agent channel** (`p.Channel != "agent"`)
+- **Tick chain must not break** — `tickCmd()` injection should be unconditional in multiple code paths to prevent chain breakage during session switches
+- **`handleSuHistoryLoad` default case (PhaseDone)**: triggers `DynamicHistoryLoader` reload to pick up the final assistant reply
+- **Viewport dirty-check fallback**: tick handler checks `!m.renderCacheValid` when `busy=false` to ensure viewport refreshes after session switch
+- **`removeAllToolSummaries()`** must be called in all progress restore paths to prevent duplicate tool summaries

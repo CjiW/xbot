@@ -646,6 +646,8 @@ func TestCLIModelUpdateCtrlCWhileTyping(t *testing.T) {
 func TestCLIModelUpdateProgressMsg(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
+	model.channelName = "cli"
+	model.chatID = "/test"
 	model.typing = true // simulate active agent turn
 
 	// Send progress message
@@ -653,6 +655,7 @@ func TestCLIModelUpdateProgressMsg(t *testing.T) {
 		payload: &CLIProgressPayload{
 			Phase:     "thinking",
 			Iteration: 1,
+			ChatID:    "cli:/test",
 		},
 	}
 
@@ -669,14 +672,17 @@ func TestCLIModelUpdateProgressMsg(t *testing.T) {
 func TestCLIModelUpdateProgressDone(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
+	model.channelName = "cli"
+	model.chatID = "/test"
 
 	// Set initial progress
-	model.progress = &CLIProgressPayload{Phase: "thinking"}
+	model.progress = &CLIProgressPayload{Phase: "thinking", ChatID: "cli:/test"}
 
 	// Send done progress
 	progMsg := cliProgressMsg{
 		payload: &CLIProgressPayload{
-			Phase: "done",
+			Phase:  "done",
+			ChatID: "cli:/test",
 		},
 	}
 
@@ -701,23 +707,77 @@ func TestCLIModelUpdateProgressNilPayload(t *testing.T) {
 func TestCLIModelStaleProgressIgnored(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
+	model.channelName = "cli"
+	model.chatID = "/test"
 
-	// Simulate: turn already ended (typing=false, progress=nil)
+	// Scenario 1: After Ctrl+C (typing=false, turnCancelled=true), progress is ignored
 	model.typing = false
 	model.progress = nil
+	model.turnCancelled = true
 
-	// A stale non-done progress event should be silently ignored
 	progMsg := cliProgressMsg{
 		payload: &CLIProgressPayload{
 			Phase:     "thinking",
 			Iteration: 1,
-			SubAgents: []CLISubAgent{{Role: "explore", Status: "running", Desc: "exploring"}},
+			ChatID:    "cli:/test",
 		},
 	}
-	_, _ = model.Update(progMsg)
+	model.chatID = "/test"
+	model.channelName = "cli"
+	model.handleProgressMsg(progMsg)
 
 	if model.progress != nil {
-		t.Error("Stale progress event should be ignored when turn has ended")
+		t.Error("Progress after Ctrl+C should be ignored when turnCancelled=true")
+	}
+
+	// Scenario 2: Progress for a different session is ignored
+	model2 := newCLIModel()
+	model2.handleResize(80, 24)
+	model2.typing = true
+	model2.chatID = "/other"
+	model2.channelName = "cli"
+
+	model2.handleProgressMsg(cliProgressMsg{
+		payload: &CLIProgressPayload{
+			Phase:     "thinking",
+			Iteration: 1,
+			ChatID:    "cli:/different",
+		},
+	})
+
+	if model2.progress != nil {
+		t.Error("Progress for a different session should be ignored")
+	}
+
+	// Scenario 3: First switch to running SubAgent (typing=false, turnCancelled=false)
+	// → auto-start should fire
+	model3 := newCLIModel()
+	model3.handleResize(80, 24)
+	model3.chatID = "/test"
+	model3.channelName = "cli"
+	// No saved state → restoreSession sets typing=false, turnCancelled=false
+	model3.restoreSession()
+
+	if model3.typing {
+		t.Error("restoreSession with no saved state should set typing=false")
+	}
+	if model3.turnCancelled {
+		t.Error("restoreSession with no saved state should set turnCancelled=false")
+	}
+
+	model3.handleProgressMsg(cliProgressMsg{
+		payload: &CLIProgressPayload{
+			Phase:     "tool_exec",
+			Iteration: 1,
+			ChatID:    "cli:/test",
+		},
+	})
+
+	if !model3.typing {
+		t.Error("Auto-start should fire when turnCancelled=false and typing=false")
+	}
+	if model3.progress == nil {
+		t.Error("Progress should be set after auto-start")
 	}
 }
 
@@ -770,6 +830,8 @@ func TestTickChainSelfHealingViaIdleTick(t *testing.T) {
 func TestTickChainSelfHealingViaProgressMsg(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
+	model.channelName = "cli"
+	model.chatID = "/test"
 
 	// Progress events should NOT emit tickCmd — that would create duplicate chains.
 	// Self-healing is handled by idleTickMsg (3s safety net).
@@ -779,6 +841,7 @@ func TestTickChainSelfHealingViaProgressMsg(t *testing.T) {
 	_, cmd := model.Update(cliProgressMsg{payload: &CLIProgressPayload{
 		Iteration: 1,
 		Phase:     "thinking",
+		ChatID:    "cli:/test",
 	}})
 	// cmd may contain viewport/textarea sub-commands but should NOT contain tickCmd
 	// (we can't easily inspect tea.Cmd contents, but at minimum verify no panic)
@@ -1431,6 +1494,8 @@ func TestFormatElapsed(t *testing.T) {
 func TestCLIModelIterationAccumulation(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
+	model.channelName = "cli"
+	model.chatID = "/test"
 	model.typing = true
 	model.typingStartTime = time.Now()
 
@@ -1438,6 +1503,7 @@ func TestCLIModelIterationAccumulation(t *testing.T) {
 	prog0 := cliProgressMsg{payload: &CLIProgressPayload{
 		Phase:     "thinking",
 		Iteration: 0,
+		ChatID:    "cli:/test",
 	}}
 	model.Update(prog0)
 	if len(model.iterationHistory) != 0 {
@@ -1448,6 +1514,7 @@ func TestCLIModelIterationAccumulation(t *testing.T) {
 	prog0b := cliProgressMsg{payload: &CLIProgressPayload{
 		Phase:     "tool_exec",
 		Iteration: 0,
+		ChatID:    "cli:/test",
 		CompletedTools: []CLIToolProgress{
 			{Name: "read", Label: "Reading", Status: "done", Elapsed: 100},
 		},
@@ -1458,6 +1525,7 @@ func TestCLIModelIterationAccumulation(t *testing.T) {
 	prog1 := cliProgressMsg{payload: &CLIProgressPayload{
 		Phase:     "thinking",
 		Iteration: 1,
+		ChatID:    "cli:/test",
 	}}
 	model.Update(prog1)
 	if len(model.iterationHistory) != 1 {

@@ -37,6 +37,42 @@ func NewSystemMessage(content string) ChatMessage {
 	return ChatMessage{Role: "system", Content: content, Timestamp: time.Now()}
 }
 
+// FixupTrailingToolCalls strips trailing unpaired tool_call messages from the
+// message list. An assistant message with non-empty ToolCalls is considered
+// unpaired if it is not followed by tool-result messages for every call.
+// This can happen when Ctrl+C cancels a Run between recordAssistantMsg and
+// executeToolCalls/processToolResults. Both Anthropic and OpenAI APIs reject
+// requests with unpaired tool_calls, so this must be called before sending.
+func FixupTrailingToolCalls(messages []ChatMessage) []ChatMessage {
+	for len(messages) > 0 {
+		last := messages[len(messages)-1]
+
+		// Trailing assistant with tool_calls → unpaired, strip it
+		if last.Role == "assistant" && len(last.ToolCalls) > 0 {
+			messages = messages[:len(messages)-1]
+			continue
+		}
+
+		// Trailing tool message without a preceding assistant that has matching
+		// tool_calls (orphaned tool result) → also strip
+		if last.Role == "tool" {
+			// Check if the message before this is an assistant with tool_calls
+			if len(messages) >= 2 {
+				prev := messages[len(messages)-2]
+				if prev.Role == "assistant" && len(prev.ToolCalls) > 0 {
+					break // paired, we're done
+				}
+			}
+			// Orphaned tool result, strip it
+			messages = messages[:len(messages)-1]
+			continue
+		}
+
+		break
+	}
+	return messages
+}
+
 // NewUserMessage 创建用户消息
 func NewUserMessage(content string) ChatMessage {
 	return ChatMessage{Role: "user", Content: content, Timestamp: time.Now()}

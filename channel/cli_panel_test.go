@@ -39,7 +39,7 @@ func (m *mockSubscriptionManager) Remove(id string) error {
 	return nil
 }
 
-func (m *mockSubscriptionManager) SetDefault(id string) error {
+func (m *mockSubscriptionManager) SetDefault(id, chatID string) error {
 	m.setDefID = id
 	for i := range m.subs {
 		m.subs[i].Active = m.subs[i].ID == id
@@ -147,7 +147,7 @@ func TestApplyQuickSwitch(t *testing.T) {
 	// Now simulate the Update handler processing the doneMsg (which calls SetDefault)
 	// The Update handler in cli_update.go does this when it receives cliSwitchLLMDoneMsg
 	if doneMsg.mgr != nil {
-		if err := doneMsg.mgr.SetDefault(doneMsg.subID); err != nil {
+		if err := doneMsg.mgr.SetDefault(doneMsg.subID, ""); err != nil {
 			t.Fatalf("SetDefault failed: %v", err)
 		}
 	}

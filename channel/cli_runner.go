@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"xbot/clipanic"
 	"xbot/internal/runnerclient"
 	"xbot/llm"
 )
@@ -96,7 +97,7 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 	program := rb.program
 	rb.mu.Unlock()
 
-	go func() {
+	clipanic.Go("channel.RunnerBridge.Connect", func() {
 		defer close(doneCh)
 
 		// 1. 创建日志文件
@@ -199,7 +200,7 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 			status: RunnerDisconnected,
 			err:    nil,
 		})
-	}()
+	})
 }
 
 // Disconnect 断开连接

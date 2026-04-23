@@ -43,7 +43,9 @@ type ObservationMaskStore struct {
 	maxSize    int                 // 最大存储条数
 	maxChars   int                 // 最大存储总字符数
 	totalChars int                 // 当前总字符数
-	storeDir   string              // 磁盘存储目录（空 = 纯内存模式）
+	baseDir    string              // 磁盘存储基目录（baseDir/{tenantID}）
+	storeDir   string              // 当前租户的磁盘存储目录（空 = 纯内存模式）
+	tenantID   int64               // 当前租户 ID
 	loaded     bool                // 是否已从磁盘加载
 }
 
@@ -63,11 +65,53 @@ func NewObservationMaskStore(maxSize int, storeDir ...string) *ObservationMaskSt
 	return s
 }
 
-// SetStoreDir 设置磁盘存储目录（用于延迟初始化场景）。
+// SetStoreDir 设置固定磁盘存储目录（兼容旧调用/测试）。
 func (s *ObservationMaskStore) SetStoreDir(dir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.baseDir = ""
 	s.storeDir = dir
+	s.tenantID = 0
+	s.entries = nil
+	s.totalChars = 0
+	s.loaded = false
+}
+
+// SetBaseDir 设置按租户分片的基目录：baseDir/{tenantID}/。
+func (s *ObservationMaskStore) SetBaseDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.baseDir = dir
+	if s.tenantID != 0 {
+		s.storeDir = filepath.Join(dir, fmt.Sprintf("%d", s.tenantID))
+	} else {
+		s.storeDir = ""
+	}
+	s.entries = nil
+	s.totalChars = 0
+	s.loaded = false
+}
+
+// SetTenantID 切换当前租户目录到 {baseDir}/{tenantID}/。
+func (s *ObservationMaskStore) SetTenantID(tenantID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.baseDir == "" {
+		s.tenantID = tenantID
+		return
+	}
+	if s.tenantID == tenantID && s.loaded {
+		return
+	}
+	s.tenantID = tenantID
+	if tenantID == 0 {
+		s.storeDir = ""
+	} else {
+		s.storeDir = filepath.Join(s.baseDir, fmt.Sprintf("%d", tenantID))
+	}
+	s.entries = nil
+	s.totalChars = 0
+	s.loaded = false
 }
 
 // ensureLoaded 首次访问时从磁盘目录加载所有 mask entries。
@@ -311,30 +355,59 @@ func (s *ObservationMaskStore) CleanOldEntries(cutoff time.Time) int {
 // CleanStale 清理超过指定天数的残留 mask 数据（磁盘文件）。
 // 用于定期清理。
 func (s *ObservationMaskStore) CleanStale(maxAgeDays int) {
-	if s.storeDir == "" || maxAgeDays <= 0 {
+	if maxAgeDays <= 0 {
 		return
 	}
 	cutoff := time.Now().AddDate(0, 0, -maxAgeDays)
-	entries, err := os.ReadDir(s.storeDir)
-	if err != nil {
-		if os.IsNotExist(err) {
+
+	s.mu.RLock()
+	baseDir := s.baseDir
+	storeDir := s.storeDir
+	s.mu.RUnlock()
+
+	var dirs []string
+	if baseDir != "" {
+		entries, err := os.ReadDir(baseDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return
+			}
+			log.WithError(err).Warn("ObservationMaskStore: failed to list base directory for stale cleanup")
 			return
 		}
-		log.WithError(err).Warn("ObservationMaskStore: failed to list store directory for stale cleanup")
+		for _, entry := range entries {
+			if entry.IsDir() {
+				dirs = append(dirs, filepath.Join(baseDir, entry.Name()))
+			}
+		}
+	} else if storeDir != "" {
+		dirs = append(dirs, storeDir)
+	} else {
 		return
 	}
+
 	removed := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		info, err := entry.Info()
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			log.WithError(err).WithField("dir", dir).Warn("ObservationMaskStore: failed to list store directory for stale cleanup")
 			continue
 		}
-		if info.ModTime().Before(cutoff) {
-			os.Remove(filepath.Join(s.storeDir, entry.Name()))
-			removed++
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				os.Remove(filepath.Join(dir, entry.Name()))
+				removed++
+			}
 		}
 	}
 	if removed > 0 {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"xbot/clipanic"
 )
 
 // setupCtrlZSuspend sets up a SIGTSTP (Ctrl+Z) handler that restores the terminal
@@ -13,12 +14,12 @@ import (
 func setupCtrlZSuspend(c *CLIChannel, origStdout, origStderr *os.File) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTSTP)
-	go func() {
+	clipanic.Go("channel.setupCtrlZSuspend", func() {
 		<-sigCh
 		// 恢复终端并直接退出，不依赖 bubbletea 的 Quit 流程
 		_ = c.program.ReleaseTerminal()
 		os.Stdout = origStdout
 		os.Stderr = origStderr
 		os.Exit(0)
-	}()
+	})
 }

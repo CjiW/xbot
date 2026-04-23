@@ -5,16 +5,41 @@ package tools
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 )
 
-// defaultShell returns the default shell for the current platform.
-func defaultShell() string { return "/bin/bash" }
+// defaultShell returns the user's login shell from /etc/passwd.
+// Falls back to /bin/sh if lookup fails.
+func defaultShell() string {
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell
+	}
+	// Fallback
+	return "/bin/sh"
+}
 
-// loginShellArgs returns the command-line arguments for executing a command in a login shell.
-// Bash: ["bash", "-l", "-c", command] (-l = login shell, loads profile)
+// loginShellArgs returns the command-line arguments for executing a command
+// in a shell that loads the user's environment (PATH, aliases, etc.).
+//
+// Shell source order differs:
+//
+//	bash -l -c   → .bash_profile → .bashrc (login sources rc via profile chain)
+//	zsh  -l -c   → .zshenv + .zprofile, but NOT .zshrc (rc is interactive-only)
+//	zsh  -c      → .zshenv only
+//
+// User PATH config (go, cuda, nvm, etc.) typically lives in .zshrc / .bashrc.
+// For zsh we explicitly source .zshrc so the user's environment is available
+// in non-interactive mode without the overhead of -i (prompts, completion, etc.).
 func loginShellArgs(shell, command string) []string {
-	return []string{shell, "-l", "-c", command}
+	name := filepath.Base(shell)
+	switch name {
+	case "zsh":
+		return []string{shell, "-c", "source ~/.zshrc 2>/dev/null; " + command}
+	default:
+		// bash, sh, dash, etc.: -l login shell sources profile → rc chain.
+		return []string{shell, "-l", "-c", command}
+	}
 }
 
 // setProcessAttrs 设置 Unix 平台的进程属性

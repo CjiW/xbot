@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xbot/bus"
+	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
 
@@ -250,9 +251,12 @@ func (s *runState) notifyProgress(extra string) {
 	if !s.autoNotify {
 		return
 	}
-	lines := s.progressLines
+	s.progressMu.Lock()
+	lines := make([]string, len(s.progressLines))
+	copy(lines, s.progressLines)
+	s.progressMu.Unlock()
 	if extra != "" {
-		lines = append(append([]string{}, s.progressLines...), extra)
+		lines = append(lines, extra)
 	}
 	var flatLines []string
 	for _, line := range lines {
@@ -275,13 +279,12 @@ func (s *runState) notifyProgress(extra string) {
 	}
 	s.cfg.ProgressNotifier([]string{buf.String()})
 	if s.cfg.ProgressEventHandler != nil && s.structuredProgress != nil {
-		copyLines := func(src []string) []string {
-			cp := make([]string, len(src))
-			copy(cp, src)
-			return cp
-		}
+		s.progressMu.Lock()
+		snapshot := make([]string, len(s.progressLines))
+		copy(snapshot, s.progressLines)
+		s.progressMu.Unlock()
 		s.cfg.ProgressEventHandler(&ProgressEvent{
-			Lines:      copyLines(s.progressLines),
+			Lines:      snapshot,
 			Structured: s.structuredProgress,
 			Timestamp:  time.Now(),
 		})
@@ -380,20 +383,6 @@ func (s *runState) assertSystemMessages(ctx context.Context) *RunOutput {
 // callLLM invokes the LLM with the current messages, handling per-tenant
 // concurrency semaphore and input-too-long errors with forced compression.
 func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) (*llm.LLMResponse, error) {
-	// Dynamic max_tokens: if enabled and we have prompt token info from a previous
-	// call, adjust max_output_tokens to fit within the context window.
-	if s.cfg.DynamicMaxTokens && s.lastPromptTokens > 0 {
-		maxCtxTokens := 0
-		if s.cfg.ContextManagerConfig != nil {
-			maxCtxTokens = s.cfg.ContextManagerConfig.MaxContextTokens
-		}
-		if maxCtxTokens > 0 {
-			if adjuster, ok := s.cfg.LLMClient.(llm.MaxTokensAdjuster); ok {
-				adjuster.AdjustMaxTokens(int(s.lastPromptTokens), maxCtxTokens)
-			}
-		}
-	}
-
 	toolDefs := visibleToolDefs(s.cfg.Tools.AsDefinitionsForSession(s.sessionKey), s.cfg.SettingsSvc, s.cfg.Channel, s.cfg.OriginUserID)
 
 	var releaseLLMSem func()
@@ -459,14 +448,19 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		if clearErr := s.cfg.Session.Clear(); clearErr != nil {
 			log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for force compression, skipping persistence")
 		} else {
+			allOk := true
 			for _, msg := range result.SessionView {
 				if err := assertNoSystemPersist(msg); err != nil {
 					continue
 				}
 				if addErr := s.cfg.Session.AddMessage(msg); addErr != nil {
 					log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
+					allOk = false
 					break
 				}
+			}
+			if allOk {
+				s.lastPersistedCount = len(s.messages)
 			}
 		}
 	}
@@ -583,12 +577,25 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 					s.lastCompletionTokens = 0
 					s.lastMsgCountAtLLMCall = len(s.messages)
 					if s.cfg.Session != nil {
-						_ = s.cfg.Session.Clear()
-						for _, msg := range result.SessionView {
-							if err := assertNoSystemPersist(msg); err != nil {
-								continue
+						if clearErr := s.cfg.Session.Clear(); clearErr != nil {
+							log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for context_window_exceeded compression")
+						} else {
+							allOk := true
+							for _, msg := range result.SessionView {
+								if err := assertNoSystemPersist(msg); err != nil {
+									continue
+								}
+								if err := s.cfg.Session.AddMessage(msg); err != nil {
+									log.Ctx(ctx).WithError(err).Error("Partial write during context_window_exceeded compression")
+									allOk = false
+									break
+								}
 							}
-							_ = s.cfg.Session.AddMessage(msg)
+							if allOk {
+								s.lastPersistedCount = len(s.messages)
+							} else {
+								log.Ctx(ctx).Warn("Context window exceeded compression persistence failed, session may be inconsistent")
+							}
 						}
 					}
 					log.Ctx(ctx).Info("Forced compression completed after context_window_exceeded, retrying")
@@ -619,6 +626,14 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 			} else {
 				output += "\n\n⚠️ Response was partially filtered by content safety system."
 			}
+		}
+
+		// Update ThinkingContent so PhaseDone progress carries the final reply.
+		// recordAssistantMsg is not called for final text responses (handleFinalResponse
+		// returns directly), so ThinkingContent must be set here for SubAgent
+		// session viewers that synthesize assistant messages from PhaseDone payload.
+		if s.structuredProgress != nil && cleanContent != "" {
+			s.structuredProgress.ThinkingContent = cleanContent
 		}
 
 		return s.buildOutput(&bus.OutboundMessage{
@@ -890,6 +905,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	s.lastCompressIter = s.compressAttempts
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseThinking
+		s.structuredProgress.HistoryCompacted = true
 	}
 	if s.autoNotify {
 		for i := len(s.progressLines) - 1; i >= 0; i-- {
@@ -941,6 +957,12 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 				if hook := cm.SessionHook(); hook != nil {
 					hook.AfterPersist(ctx, s.cfg.Session, result)
 				}
+				// Update the persistence watermark to match the new (compressed) message
+				// slice length. Without this, postToolProcessing's incremental persist
+				// check (len(s.messages) > s.lastPersistedCount) will never be true again
+				// because s.messages shrank but lastPersistedCount still points to the old
+				// (larger) index, causing all subsequent messages to be lost on restart.
+				s.lastPersistedCount = len(s.messages)
 			} else {
 				log.Ctx(ctx).Warn("Auto compaction persistence failed, using in-memory result only")
 			}
@@ -1124,6 +1146,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 		for _, entry := range ops {
 			wg.Add(1)
 			go func(e toolCallEntry) {
+				defer clipanic.Recover("agent.executeToolCalls.subAgentOp", e.tc, false)
 				defer wg.Done()
 				var release func()
 				if subAgentSem != nil {
@@ -1166,6 +1189,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 				wg.Add(1)
 				sem <- struct{}{}
 				go func(e toolCallEntry) {
+					defer clipanic.Recover("agent.executeToolCalls.readOp", e.tc, false)
 					defer wg.Done()
 					defer func() { <-sem }()
 					execOne(e)
@@ -1406,6 +1430,7 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 
 	// --- Incremental session persistence ---
 	if s.cfg.Session != nil && len(s.messages) > s.lastPersistedCount {
+		persistOk := true
 		for _, msg := range s.messages[s.lastPersistedCount:] {
 			if msg.Role == "system" {
 				continue
@@ -1416,9 +1441,13 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 			}
 			if err := s.cfg.Session.AddMessage(persistMsg); err != nil {
 				log.Ctx(ctx).WithError(err).Error("Failed to persist message to session")
+				persistOk = false
+				break
 			}
 		}
-		s.lastPersistedCount = len(s.messages)
+		if persistOk {
+			s.lastPersistedCount = len(s.messages)
+		}
 	}
 
 	// --- Background notification draining (bg tasks + bg subagents) ---

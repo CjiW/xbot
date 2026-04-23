@@ -8,7 +8,19 @@ import (
 	"xbot/bus"
 )
 
+// initTestModel creates a model with channelName/chatID set for progress tests.
+func initTestModel() *cliModel {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.channelName = "cli"
+	model.chatID = "/test"
+	return model
+}
+
 func sendProgress(model *cliModel, payload *CLIProgressPayload) {
+	if payload.ChatID == "" {
+		payload.ChatID = model.channelName + ":" + model.chatID
+	}
 	model.Update(cliProgressMsg{payload: payload})
 }
 
@@ -47,8 +59,7 @@ func countToolsInSummary(model *cliModel) int {
 
 // Basic: 2 iterations, no final empty iteration
 func TestProgressNoDuplication(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 	model.typing = true
 	model.typingStartTime = time.Now()
 
@@ -85,8 +96,7 @@ func TestProgressNoDuplication(t *testing.T) {
 
 // Realistic: 2 iterations with 2+1 tools, then empty thinking iteration before done
 func TestProgressRealisticSequence(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 	model.typing = true
 	model.typingStartTime = time.Now()
 
@@ -127,8 +137,7 @@ func TestProgressRealisticSequence(t *testing.T) {
 
 // Bug scenario: lastCompletedTools leaking across iterations
 func TestLastCompletedToolsLeak(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 	model.typing = true
 	model.typingStartTime = time.Now()
 
@@ -165,8 +174,7 @@ func TestLastCompletedToolsLeak(t *testing.T) {
 // Error tool Iteration: verify error tools have correct Iteration and don't
 // appear under the wrong iteration.
 func TestErrorToolIterationAttribution(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 	model.typing = true
 	model.typingStartTime = time.Now()
 
@@ -223,8 +231,7 @@ func TestErrorToolIterationAttribution(t *testing.T) {
 // multiple iterations (simulating event timing anomalies), tools should
 // be correctly grouped by their Iteration field.
 func TestCrossIterationToolsFiltered(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 	model.typing = true
 	model.typingStartTime = time.Now()
 
@@ -278,8 +285,7 @@ func TestCrossIterationToolsFiltered(t *testing.T) {
 // ==================== Background Task Injection ====================
 
 func TestBgTaskInjectedUserMessage_ShowsAsUserMessage(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 
 	content := "[System Notification] Background task abc123 completed.\nCommand: sleep 30\nStatus: done | Elapsed: 30s\nExit Code: 0\n\nOutput:\nok"
 
@@ -302,8 +308,7 @@ func TestBgTaskInjectedUserMessage_ShowsAsUserMessage(t *testing.T) {
 }
 
 func TestBgTaskInjectedUserMessage_StartsSpinner(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 
 	// Before injection, not typing
 	if model.typing {
@@ -327,8 +332,7 @@ func TestBgTaskInjectedUserMessage_StartsSpinner(t *testing.T) {
 }
 
 func TestBgTaskInjectedUserMessage_RefreshesBgCount(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 
 	callCount := 0
 	model.bgTaskCountFn = func() int {
@@ -348,8 +352,7 @@ func TestBgTaskInjectedUserMessage_RefreshesBgCount(t *testing.T) {
 }
 
 func TestBgDrainCompletedTool_AppearsInIteration(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 	model.typing = true
 	model.typingStartTime = time.Now()
 
@@ -381,8 +384,7 @@ func TestBgDrainCompletedTool_AppearsInIteration(t *testing.T) {
 }
 
 func TestBgDrainCrossIterationDoesNotLeak(t *testing.T) {
-	model := newCLIModel()
-	model.handleResize(80, 24)
+	model := initTestModel()
 	model.typing = true
 	model.typingStartTime = time.Now()
 

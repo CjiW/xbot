@@ -31,6 +31,9 @@
 | `cron.go` | Cron tool (scheduled tasks) |
 | `task_manager.go` | Background task management |
 | `checkpoint.go` | CheckpointHook + CheckpointStore (Ctrl+K rewind file rollback) |
+| `create_chat.go` | CreateChat tool — create agent private chat or moderated group chat |
+| `send_message.go` | SendMessage tool — unified routing to agent/group/IM targets |
+| `group_state.go` | GroupState struct + sync.Map store for meeting-mode group chats |
 
 ## Tool Schema Rule
 
@@ -54,6 +57,28 @@ PostToolUse: guarantees all hooks run even if one panics (recover).
 - `none`: direct execution (default). Uses `/bin/bash -l -c` on Unix, `powershell.exe -Command` on Windows
 - `docker`: Docker container per OS user (always Linux)
 - `remote`: remote runner process via runner protocol (always Linux)
+
+## Agent Communication (CreateChat + SendMessage)
+
+Two tools for inter-agent messaging via the Dispatcher's AgentChannel mechanism.
+
+### CreateChat
+- **type=agent**: Spawns an interactive SubAgent (`InteractiveSubAgentManager.SpawnInteractive`), registers an `AgentChannel` in the Dispatcher. Returns `agent:<role>/<instance>` address.
+- **type=group**: Creates a `GroupState` in the global `sync.Map`. Members are address strings (not pre-spawned). Returns `group:<id>` address.
+
+### SendMessage
+Routes by address prefix:
+- `agent:*` → `Dispatcher.SendMessage()` → `AgentChannel.Send()` (RPC, blocks for reply)
+- `group:*` → `GroupState` meeting mode: parses `@agent:xxx` mentions, builds history prompt, sends to each mentioned agent sequentially
+- `feishu:/web:/qq:/cli:` → `Dispatcher.SendMessage()` → IM channel (fire-and-forget)
+
+### Meeting Mode (Group)
+- Moderator (caller) controls who speaks via `@agent:role/instance` mentions
+- Messages without @mentions are recorded in history but don't trigger agents
+- @mentioned agents receive full discussion history + current question
+- Round counter increments per moderator message WITH mentions; group auto-closes at `max_rounds` (default 10)
+- `group_state.go`: `GroupState` struct with `sync.Mutex`, global `groupStore sync.Map`
+- `channel/agent_channel.go`: `AgentChannel` wraps SubAgent as Dispatcher Channel with per-request RPC reply channels
 
 ## Windows Support
 

@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"time"
 	"xbot/bus"
-	log "xbot/logger"
+	"xbot/clipanic"
 	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
@@ -108,13 +108,13 @@ func (m *cliModel) advanceWriterCJK(visible *int, target int, content string, sk
 	runes := []rune(content)
 	nextIsCJK := *visible < len(runes) && isCJK(runes[*visible])
 
-	// Gap-based acceleration
+	// Gap-based acceleration — smooth catch-up without visible jumps.
+	// Max advance per 50ms tick is capped to avoid teleporting when
+	// network coalesces multiple stream updates into one big gap.
 	advance := 1
 	switch {
-	case gap > 200:
-		advance = gap // jump to end
 	case gap > 80:
-		advance = 40
+		advance = 20
 	case gap > 40:
 		advance = 10
 	case gap > 20:
@@ -185,49 +185,19 @@ func (m *cliModel) updatePlaceholder() {
 	}
 }
 
-// cycleModel switches to the next active subscription.
-// If only one subscription exists, falls back to cycling models within it.
+// cycleModel switches to the next model across all subscriptions.
+// Uses ListAllModels() so models from ALL subscriptions are visible (not just the
+// current default LLM). Cycles through the model names displayed in the status bar.
+// Note: this only changes the cached model name — the actual subscription switch
+// happens when a new LLM call is made (or via quick switch panel).
 func (m *cliModel) cycleModel() {
 	if m.channel == nil {
 		return
 	}
 
-	// Prefer cycling through active subscriptions
-	if m.subscriptionMgr != nil && m.llmSubscriber != nil {
-		subs, err := m.subscriptionMgr.List(m.senderID)
-		if err == nil && len(subs) >= 2 {
-			// Find current default
-			def, _ := m.subscriptionMgr.GetDefault(m.senderID)
-			currentID := ""
-			if def != nil {
-				currentID = def.ID
-			}
-			// Cycle to next
-			nextIdx := 0
-			for i, s := range subs {
-				if s.ID == currentID {
-					nextIdx = (i + 1) % len(subs)
-					break
-				}
-			}
-			next := subs[nextIdx]
-			if err := m.llmSubscriber.SwitchSubscription(m.senderID, &next); err != nil {
-				m.showTempStatus(fmt.Sprintf("Switch failed: %v", err))
-				return
-			}
-			m.cachedModelName = next.Model
-			log.WithField("subscription", next.Name).WithField("model", next.Model).Info("cycleModel: switched subscription")
-			m.showTempStatus(fmt.Sprintf("%s (%s)", next.Name, next.Model))
-			m.updateQuickSwitchModels(next.Model)
-			return
-		}
-	}
-
-	// Fallback: cycle models within current subscription (single-sub setup)
-	if m.channel.modelLister == nil {
-		return
-	}
-	models := m.channel.modelLister.ListAllModels()
+	// Use ListModels (current subscription only) instead of ListAllModels.
+	// Ctrl+N should cycle through the current subscription's models only.
+	models := m.channel.modelLister.ListModels()
 	if len(models) < 2 {
 		m.showTempStatus("Only one model available")
 		return
@@ -246,7 +216,8 @@ func (m *cliModel) cycleModel() {
 	m.cachedModelName = nextModel
 	m.showTempStatus(fmt.Sprintf("Model: %s", nextModel))
 
-	// Persist via LLM subscriber (writes active subscription + derives cfg.LLM + saves)
+	// Switch model on the current subscription (no need to change subscription
+	// since we're already cycling within the current subscription's models).
 	if m.llmSubscriber != nil {
 		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
 	}
@@ -269,6 +240,82 @@ type splashDoneMsg struct{}
 
 // suHistoryLoadMsg /su 切换用户后的历史加载完成消息
 type suHistoryLoadMsg struct {
+	history        []HistoryMessage
+	err            error
+	channelName    string              // target session at time of request
+	chatID         string              // target session at time of request
+	activeProgress *CLIProgressPayload // non-nil if target session has an active agent turn
+}
+
+// sessionState holds per-session state that should be preserved when switching sessions.
+// Messages are NOT stored here — the DB is the source of truth for history.
+type sessionState struct {
+	progress          *CLIProgressPayload
+	typing            bool
+	iterationHistory  []cliIterationSnapshot
+	lastSeenIteration int
+	streamingMsgIdx   int
+	typingStartTime   time.Time
+	lastReasoning     string
+	lastThinking      string
+	turnCancelled     bool // true after explicit Ctrl+C cancel — prevents auto-start
+}
+
+// sessionKey returns the map key for the current session.
+func (m *cliModel) sessionKey() string {
+	return m.channelName + ":" + m.chatID
+}
+
+// saveCurrentSession saves the current session's live state into the savedSessions map.
+func (m *cliModel) saveCurrentSession() {
+	key := m.sessionKey()
+	if m.savedSessions == nil {
+		m.savedSessions = make(map[string]*sessionState)
+	}
+	m.savedSessions[key] = &sessionState{
+		progress:          m.progress,
+		typing:            m.typing,
+		iterationHistory:  m.iterationHistory,
+		lastSeenIteration: m.lastSeenIteration,
+		streamingMsgIdx:   m.streamingMsgIdx,
+		typingStartTime:   m.typingStartTime,
+		lastReasoning:     m.lastReasoning,
+		lastThinking:      m.lastThinking,
+		turnCancelled:     m.turnCancelled,
+	}
+}
+
+// restoreSession restores a session's live state from the savedSessions map.
+// If the session has saved state, restores it; otherwise resets to idle.
+func (m *cliModel) restoreSession() {
+	key := m.sessionKey()
+	if saved, ok := m.savedSessions[key]; ok {
+		m.progress = saved.progress
+		m.typing = saved.typing
+		m.iterationHistory = saved.iterationHistory
+		m.lastSeenIteration = saved.lastSeenIteration
+		m.streamingMsgIdx = saved.streamingMsgIdx
+		m.typingStartTime = saved.typingStartTime
+		m.lastReasoning = saved.lastReasoning
+		m.lastThinking = saved.lastThinking
+		m.turnCancelled = saved.turnCancelled
+		delete(m.savedSessions, key) // clean up
+	} else {
+		// No saved state — reset to idle (NOT cancelled)
+		m.progress = nil
+		m.typing = false
+		m.streamingMsgIdx = -1
+		m.iterationHistory = nil
+		m.lastSeenIteration = 0
+		m.typingStartTime = time.Time{}
+		m.lastReasoning = ""
+		m.lastThinking = ""
+		m.turnCancelled = false
+	}
+}
+
+// cliHistoryReloadMsg context compression 后重新加载历史完成消息
+type cliHistoryReloadMsg struct {
 	history []HistoryMessage
 	err     error
 }
@@ -336,14 +383,19 @@ type cliModel struct {
 	needFlushQueue bool     // true = handleAgentMessage 后需要刷新队列
 
 	// --- Background tasks ---
-	bgTaskCount   int        // running background tasks (0 = no indicator)
-	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
+	bgTaskCount     int                            // running background tasks (0 = no indicator)
+	bgTaskCountFn   func() int                     // callback to get current bg task count (set by channel)
+	bgTaskListFn    func() []*tools.BackgroundTask // callback to list running tasks (remote mode)
+	bgTaskKillFn    func(taskID string) error      // callback to kill a task (remote mode)
+	bgTaskCleanupFn func()                         // callback to cleanup completed tasks (remote mode)
 
 	// --- Interactive agents ---
-	agentCount     int                                                            // active interactive agent sessions (0 = no indicator)
-	agentCountFn   func() int                                                     // callback to get current agent count (set by channel)
-	agentListFn    func() []panelAgentEntry                                       // callback to list active agents for panel
-	agentInspectFn func(roleName, instance string, tailCount int) (string, error) // callback to inspect agent activity
+	agentCount      int                                                            // active interactive agent sessions (0 = no indicator)
+	agentCountFn    func() int                                                     // callback to get current agent count (set by channel)
+	agentListFn     func() []panelAgentEntry                                       // callback to list active agents for panel
+	agentInspectFn  func(roleName, instance string, tailCount int) (string, error) // callback to inspect agent activity
+	agentMessagesFn func(roleName, instance string) []SessionChatMessage           // callback to get agent conversation messages
+	sessionsListFn  func() []SessionPanelEntry                                     // callback to list all sessions for Sessions panel
 
 	// --- Usage query ---
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
@@ -454,6 +506,11 @@ type cliModel struct {
 
 	panelBgLogLines []string // cached log lines for viewing
 
+	// --- Sessions Panel ---
+	panelSessionItems   []SessionPanelEntry // cached session list
+	panelSessionCursor  int                 // selected item index
+	panelSessionViewing bool                // true = viewing session messages
+
 	// --- Danger Zone Panel ---
 	panelDangerItems   []dangerItem
 	panelDangerCursor  int
@@ -499,6 +556,12 @@ type cliModel struct {
 	// --- §19 长消息折叠 ---
 	msgLineOffsets []int // 每条消息在 viewport 折行后 content 中的起始行号
 
+	// --- §Session state save/restore ---
+	// Per-session saved state so switching sessions doesn't lose in-progress state.
+	// Key = "channelName:chatID". Messages are NOT saved here — DB is source of truth.
+	savedSessions map[string]*sessionState
+	turnCancelled bool // true after Ctrl+C — prevents auto-start on stale progress
+
 	// --- §21 消息搜索 /search ---
 	searchMode    bool            // 是否处于搜索模式
 	searchQuery   string          // 搜索关键词
@@ -523,6 +586,7 @@ type cliModel struct {
 
 	channel         *CLIChannel // back-reference to owning channel (set during Start)
 	cachedModelName string      // cached model name for View() performance
+	modelCount      int         // cached model list length for View() performance
 
 	// === Runner Bridge ===
 	runnerBridge *RunnerBridge
@@ -744,6 +808,10 @@ func (m *cliModel) refreshCachedModelName() {
 	if m.channel.config.GetCurrentValues != nil {
 		m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
 	}
+	// Cache model count for View() (avoids ListAllModels RPC per frame)
+	if m.channel.modelLister != nil {
+		m.modelCount = len(m.channel.modelLister.ListAllModels())
+	}
 }
 
 // Init 初始化 — 启动 splash 画面动画（最小展示 1 秒）
@@ -776,12 +844,61 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 // suLoadHistoryCmd 异步加载 /su 目标用户的历史消息
 func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
 	chatID := m.chatID
+	channelName := m.channelName
+	progressFn := m.channel.config.GetActiveProgressFn
+
+	// Agent sessions: load from in-memory interactiveSubAgents (not DB).
+	if channelName == "agent" {
+		dumpFn := m.channel.config.AgentSessionDumpFn
+		if dumpFn != nil {
+			return func() tea.Msg {
+				history, err := dumpFn(chatID)
+				// Agent sessions don't have GetActiveProgress, but try anyway
+				var activeProgress *CLIProgressPayload
+				if progressFn != nil {
+					activeProgress = progressFn(channelName, chatID)
+				}
+				return suHistoryLoadMsg{history: history, err: err, channelName: channelName, chatID: chatID, activeProgress: activeProgress}
+			}
+		}
+	}
+
 	loader := m.channel.config.DynamicHistoryLoader
 	if loader == nil {
-		return func() tea.Msg { return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader")} }
+		return func() tea.Msg {
+			return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader"), channelName: channelName, chatID: chatID}
+		}
 	}
 	return func() tea.Msg {
-		history, err := loader("", chatID)
-		return suHistoryLoadMsg{history: history, err: err}
+		history, err := loader(channelName, chatID)
+		// Also fetch active progress for seamless session switch recovery.
+		var activeProgress *CLIProgressPayload
+		if progressFn != nil {
+			activeProgress = progressFn(channelName, chatID)
+		}
+		return suHistoryLoadMsg{history: history, err: err, channelName: channelName, chatID: chatID, activeProgress: activeProgress}
 	}
+}
+
+// reloadMessagesFromSession triggers async history reload after context compression.
+// The engine has replaced its internal message list and persisted to session DB;
+// CLI must rebuild m.messages to stay in sync.
+func (m *cliModel) reloadMessagesFromSession() {
+	loader := m.channel.config.DynamicHistoryLoader
+	if loader == nil {
+		return
+	}
+	chatID := m.chatID
+	channelName := m.channelName
+	clipanic.Go("channel.cliModel.reloadMessagesFromSession", func() {
+		history, err := loader(channelName, chatID)
+		// Send result via async channel (goroutine-safe)
+		if m.channel != nil {
+			select {
+			case m.channel.asyncCh <- cliHistoryReloadMsg{history: history, err: err}:
+			default:
+				// channel full, drop — next progress event will retry
+			}
+		}
+	})
 }

@@ -6,30 +6,17 @@ import (
 	"charm.land/lipgloss/v2"
 	"fmt"
 	"image/color"
-	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
-	"time"
 	"unicode/utf8"
 
+	"xbot/clipanic"
 	log "xbot/logger"
 )
 
 // Update 处理消息
 func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
-	defer func() {
-		if r := recover(); r != nil {
-			stack := debug.Stack()
-			log.WithField("panic", r).Error("cli model update panicked")
-			_ = os.MkdirAll(filepath.Join(configXbotHome(), "logs"), 0o755)
-			if f, err := os.OpenFile(filepath.Join(configXbotHome(), "logs", "cli-panic.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
-				_, _ = fmt.Fprintf(f, "\n==== %s update panic ====\nmsg=%T\npanic=%v\n%s\n", time.Now().Format(time.RFC3339), msg, r, stack)
-				_ = f.Close()
-			}
-			panic(r)
-		}
-	}()
+	defer clipanic.Recover("channel.cliModel.Update", msg, true)
 	var (
 		cmd  tea.Cmd
 		cmds []tea.Cmd
@@ -53,19 +40,36 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 		if done.err != nil {
 			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
 		} else if done.mgr != nil {
-			if err := done.mgr.SetDefault(done.subID); err != nil {
+			if err := done.mgr.SetDefault(done.subID, m.chatID); err != nil {
 				m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
 			} else {
 				m.subGeneration++ // subscription actually changed
 				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
 			}
-			m.refreshCachedModelName()
+			// Update cached model name directly from the switch result
+			// (same pattern as model-switch case — avoids stale config/RPC reads)
+			if done.subModel != "" {
+				m.cachedModelName = done.subModel
+				// Always refresh modelCount after subscription switch
+				// so status bar shows correct count and [Ctrl+N] hint.
+				if m.channel.modelLister != nil {
+					m.modelCount = len(m.channel.modelLister.ListModels())
+				}
+			} else {
+				m.refreshCachedModelName()
+			}
 		}
 		// If we came from the settings panel, re-open it so the user can continue editing
 		if returnToSettings {
 			m.openSettingsFromQuickSwitch()
 		}
-		return m, nil
+		// Drain pendingCmds (e.g. showTempStatus timer) — must not return nil cmds
+		var cmd tea.Cmd
+		if len(m.pendingCmds) > 0 {
+			cmd = tea.Batch(m.pendingCmds...)
+			m.pendingCmds = nil
+		}
+		return m, cmd
 	}
 
 	// Runner status change notification
@@ -314,6 +318,13 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 
 	case cliProgressMsg:
 		m.handleProgressMsg(msg)
+		// Ensure fast tick chain is active when restoring progress (reconnect/switch).
+		// Normal progress events don't need this (tick already running), but restored
+		// snapshots arrive before the idle tick self-heal fires (3s delay).
+		if m.typing && !m.fastTickActive {
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
+		}
 
 	case cliProcessingMsg:
 		if msg.processing && !m.typing {
@@ -385,6 +396,11 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 		} else {
 			// Not busy: stop typewriter chain
 			m.typewriterTickActive = false
+			// Still refresh viewport if messages were added/changed (e.g. assistant
+			// reply arrived via handleAgentMessage after PhaseDone cleared progress).
+			if !m.renderCacheValid {
+				m.updateViewportContent()
+			}
 		}
 
 		// §Q Flush message queue on tick (not in cliProgressMsg/cliOutboundMsg).
@@ -447,10 +463,15 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 	case splashDoneMsg:
 		// §14 启动画面结束确认
 		m.splashDone = true
-		cmds = append(cmds, idleTickCmd())
+		if m.typing && m.progress != nil {
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
+		} else {
+			cmds = append(cmds, idleTickCmd())
+		}
 
 	case suHistoryLoadMsg:
-		m.handleSuHistoryLoad(msg)
+		cmds = append(cmds, m.handleSuHistoryLoad(msg)...)
 
 	case cliToastMsg:
 		cmds = append(cmds, m.handleToastMsg(msg)...)
@@ -465,6 +486,9 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 			}
 			log.WithFields(log.Fields{"count": len(msg.history)}).Info("Applied history load in Update loop")
 		}
+
+	case cliHistoryReloadMsg:
+		m.handleHistoryReload(msg)
 
 	case cliToastClearMsg:
 		cmds = append(cmds, m.handleToastClear(msg)...)
@@ -799,11 +823,4 @@ func (m *cliModel) handleRunnerStatusMsg(msg runnerStatusMsg) tea.Cmd {
 		return m.clearTempStatusCmd()
 	}
 	return nil
-}
-
-func configXbotHome() string {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".xbot")
-	}
-	return ".xbot"
 }

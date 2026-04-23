@@ -570,6 +570,9 @@ func LoadMCPConfig(configPath string) (*MCPConfig, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parse mcp.json: %w", err)
 	}
+	if config.MCPServers == nil {
+		config.MCPServers = make(map[string]MCPServerConfig)
+	}
 	return &config, nil
 }
 

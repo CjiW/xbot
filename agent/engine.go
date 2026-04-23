@@ -69,9 +69,8 @@ type RunConfig struct {
 	InitialCWD       string        // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
 
 	// === 循环控制 ===
-	MaxIterations    int  // 0 = 使用默认值 100
-	MaxOutputTokens  int  // 0 = 使用 LLM client 默认值（8192）
-	DynamicMaxTokens bool // true = dynamically adjust max_output_tokens based on remaining context
+	MaxIterations   int // 0 = 使用默认值 100
+	MaxOutputTokens int // 0 = 使用 LLM client 默认值（8192）
 
 	// === 可选能力（nil = 不启用） ===
 
@@ -201,6 +200,13 @@ type RunConfig struct {
 
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *tools.BackgroundTaskManager
+	// MessageSender 允许 Agent 向任何 Channel 发消息（IM、Agent、Group）。
+	// nil = 不启用（SubAgent 继承主 Agent 的 MessageSender）。
+	MessageSender bus.MessageSender
+	// RegisterAgentChannel registers an AgentChannel in the Dispatcher.
+	RegisterAgentChannel func(name string, runFn bus.RunFn) error
+	// UnregisterAgentChannel removes an AgentChannel from the Dispatcher.
+	UnregisterAgentChannel func(name string)
 
 	// OnIterationSnapshot is called after each iteration snapshot is created.
 	// Used by background interactive sessions to incrementally expose iteration
@@ -427,6 +433,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// If ctx was cancelled during tool execution, exit after preserving results
 		if ctx.Err() != nil {
+			// Strip trailing unpaired tool_calls so they don't get persisted
+			// to DB and cause API errors on the next Run.
+			s.messages = llm.FixupTrailingToolCalls(s.messages)
 			out := s.buildOutput(&bus.OutboundMessage{
 				Channel: s.cfg.Channel,
 				ChatID:  s.cfg.ChatID,
@@ -617,6 +626,10 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 	if model != "" {
 		metadata["model"] = model
 	}
+	// Propagate parent's CWD so SubAgent inherits working directory
+	if parentCtx.CurrentDir != "" {
+		metadata["parent_cwd"] = parentCtx.CurrentDir
+	}
 
 	return bus.InboundMessage{
 		From: bus.NewIMAddress(a.channel, a.senderID),
@@ -776,6 +789,13 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		// NOTE: OnComplete callback registration moved to Agent.bgNotifyLoop.
 		// Engine no longer registers callbacks per-buildToolContext call.
 	}
+
+	// 注入 MessageSender（Dispatcher 引用，允许 Agent 向任何 Channel 发消息）
+	tc.MessageSender = cfg.MessageSender
+	// 注入 AgentChannel 注册/注销回调
+	tc.RegisterAgentChannel = cfg.RegisterAgentChannel
+	tc.UnregisterAgentChannel = cfg.UnregisterAgentChannel
+	// 注入 ToolContext extras (memory, MCP, etc.)
 
 	// 注入 session cwd（PWD 工具优化）
 	if cfg.Session != nil {

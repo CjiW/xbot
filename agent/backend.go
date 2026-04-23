@@ -97,6 +97,15 @@ type AgentBackend interface {
 	// InspectInteractiveSession inspects a running interactive subagent.
 	InspectInteractiveSession(ctx context.Context, roleName, channelName, chatID, instance string, tailCount int) (string, error)
 
+	// GetSessionMessages returns the conversation messages for a specific interactive SubAgent session.
+	GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool)
+
+	// GetAgentSessionDump returns the full session state (messages + iteration snapshots).
+	GetAgentSessionDump(channelName, chatID, roleName, instance string) (*AgentSessionDump, bool)
+
+	// GetAgentSessionDumpByFullKey returns the session state using the full interactiveKey directly.
+	GetAgentSessionDumpByFullKey(fullKey string) (*AgentSessionDump, bool)
+
 	// SetCWD sets the current working directory for a session on the server.
 	// Used by CLI remote mode to sync the client's cwd to the server session.
 	SetCWD(ch, chatID, dir string) error
@@ -208,6 +217,18 @@ type AgentBackend interface {
 	// GetBgTaskCount returns the count of active background tasks.
 	GetBgTaskCount(sessionKey string) int
 
+	// ListBgTasks returns detailed info about running background tasks (remote: RPC-backed).
+	ListBgTasks(sessionKey string) ([]BgTaskJSON, error)
+
+	// KillBgTask terminates a background task by ID (remote: RPC-backed).
+	KillBgTask(taskID string) error
+
+	// CleanupCompletedBgTasks removes completed/errored tasks from the task manager.
+	CleanupCompletedBgTasks(sessionKey string)
+
+	// ListTenants returns all tenant sessions from the DB.
+	ListTenants() ([]TenantInfo, error)
+
 	// ListSubscriptions lists LLM subscriptions.
 	ListSubscriptions(senderID string) ([]channel.Subscription, error)
 
@@ -220,8 +241,8 @@ type AgentBackend interface {
 	// RemoveSubscription removes a subscription by ID.
 	RemoveSubscription(id string) error
 
-	// SetDefaultSubscription sets the default subscription.
-	SetDefaultSubscription(id string) error
+	// SetDefaultSubscription sets the default subscription for a chat.
+	SetDefaultSubscription(id string, chatID string) error
 
 	// RenameSubscription renames a subscription.
 	RenameSubscription(id, name string) error

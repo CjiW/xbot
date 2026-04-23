@@ -131,6 +131,54 @@ type WebCallbacks struct {
 	// senderID is the authenticated user ID (from the WS connection / runner token).
 	// Returns JSON-encoded result or an error.
 	RPCHandler func(method string, params json.RawMessage, senderID string) (json.RawMessage, error)
+	// SessionsList returns interactive SubAgent sessions for a user (channel="web", chatID=senderID).
+	// Returns JSON-serializable session info objects.
+	SessionsList func(senderID string) []SessionInfo
+	// SessionMessages returns the conversation messages for a specific SubAgent session.
+	// Returns (messages, true) if found, (nil, false) otherwise.
+	SessionMessages func(senderID, roleName, instance string) ([]SessionChatMessage, bool)
+
+	// ChatList returns all chatrooms for a user (main + user-created).
+	ChatList func(senderID, currentChatID string) ([]UserChatWithPreview, error)
+	// ChatCreate creates a new chatroom for a user. Returns new chatID.
+	ChatCreate func(senderID, label string) (string, error)
+	// ChatDelete deletes a chatroom (except the default one).
+	ChatDelete func(senderID, chatID string) error
+	// ChatRename renames a chatroom.
+	ChatRename func(senderID, chatID, label string) error
+}
+
+// UserChatWithPreview is a chatroom with metadata for API responses.
+// This mirrors storage/sqlite.UserChatWithPreview to avoid channel→storage dependency.
+type UserChatWithPreview struct {
+	ChatID     string `json:"chat_id"`
+	Label      string `json:"label"`
+	LastActive string `json:"last_active"` // RFC3339
+	Preview    string `json:"preview"`
+	IsCurrent  bool   `json:"is_current"`
+}
+
+// ChatRoom represents a conversation between the user and/or agents.
+// Both human↔agent and agent↔agent conversations are ChatRooms.
+type ChatRoom struct {
+	ID       string `json:"id"`       // "main" for primary chat, "role/instance" for SubAgent
+	Type     string `json:"type"`     // "main" (human↔agent) or "subagent" (agent↔agent)
+	Label    string `json:"label"`    // Display name: "主会话" or "brainstorm/rt-1"
+	Role     string `json:"role"`     // SubAgent role name (empty for main)
+	Instance string `json:"instance"` // SubAgent instance ID (empty for main)
+	Running  bool   `json:"running"`  // Is the SubAgent currently running?
+	Preview  string `json:"preview"`  // Latest message/progress preview
+	Members  string `json:"members"`  // "You ↔ Agent" or "reviewer ↔ tester"
+}
+
+// SessionInfo represents a snapshot of an interactive SubAgent session (for API responses).
+// Deprecated: Use ChatRoom instead.
+type SessionInfo = ChatRoom
+
+// SessionChatMessage is a single message in a SubAgent conversation (for API responses).
+type SessionChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +470,7 @@ type wsMessage struct {
 
 // WsProgressPayload — structured progress data (corresponds to agent.StructuredProgress).
 type WsProgressPayload struct {
+	ChatID         string              `json:"chat_id,omitempty"`
 	Phase          string              `json:"phase,omitempty"`
 	Iteration      int                 `json:"iteration"`
 	ActiveTools    []WsToolProgress    `json:"active_tools,omitempty"`
@@ -436,6 +485,8 @@ type WsProgressPayload struct {
 	// StreamContent carries accumulated LLM streaming text (for CLI RemoteBackend).
 	StreamContent          string `json:"stream_content,omitempty"`
 	ReasoningStreamContent string `json:"reasoning_stream_content,omitempty"`
+	// HistoryCompacted is true after context compression — CLI should reload messages.
+	HistoryCompacted bool `json:"history_compacted,omitempty"`
 }
 
 // cliProgressToWS converts CLIProgressPayload to WsProgressPayload for WS delivery.
@@ -450,6 +501,7 @@ func cliProgressToWS(p *CLIProgressPayload) *WsProgressPayload {
 		Reasoning:              p.Reasoning,
 		StreamContent:          p.StreamContent,
 		ReasoningStreamContent: p.ReasoningStreamContent,
+		HistoryCompacted:       p.HistoryCompacted,
 	}
 	for _, t := range p.ActiveTools {
 		wp.ActiveTools = append(wp.ActiveTools, WsToolProgress{
@@ -641,6 +693,11 @@ type WebChannel struct {
 	// Event stream buffer — per chatID monotonic seq + ring buffer for replay
 	evtBuf   map[string]*eventStream
 	evtBufMu sync.Mutex
+
+	// Per-user current chatID (multi-chatroom support).
+	// Key: senderID, Value: chatID (defaults to senderID if not set).
+	userCurrentChat   map[string]string
+	userCurrentChatMu sync.RWMutex
 }
 
 type sessionInfo struct {
@@ -653,12 +710,13 @@ type sessionInfo struct {
 // NewWebChannel 创建 Web 渠道
 func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 	return &WebChannel{
-		config:   cfg,
-		msgBus:   msgBus,
-		hub:      newHub(),
-		sessions: make(map[string]sessionInfo),
-		db:       cfg.DB,
-		stopCh:   make(chan struct{}),
+		config:          cfg,
+		msgBus:          msgBus,
+		hub:             newHub(),
+		sessions:        make(map[string]sessionInfo),
+		db:              cfg.DB,
+		stopCh:          make(chan struct{}),
+		userCurrentChat: make(map[string]string),
 	}
 }
 
@@ -738,6 +796,15 @@ func (wc *WebChannel) Start() error {
 
 	// File API
 	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
+
+	// Sessions API
+	mux.HandleFunc("/api/sessions", wc.authMiddleware(wc.handleSessions))
+	mux.HandleFunc("/api/sessions/messages", wc.authMiddleware(wc.handleSessionMessages))
+
+	// Chatroom API
+	mux.HandleFunc("/api/chats", wc.authMiddleware(wc.handleChats))
+	mux.HandleFunc("/api/chats/{chatID}/switch", wc.authMiddleware(wc.handleChatSwitch))
+	mux.HandleFunc("/api/chats/{chatID}", wc.authMiddleware(wc.handleChatDelete))
 
 	// Static files
 	if wc.staticDir != "" {
@@ -825,6 +892,8 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		Content:         content,
 		TS:              time.Now().Unix(),
 		ProgressHistory: msg.Metadata["progress_history"],
+		Channel:         msg.Channel,
+		ChatID:          msg.ChatID,
 	}
 
 	targetClientID := msg.ChatID
@@ -1305,6 +1374,19 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				log.Warn("RPC response channel full, dropping response to CLI client")
 			}
 			continue
+		case "subscribe":
+			// CLI RemoteBackend subscribes to a business chatID so the Hub
+			// can route progress/stream/outbound events to this WS client.
+			// Without this, RPC-only sessions (reconnect) never subscribe,
+			// and all server-pushed events are silently buffered.
+			var subMsg struct {
+				ChatID string `json:"chat_id"`
+			}
+			if err := json.Unmarshal(raw, &subMsg); err != nil || subMsg.ChatID == "" {
+				continue
+			}
+			wc.hub.subscribe(c.id, subMsg.ChatID)
+			log.WithFields(log.Fields{"client_id": c.id, "chat_id": subMsg.ChatID}).Debug("CLI client subscribed to chatID")
 		case "message":
 			if msg.Content == "" && len(msg.UploadKeys) == 0 {
 				continue
@@ -1690,6 +1772,8 @@ func (c *RemoteCLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 		Content:         content,
 		TS:              time.Now().Unix(),
 		ProgressHistory: msg.Metadata["progress_history"],
+		Channel:         msg.Channel,
+		ChatID:          msg.ChatID,
 	}
 
 	if !c.hub.sendToClient(targetClientID, wsMsg) {

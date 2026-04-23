@@ -100,7 +100,7 @@ async function saveSettings(settings: Partial<UserSettings>): Promise<boolean> {
   }
 }
 
-type TabId = 'appearance' | 'agent' | 'presets' | 'llm' | 'runner' | 'market'
+type TabId = 'appearance' | 'sessions' | 'presets' | 'llm' | 'runner' | 'market'
 
 interface MarketEntry {
   id: number
@@ -119,9 +119,25 @@ interface MyMarketEntry {
   published: boolean
 }
 
+interface SessionInfo {
+  id: string
+  type: string       // "main" | "subagent"
+  label: string
+  role?: string
+  instance?: string
+  running?: boolean
+  preview?: string
+  members?: string
+}
+
+interface SessionMessage {
+  role: string
+  content: string
+}
+
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'appearance', label: '外观', icon: '🎨' },
-  { id: 'agent', label: 'Agent', icon: '🤖' },
+  { id: 'sessions', label: '会话', icon: '💬' },
   { id: 'presets', label: '快捷指令', icon: '⚡' },
   { id: 'llm', label: 'LLM', icon: '🧠' },
   { id: 'runner', label: 'Runner', icon: '🖥️' },
@@ -177,7 +193,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [llmMaxContextSaving, setLlmMaxContextSaving] = useState(false)
 
   // Agent settings state (user-scoped, stored in user_settings table)
-  const [agentSettings, setAgentSettings] = useState<Record<string, string>>({
+  const [_agentSettings, setAgentSettings] = useState<Record<string, string>>({
     context_mode: 'auto',
     max_iterations: '2000',
     max_concurrency: '3',
@@ -189,7 +205,13 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     enable_masking: 'true',
     language: '',
   })
-  const [agentSaving, setAgentSaving] = useState(false)
+
+  // Sessions state
+  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null)
+  const [sessionMessages, setSessionMessages] = useState<SessionMessage[]>([])
+  const [sessionMessagesLoading, setSessionMessagesLoading] = useState(false)
 
   const [llmFormProvider, setLlmFormProvider] = useState('openai')
   const [llmFormBaseUrl, setLlmFormBaseUrl] = useState('')
@@ -449,18 +471,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
 
 
   // Agent settings save handler
-  const saveAgentSetting = useCallback(async (key: string, value: string) => {
-    setAgentSaving(true)
-    const ok = await saveSettings({ [key]: value })
-    if (ok) {
-      setAgentSettings(prev => ({ ...prev, [key]: value }))
-      showToast('设置已保存', 'success')
-    } else {
-      showToast('保存失败', 'error')
-    }
-    setAgentSaving(false)
-  }, [showToast])
-
 
   // Market functions
   const loadMarket = useCallback(async () => {
@@ -469,7 +479,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       const resp = await fetch(`/api/market?type=${marketType}&limit=50`)
       const data = await resp.json()
       if (data.ok) setMarketEntries(data.entries || [])
-    } catch {}
+    } catch { /* ignored */ }
     setMarketLoading(false)
   }, [marketType])
 
@@ -482,7 +492,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       })
       const data = await resp.json()
       if (data.ok) loadMarket()
-    } catch {}
+    } catch { /* ignored */ }
   }, [loadMarket])
 
   const handleUninstall = useCallback(async (entry: MarketEntry) => {
@@ -494,7 +504,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       })
       const data = await resp.json()
       if (data.ok) loadMarket()
-    } catch {}
+    } catch { /* ignored */ }
   }, [loadMarket])
 
   const loadMyMarket = useCallback(async () => {
@@ -503,7 +513,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       const resp = await fetch(`/api/market/my?type=${marketType}`)
       const data = await resp.json()
       if (data.ok) setMyMarketEntries(data.entries || [])
-    } catch {}
+    } catch { /* ignored */ }
     setMarketLoading(false)
   }, [marketType])
 
@@ -520,7 +530,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           e.name === entry.name && e.type === entry.type ? { ...e, published: true } : e
         ))
       }
-    } catch {}
+    } catch { /* ignored */ }
   }, [])
 
   const handleUnpublish = useCallback(async (entry: MyMarketEntry) => {
@@ -536,7 +546,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           e.name === entry.name && e.type === entry.type ? { ...e, published: false } : e
         ))
       }
-    } catch {}
+    } catch { /* ignored */ }
   }, [])
 
   // Load market when tab is opened
@@ -546,6 +556,40 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       else loadMyMarket()
     }
   }, [open, activeTab, marketSubTab, loadMarket, loadMyMarket])
+
+  // Load sessions when tab is opened
+  const fetchSessions = useCallback(async () => {
+    setSessionsLoading(true)
+    setSelectedSession(null)
+    setSessionMessages([])
+    try {
+      const resp = await fetch('/api/sessions')
+      const data = await resp.json()
+      if (data.ok) setSessions(data.rooms || [])
+    } catch { /* ignored */ }
+    setSessionsLoading(false)
+  }, [])
+
+  useEffect(() => {
+    if (open && activeTab === 'sessions') fetchSessions()
+  }, [open, activeTab, fetchSessions])
+
+  // Load session messages when a session is selected
+  const fetchSessionMessages = useCallback(async (session: SessionInfo) => {
+    setSessionMessagesLoading(true)
+    setSessionMessages([])
+    try {
+      const resp = await fetch(`/api/sessions/messages?id=${encodeURIComponent(session.id)}`)
+      const data = await resp.json()
+      if (data.ok) setSessionMessages(data.messages || [])
+    } catch { /* ignored */ }
+    setSessionMessagesLoading(false)
+  }, [])
+
+  // Load session messages when a session is selected
+  useEffect(() => {
+    if (selectedSession) fetchSessionMessages(selectedSession)
+  }, [selectedSession, fetchSessionMessages])
 
   // Close on Escape
   useEffect(() => {
@@ -678,158 +722,137 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           </div>
         )}
 
-        {/* ── Agent 设置 ── */}
-        {activeTab === 'agent' && (
+        {/* ── 会话管理 (ChatRooms) ── */}
+        {activeTab === 'sessions' && (
           <div className={sectionClass}>
-            <div className={sectionTitleClass}>🤖 Agent 设置</div>
+            <div className={sectionTitleClass}>💬 ChatRooms</div>
             <p className="text-xs text-slate-500 mb-3">
-              控制 Agent 的行为参数。修改后立即生效。
+              所有对话都是 ChatRoom — 人↔Agent、Agent↔Agent 统一管理。
             </p>
 
-            <div className="settings-item">
-              <label className="settings-label">上下文模式 Context Mode</label>
-              <select
-                className="settings-select"
-                value={agentSettings.context_mode}
-                onChange={(e) => saveAgentSetting('context_mode', e.target.value)}
-                disabled={agentSaving}
+            <div className="flex gap-2 mb-3">
+              <button
+                className="settings-action-btn"
+                onClick={fetchSessions}
+                disabled={sessionsLoading}
               >
-                <option value="auto">自动（默认）</option>
-                <option value="manual">手动压缩</option>
-                <option value="none">不压缩</option>
-              </select>
-              <div className="text-[11px] text-slate-500 mt-1">控制上下文管理策略</div>
+                {sessionsLoading ? '加载中...' : '🔄 刷新'}
+              </button>
+              {selectedSession && (
+                <button
+                  className="settings-action-btn"
+                  onClick={() => { setSelectedSession(null); setSessionMessages([]) }}
+                >
+                  ← 返回列表
+                </button>
+              )}
             </div>
 
-            <div className="settings-item">
-              <label className="settings-label">最大迭代次数 Max Iterations</label>
-              <input
-                type="number"
-                className="settings-input"
-                value={agentSettings.max_iterations}
-                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_iterations: e.target.value }))}
-                onBlur={() => saveAgentSetting('max_iterations', agentSettings.max_iterations)}
-                min={1}
-                step={100}
-              />
-              <div className="text-[11px] text-slate-500 mt-1">单次对话最大工具调用迭代次数</div>
-            </div>
+            {selectedSession ? (
+              /* ── 查看 ChatRoom 消息 ── */
+              <div>
+                <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-slate-800/50">
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    selectedSession.type === 'main'
+                      ? 'bg-emerald-900/50 text-emerald-400'
+                      : 'bg-indigo-900/50 text-indigo-400'
+                  }`}>
+                    {selectedSession.type === 'main' ? '👤 主会话' : '🤖 Agent'}
+                  </span>
+                  <span className="text-sm font-medium text-slate-200">
+                    {selectedSession.label}
+                  </span>
+                  {selectedSession.members && (
+                    <span className="text-xs text-slate-500">
+                      {selectedSession.members}
+                    </span>
+                  )}
+                  {selectedSession.type !== 'main' && (
+                    <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                      selectedSession.running
+                        ? 'bg-green-900/50 text-green-400'
+                        : 'bg-slate-700 text-slate-400'
+                    }`}>
+                      {selectedSession.running ? '运行中' : '已完成'}
+                    </span>
+                  )}
+                </div>
 
-            <div className="settings-item">
-              <label className="settings-label">最大并发数 Max Concurrency</label>
-              <input
-                type="number"
-                className="settings-input"
-                value={agentSettings.max_concurrency}
-                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_concurrency: e.target.value }))}
-                onBlur={() => saveAgentSetting('max_concurrency', agentSettings.max_concurrency)}
-                min={1}
-                max={10}
-              />
-              <div className="text-[11px] text-slate-500 mt-1">同时处理的最大请求数</div>
-            </div>
-
-            <div className="settings-item">
-              <label className="settings-label">最大上下文 Token Max Context Tokens</label>
-              <input
-                type="number"
-                className="settings-input"
-                value={agentSettings.max_context_tokens}
-                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_context_tokens: e.target.value }))}
-                onBlur={() => saveAgentSetting('max_context_tokens', agentSettings.max_context_tokens)}
-                min={0}
-                step={10000}
-              />
-              <div className="text-[11px] text-slate-500 mt-1">上下文最大 token 数，0 使用系统默认</div>
-            </div>
-
-            <div className="settings-item">
-              <label className="settings-label">最大输出 Token Max Output Tokens</label>
-              <input
-                type="number"
-                className="settings-input"
-                value={agentSettings.max_output_tokens}
-                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_output_tokens: e.target.value }))}
-                onBlur={() => saveAgentSetting('max_output_tokens', agentSettings.max_output_tokens)}
-                min={0}
-                step={256}
-              />
-              <div className="text-[11px] text-slate-500 mt-1">单次回复最大 token 数</div>
-            </div>
-
-            <div className="settings-item">
-              <label className="settings-label">思考模式 Thinking Mode</label>
-              <select
-                className="settings-select"
-                value={agentSettings.thinking_mode}
-                onChange={(e) => saveAgentSetting('thinking_mode', e.target.value)}
-                disabled={agentSaving}
-              >
-                <option value="">自动（默认）</option>
-                <option value="enabled">开启</option>
-                <option value='{"type":"enabled","clear_thinking":false}'>开启（保留历史推理）</option>
-                <option value="disabled">关闭</option>
-              </select>
-              <div className="text-[11px] text-slate-500 mt-1">模型推理/思维链模式</div>
-            </div>
-
-            <div className="settings-item">
-              <label className="settings-label">自动压缩 Auto Compress</label>
-              <select
-                className="settings-select"
-                value={agentSettings.enable_auto_compress}
-                onChange={(e) => saveAgentSetting('enable_auto_compress', e.target.value)}
-                disabled={agentSaving}
-              >
-                <option value="true">开启（默认）</option>
-                <option value="false">关闭</option>
-              </select>
-              <div className="text-[11px] text-slate-500 mt-1">上下文过长时自动压缩</div>
-            </div>
-
-            <div className="settings-item">
-              <label className="settings-label">流式输出 Stream</label>
-              <select
-                className="settings-select"
-                value={agentSettings.enable_stream}
-                onChange={(e) => saveAgentSetting('enable_stream', e.target.value)}
-                disabled={agentSaving}
-              >
-                <option value="true">开启（默认）</option>
-                <option value="false">关闭</option>
-              </select>
-              <div className="text-[11px] text-slate-500 mt-1">使用流式 API 调用 LLM，实时显示回复内容</div>
-            </div>
-
-            <div className="settings-item">
-              <label className="settings-label">工具结果遮蔽 Tool Result Masking</label>
-              <select
-                className="settings-select"
-                value={agentSettings.enable_masking}
-                onChange={(e) => saveAgentSetting('enable_masking', e.target.value)}
-                disabled={agentSaving}
-              >
-                <option value="true">开启（默认）</option>
-                <option value="false">关闭</option>
-              </select>
-              <div className="text-[11px] text-slate-500 mt-1">上下文较大时自动遮蔽旧工具结果以释放空间</div>
-            </div>
-
-            <div className="settings-item">
-              <label className="settings-label">回复语言 Language</label>
-              <select
-                className="settings-select"
-                value={agentSettings.language}
-                onChange={(e) => saveAgentSetting('language', e.target.value)}
-                disabled={agentSaving}
-              >
-                <option value="">跟随 Prompt（默认）</option>
-                <option value="en">English</option>
-                <option value="zh">中文</option>
-                <option value="ja">日本語</option>
-              </select>
-              <div className="text-[11px] text-slate-500 mt-1">Agent 回复使用的语言</div>
-            </div>
+                {sessionMessagesLoading ? (
+                  <div className="text-center py-4 text-slate-500 text-sm">加载中...</div>
+                ) : sessionMessages.length === 0 ? (
+                  <div className="text-center py-4 text-slate-500 text-sm">暂无消息记录</div>
+                ) : (
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                    {sessionMessages.map((msg, i) => (
+                      <div
+                        key={i}
+                        className={`p-2 rounded-lg text-sm ${
+                          msg.role === 'user'
+                            ? 'bg-blue-900/20 border-l-2 border-blue-500 ml-4'
+                            : msg.role === 'system'
+                            ? 'bg-yellow-900/20 border-l-2 border-yellow-500 mr-4 text-xs'
+                            : 'bg-slate-800/50 border-l-2 border-indigo-500 mr-4'
+                        }`}
+                      >
+                        <div className="text-xs text-slate-500 mb-1">
+                          {msg.role === 'user' ? '👤 User' : msg.role === 'system' ? '⚙️ System' : '🤖 Assistant'}
+                        </div>
+                        <div className="text-slate-300 whitespace-pre-wrap break-words" style={{maxHeight: '200px', overflowY: 'auto'}}>
+                          {msg.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* ── ChatRoom 列表 ── */
+              sessionsLoading ? (
+                <div className="text-center py-6 text-slate-500 text-sm">加载中...</div>
+              ) : sessions.length === 0 ? (
+                <div className="text-center py-6 text-slate-500">
+                  <p className="text-2xl mb-2">📭</p>
+                  <p className="text-sm">暂无 ChatRoom</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {sessions.map((s) => (
+                    <div
+                      key={s.id}
+                      className="p-3 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 cursor-pointer transition-colors"
+                      onClick={() => setSelectedSession(s)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${
+                          s.type === 'main'
+                            ? 'bg-emerald-900/50 text-emerald-400'
+                            : 'bg-indigo-900/50 text-indigo-400'
+                        }`}>
+                          {s.type === 'main' ? '👤' : '🤖'}
+                        </span>
+                        <span className="text-sm font-medium text-slate-200">{s.label}</span>
+                        {s.members && (
+                          <span className="text-xs text-slate-500">{s.members}</span>
+                        )}
+                        {s.type !== 'main' && (
+                          <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                            s.running
+                              ? 'bg-green-900/50 text-green-400'
+                              : 'bg-slate-700 text-slate-400'
+                          }`}>
+                            {s.running ? '运行中' : '已完成'}
+                          </span>
+                        )}
+                      </div>
+                      {s.preview && (
+                        <div className="text-xs text-slate-500 mt-1 truncate">{s.preview}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
           </div>
         )}
 

@@ -45,6 +45,9 @@ func maxBubbleWidth(termWidth int) int {
 // characters) fits within maxWidth columns.  If truncated, "..." is appended.
 // This avoids slicing mid-UTF-8-byte which would corrupt terminal rendering.
 func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
 	if runewidth.StringWidth(s) <= maxWidth {
 		return s
 	}
@@ -180,9 +183,9 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
-	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/new", "/quit", "/rewind", "/search", "/settings", "/setup", "/tasks", "/update",
-	"/usage",
+	"/cancel", "/chat", "/clear", "/compact", "/context", "/exit", "/help",
+	"/new", "/quit", "/rewind", "/search", "/sessions", "/settings", "/setup",
+	"/ss", "/su", "/tasks", "/update", "/usage",
 }
 
 // §19 长消息折叠阈值
@@ -197,6 +200,7 @@ const (
 
 // CLIProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
 type CLIProgressPayload struct {
+	ChatID                 string // session key for routing — CLI filters by m.chatID
 	Phase                  string
 	Iteration              int
 	ActiveTools            []CLIToolProgress
@@ -209,6 +213,7 @@ type CLIProgressPayload struct {
 	StreamContent          string               // LLM streaming text content (accumulated, for real-time render)
 	ReasoningStreamContent string               // LLM streaming reasoning content (accumulated, for real-time render)
 	IterationHistory       []CLIProgressPayload // completed iteration snapshots (for mid-session reconnect restore)
+	HistoryCompacted       bool                 // true after context compression — CLI should reload messages from session
 }
 
 // CLITokenUsage Token 使用量（对应 agent.TokenUsageSnapshot）
@@ -301,6 +306,92 @@ type iterToolSnap struct {
 	Label     string `json:"label,omitempty"`
 	Status    string `json:"status"`
 	ElapsedMS int64  `json:"elapsed_ms"`
+	Summary   string `json:"summary,omitempty"`
+}
+
+// formatToolLabel generates a short human-readable label from a tool name and its JSON arguments.
+// Used when restoring progress from intermediate assistant messages (no Detail snapshot),
+// e.g. after server restart. Produces labels like "Shell(tail -100 file.log)" or "Read(path)".
+func formatToolLabel(name, argsJSON string) string {
+	const maxLen = 60
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return name
+	}
+
+	get := func(key string) string {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		return ""
+	}
+
+	switch name {
+	case "Shell":
+		cmd := get("command")
+		if cmd != "" {
+			if len(cmd) > maxLen-len(name)-2 {
+				cmd = cmd[:maxLen-len(name)-5] + "..."
+			}
+			return name + "(" + cmd + ")"
+		}
+	case "Read":
+		p := get("path")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Grep":
+		p := get("pattern")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Glob":
+		p := get("pattern")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Write", "FileCreate":
+		p := get("path")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Edit", "FileReplace":
+		p := get("path")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "WebSearch":
+		q := get("query")
+		if q != "" {
+			return name + "(" + q + ")"
+		}
+	case "SubAgent":
+		r := get("role")
+		t := get("task")
+		if r != "" {
+			if t != "" && len(t) > 30 {
+				t = t[:27] + "..."
+			}
+			if t != "" {
+				return name + "(" + r + ": " + t + ")"
+			}
+			return name + "(" + r + ")"
+		}
+	default:
+		// Generic: show first string parameter
+		for _, v := range args {
+			if s, ok := v.(string); ok && s != "" {
+				if len(s) > maxLen-len(name)-2 {
+					s = s[:maxLen-len(name)-5] + "..."
+				}
+				return name + "(" + s + ")"
+			}
+		}
+	}
+	return name
 }
 
 // ConvertMessagesToHistory converts raw DB messages into HistoryMessages for CLI display.
@@ -368,6 +459,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 								Status:    t.Status,
 								Elapsed:   t.ElapsedMS,
 								Iteration: snap.Iteration,
+								Summary:   t.Summary,
 							}
 						}
 						iters = append(iters, HistoryIteration{
@@ -402,7 +494,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 				for _, tc := range m.ToolCalls {
 					curIterTools = append(curIterTools, CLIToolProgress{
 						Name:      tc.Name,
-						Label:     tc.Name,
+						Label:     formatToolLabel(tc.Name, tc.Arguments),
 						Status:    "done",
 						Elapsed:   0,
 						Iteration: curIterIdx,
@@ -442,6 +534,7 @@ type CLIChannelConfig struct {
 	DebugCaptureMs       int                                                                                                            // --debug-capture-ms 200: UI capture interval in ms (default 1000)
 	HistoryLoader        func() ([]HistoryMessage, error)                                                                               // 会话恢复：加载历史消息
 	DynamicHistoryLoader func(channelName, chatID string) ([]HistoryMessage, error)                                                     // /su 切换用户后加载目标用户历史
+	AgentSessionDumpFn   func(chatID string) ([]HistoryMessage, error)                                                                  // agent session 切换时从 Agent 内存加载消息
 	GetCurrentValues     func() map[string]string                                                                                       // 获取当前配置值（用于 settings panel 初始值）
 	ApplySettings        func(values map[string]string)                                                                                 // 应用设置变更（写 config.json + 更新运行时状态）
 	IsFirstRun           bool                                                                                                           // 首次运行标志，TUI 启动时自动打开 setup panel
@@ -452,9 +545,12 @@ type CLIChannelConfig struct {
 	AgentCount           func() int                                                                                                     // 获取活跃的 interactive agent 数量
 	AgentList            func() []AgentPanelEntry                                                                                       // 列出活跃 interactive agents（用于 panel 展示）
 	AgentInspect         func(roleName, instance string, tailCount int) (string, error)                                                 // 窥探 interactive agent 的最近活动（tail 风格）
+	AgentMessages        func(roleName, instance string) []SessionChatMessage                                                           // 获取 interactive agent 的对话消息
+	ChatCreateFn         func(channelName, senderID, label string) (string, error)                                                      // 创建新 ChatRoom（返回 chatID）
+	SessionsList         func() []SessionPanelEntry                                                                                     // 列出所有 session（main + subagent）
+	GetActiveProgressFn  func(channelName, chatID string) *CLIProgressPayload                                                           // 获取目标 session 的活跃进度（session switch 恢复用）
 }
 
-// AgentPanelEntry is the channel-layer representation of an interactive agent session for panel display.
 type AgentPanelEntry struct {
 	Role       string
 	Instance   string
@@ -462,6 +558,20 @@ type AgentPanelEntry struct {
 	Background bool
 	Task       string // one-shot subagent task (empty for interactive)
 	Preview    string // latest progress/last reply summary for panel display
+}
+
+// SessionPanelEntry represents a session item in the Sessions panel.
+type SessionPanelEntry struct {
+	ID          string // chatID or "agent:role/instance"
+	Type        string // "main" = main chatroom, "agent" = SubAgent session
+	Channel     string // channel name (e.g. "cli", "web") for history loading
+	Label       string // display label
+	Role        string // agent role (for agent type)
+	Instance    string // agent instance (for agent type)
+	ParentID    string // parent chatID (for agent type)
+	Running     bool   // true = currently active
+	Active      bool   // true = currently selected (main session only)
+	MessageHint string // preview of last message
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +621,8 @@ type CLIChannel struct {
 	llmSubscriber   LLMSubscriber       // switches active LLM (propagated to model)
 
 	// Background tasks
-	bgTaskMgr *tools.BackgroundTaskManager
+	bgTaskMgr  *tools.BackgroundTaskManager
+	bgTaskKill func(taskID string) error // remote mode: RPC-backed kill
 
 	// Runner LLM access
 	llmClient    llm.LLM
@@ -527,9 +638,15 @@ type CLIChannel struct {
 	// Pending injections (set before model exists, applied in Start)
 	pendingTrimHistoryFn     func(time.Time) error
 	pendingResetTokenStateFn func()
-	pendingHistory           []HistoryMessage // remote mode: cached history before model is ready
+	pendingHistory           []HistoryMessage    // remote mode: cached history before model is ready
+	pendingProgress          *CLIProgressPayload // remote mode: cached progress before model is ready
 	pendingCheckpointHook    *tools.CheckpointHook
-	pendingSendInboundFn     func(bus.InboundMessage) bool // remote mode: forward to server
+	pendingSendInboundFn     func(bus.InboundMessage) bool
+	// Pending remote bg task callbacks (set before model exists in remote mode)
+	pendingBgTaskCountFn   func() int
+	pendingBgTaskListFn    func() []*tools.BackgroundTask
+	pendingBgTaskKillFn    func(taskID string) error // remote mode: forward to server
+	pendingBgTaskCleanupFn func()                    // remote mode: cleanup completed tasks
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.
@@ -547,13 +664,15 @@ type ModelLister interface {
 
 // Subscription represents a LLM subscription for display/selection.
 type Subscription struct {
-	ID       string
-	Name     string
-	Provider string
-	BaseURL  string
-	APIKey   string
-	Model    string
-	Active   bool
+	ID              string
+	Name            string
+	Provider        string
+	BaseURL         string
+	APIKey          string
+	Model           string
+	MaxOutputTokens int
+	ThinkingMode    string
+	Active          bool
 }
 
 // SubscriptionManager manages user LLM subscriptions.
@@ -562,7 +681,7 @@ type SubscriptionManager interface {
 	GetDefault(senderID string) (*Subscription, error)
 	Add(sub *Subscription) error
 	Remove(id string) error
-	SetDefault(id string) error
+	SetDefault(id, chatID string) error
 	SetModel(id, model string) error
 	Rename(id, name string) error
 	Update(id string, sub *Subscription) error
@@ -570,7 +689,7 @@ type SubscriptionManager interface {
 
 // LLMSubscriber switches the active LLM for a user (called when subscription changes).
 type LLMSubscriber interface {
-	SwitchSubscription(senderID string, sub *Subscription) error
+	SwitchSubscription(senderID string, sub *Subscription, chatID string) error
 	SwitchModel(senderID, model string)
 	GetDefaultModel() string
 }

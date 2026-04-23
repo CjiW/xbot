@@ -43,7 +43,16 @@ func (a *Agent) handleContextInfo(ctx context.Context, msg bus.InboundMessage, t
 	toolDefsTokens, _ := llm.CountToolsTokens(toolDefs, model)
 
 	// Prefer API-returned prompt_tokens (authoritative) over local estimation.
-	apiTokens := a.lastPromptTokens.Load()
+	// Read from current tenant's DB — Agent-level lastPromptTokens is shared across
+	// all chats and would show wrong values for other sessions.
+	var apiTokens int64
+	if tenantSession != nil {
+		if memSvc := tenantSession.MemoryService(); memSvc != nil {
+			if pt, _, err := memSvc.GetTokenState(ctx, tenantSession.TenantID()); err == nil {
+				apiTokens = pt
+			}
+		}
+	}
 	cm := a.GetContextManager()
 	stats := cm.ContextInfo(messages, model, toolDefsTokens)
 

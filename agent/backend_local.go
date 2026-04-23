@@ -11,6 +11,7 @@ import (
 	"xbot/config"
 	"xbot/event"
 	llm "xbot/llm"
+	log "xbot/logger"
 	"xbot/session"
 	"xbot/storage/sqlite"
 	"xbot/tools"
@@ -97,9 +98,17 @@ func (b *LocalBackend) GetActiveProgress(ch, chatID string) *channel.CLIProgress
 	key := ch + ":" + chatID
 	v, ok := b.agent.lastProgressSnapshot.Load(key)
 	if !ok {
+		log.WithField("key", key).Info("GetActiveProgress: no snapshot found")
 		return nil
 	}
 	snapshot := v.(*channel.CLIProgressPayload)
+	log.WithFields(log.Fields{
+		"key":       key,
+		"phase":     snapshot.Phase,
+		"iteration": snapshot.Iteration,
+		"active":    len(snapshot.ActiveTools),
+		"completed": len(snapshot.CompletedTools),
+	}).Info("GetActiveProgress: snapshot found")
 	// Attach iteration history if available
 	if histPtr, ok := b.agent.iterationHistories.Load(key); ok {
 		hist := *histPtr.(*[]channel.CLIProgressPayload)
@@ -168,6 +177,18 @@ func (b *LocalBackend) ListInteractiveSessions(channelName, chatID string) []Int
 
 func (b *LocalBackend) InspectInteractiveSession(ctx context.Context, roleName, channelName, chatID, instance string, tailCount int) (string, error) {
 	return b.agent.InspectInteractiveSession(ctx, roleName, channelName, chatID, instance, tailCount)
+}
+
+func (b *LocalBackend) GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool) {
+	return b.agent.GetSessionMessages(channelName, chatID, roleName, instance)
+}
+
+func (b *LocalBackend) GetAgentSessionDump(channelName, chatID, roleName, instance string) (*AgentSessionDump, bool) {
+	return b.agent.GetAgentSessionDump(channelName, chatID, roleName, instance)
+}
+
+func (b *LocalBackend) GetAgentSessionDumpByFullKey(fullKey string) (*AgentSessionDump, bool) {
+	return b.agent.GetAgentSessionDumpByFullKey(fullKey)
 }
 
 func (b *LocalBackend) SetContextMode(mode string) error {
@@ -386,7 +407,70 @@ func (b *LocalBackend) GetBgTaskCount(sessionKey string) int {
 	if b.agent.bgTaskMgr == nil {
 		return 0
 	}
-	return len(b.agent.bgTaskMgr.List(sessionKey))
+	return len(b.agent.bgTaskMgr.ListRunning(sessionKey))
+}
+
+func (b *LocalBackend) ListBgTasks(sessionKey string) ([]BgTaskJSON, error) {
+	if b.agent.bgTaskMgr == nil {
+		return nil, nil
+	}
+	// Return all tasks (running + done + error) for the task panel.
+	tasks := b.agent.bgTaskMgr.ListAllForSession(sessionKey)
+	result := make([]BgTaskJSON, len(tasks))
+	for i, t := range tasks {
+		result[i] = BgTaskJSON{
+			ID:        t.ID,
+			Command:   t.Command,
+			Status:    string(t.Status),
+			StartedAt: t.StartedAt.Format(time.RFC3339),
+			ExitCode:  t.ExitCode,
+			Output:    t.Output,
+			Error:     t.Error,
+		}
+		if t.FinishedAt != nil {
+			result[i].FinishedAt = t.FinishedAt.Format(time.RFC3339)
+		}
+	}
+	return result, nil
+}
+
+func (b *LocalBackend) KillBgTask(taskID string) error {
+	if b.agent.bgTaskMgr == nil {
+		return fmt.Errorf("background tasks not available")
+	}
+	return b.agent.bgTaskMgr.Kill(taskID)
+}
+
+func (b *LocalBackend) CleanupCompletedBgTasks(sessionKey string) {
+	if b.agent.bgTaskMgr != nil {
+		b.agent.bgTaskMgr.RemoveCompletedTasks(sessionKey)
+	}
+}
+
+func (b *LocalBackend) ListTenants() ([]TenantInfo, error) {
+	if b.agent.multiSession == nil {
+		return nil, nil
+	}
+	db := b.agent.multiSession.DB()
+	if db == nil {
+		return nil, nil
+	}
+	tenantSvc := sqlite.NewTenantService(db)
+	tenants, err := tenantSvc.ListTenants()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]TenantInfo, len(tenants))
+	for i, t := range tenants {
+		result[i] = TenantInfo{
+			ID:           t.ID,
+			Channel:      t.Channel,
+			ChatID:       t.ChatID,
+			CreatedAt:    t.CreatedAt.Format(time.RFC3339),
+			LastActiveAt: t.LastActiveAt.Format(time.RFC3339),
+		}
+	}
+	return result, nil
 }
 
 func (b *LocalBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
@@ -404,6 +488,7 @@ func (b *LocalBackend) ListSubscriptions(senderID string) ([]channel.Subscriptio
 			ID: s.ID, Name: s.Name, Provider: s.Provider,
 			BaseURL: s.BaseURL, APIKey: s.APIKey,
 			Model: s.Model, Active: s.IsDefault,
+			MaxOutputTokens: s.MaxOutputTokens, ThinkingMode: s.ThinkingMode,
 		}
 	}
 	return result, nil
@@ -422,6 +507,7 @@ func (b *LocalBackend) GetDefaultSubscription(senderID string) (*channel.Subscri
 		ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
 		BaseURL: sub.BaseURL, APIKey: sub.APIKey,
 		Model: sub.Model, Active: sub.IsDefault,
+		MaxOutputTokens: sub.MaxOutputTokens, ThinkingMode: sub.ThinkingMode,
 	}, nil
 }
 
@@ -430,11 +516,15 @@ func (b *LocalBackend) AddSubscription(senderID string, sub channel.Subscription
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
 	}
-	return svc.Add(&sqlite.LLMSubscription{
+	if err := svc.Add(&sqlite.LLMSubscription{
 		ID: sub.ID, SenderID: senderID, Name: sub.Name,
 		Provider: sub.Provider, BaseURL: sub.BaseURL, APIKey: sub.APIKey,
 		Model: sub.Model, IsDefault: sub.Active,
-	})
+	}); err != nil {
+		return err
+	}
+	b.agent.llmFactory.Invalidate(senderID)
+	return nil
 }
 
 func (b *LocalBackend) RemoveSubscription(id string) error {
@@ -455,7 +545,7 @@ func (b *LocalBackend) RemoveSubscription(id string) error {
 	return nil
 }
 
-func (b *LocalBackend) SetDefaultSubscription(id string) error {
+func (b *LocalBackend) SetDefaultSubscription(id string, chatID string) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
@@ -466,6 +556,9 @@ func (b *LocalBackend) SetDefaultSubscription(id string) error {
 	sub, err := svc.Get(id)
 	if err == nil && sub != nil {
 		b.agent.llmFactory.Invalidate(sub.SenderID)
+		if err := b.agent.llmFactory.SwitchSubscription(sub.SenderID, sub, chatID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -483,15 +576,31 @@ func (b *LocalBackend) UpdateSubscription(id string, sub channel.Subscription) e
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
 	}
-	dbSub := &sqlite.LLMSubscription{
-		ID:       sub.ID,
-		Name:     sub.Name,
-		Provider: sub.Provider,
-		BaseURL:  sub.BaseURL,
-		APIKey:   sub.APIKey,
-		Model:    sub.Model,
+	existing, err := svc.Get(id)
+	if err != nil {
+		return err
 	}
-	return svc.Update(dbSub)
+	if existing == nil {
+		return fmt.Errorf("subscription %s not found", id)
+	}
+	dbSub := &sqlite.LLMSubscription{
+		ID:              id,
+		SenderID:        existing.SenderID,
+		Name:            sub.Name,
+		Provider:        sub.Provider,
+		BaseURL:         sub.BaseURL,
+		APIKey:          sub.APIKey,
+		Model:           sub.Model,
+		MaxContext:      existing.MaxContext,
+		MaxOutputTokens: existing.MaxOutputTokens,
+		ThinkingMode:    existing.ThinkingMode,
+		IsDefault:       sub.Active,
+	}
+	if err := svc.Update(dbSub); err != nil {
+		return err
+	}
+	b.agent.llmFactory.Invalidate(existing.SenderID)
+	return nil
 }
 
 func (b *LocalBackend) SetSubscriptionModel(id, model string) error {
@@ -499,7 +608,17 @@ func (b *LocalBackend) SetSubscriptionModel(id, model string) error {
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
 	}
-	return svc.SetModel(id, model)
+	sub, err := svc.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := svc.SetModel(id, model); err != nil {
+		return err
+	}
+	if sub != nil {
+		b.agent.llmFactory.Invalidate(sub.SenderID)
+	}
+	return nil
 }
 
 func (b *LocalBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage, error) {
@@ -531,8 +650,9 @@ func (b *LocalBackend) Close() error {
 }
 
 func (b *LocalBackend) ResetTokenState() {
-	b.agent.lastPromptTokens.Store(0)
-	b.agent.lastCompletionTokens.Store(0)
+	// No-op: token state is per-tenant in DB (tenant_state table), not a
+	// global variable. Clearing it would require knowing the current tenant.
+	// /rewind already clears token state via TrimHistory → SetTokenState(0,0).
 }
 
 func (b *LocalBackend) Run(ctx context.Context) error {

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"xbot/bus"
+	"xbot/clipanic"
 	log "xbot/logger"
 )
 
@@ -52,7 +53,16 @@ func (d *Dispatcher) Run() {
 				log.WithField("channel", msg.Channel).Warn("Unknown channel, dropping message")
 				continue
 			}
-			if _, err := ch.Send(msg); err != nil {
+			if _, err := func() (ret string, err error) {
+				defer func() {
+					if r := recover(); r != nil {
+						clipanic.Report("channel.Dispatcher.Send", msg, r)
+						log.WithField("channel", msg.Channel).Errorf("Channel.Send panic: %v", r)
+						err = fmt.Errorf("channel %s panic: %v", msg.Channel, r)
+					}
+				}()
+				return ch.Send(msg)
+			}(); err != nil {
 				log.WithError(err).WithField("channel", msg.Channel).Error("Failed to send message")
 			}
 		}
@@ -68,6 +78,35 @@ func (d *Dispatcher) Stop() {
 	}
 	d.mu.RUnlock()
 }
+
+// Unregister removes a channel from the dispatcher and stops it.
+// This ensures goroutines are cleaned up when channels are removed.
+func (d *Dispatcher) Unregister(name string) {
+	d.mu.Lock()
+	ch, ok := d.channels[name]
+	if ok {
+		delete(d.channels, name)
+	}
+	d.mu.Unlock()
+	if ok {
+		ch.Stop()
+		log.WithField("channel", name).Info("Channel unregistered and stopped")
+	} else {
+		log.WithField("channel", name).Warn("Channel not found for unregister")
+	}
+}
+
+// SendMessage implements bus.MessageSender.
+func (d *Dispatcher) SendMessage(channelName, chatID, content string) (string, error) {
+	return d.SendDirect(bus.OutboundMessage{
+		Channel: channelName,
+		ChatID:  chatID,
+		Content: content,
+	})
+}
+
+// Compile-time interface check
+var _ bus.MessageSender = (*Dispatcher)(nil)
 
 // SendDirect 同步发送消息到指定渠道，返回平台消息 ID
 func (d *Dispatcher) SendDirect(msg bus.OutboundMessage) (string, error) {

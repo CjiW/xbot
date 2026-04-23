@@ -231,6 +231,16 @@ func (m *cliModel) View() tea.View {
 		} else {
 			// 就绪态：显示消息计数 + 当前模型（如果有覆盖）
 			readyParts := []string{m.locale.StatusReady}
+			// Session indicator (for agent sessions)
+			if m.channelName == "agent" {
+				// Extract role/instance from chatID format: "channel:chatID/role:instance"
+				parts := strings.SplitN(m.chatID, "/", 2)
+				if len(parts) == 2 {
+					readyParts = append(readyParts, fmt.Sprintf("🤖 %s", parts[1]))
+				} else {
+					readyParts = append(readyParts, fmt.Sprintf("🤖 %s", m.chatID))
+				}
+			}
 			// 消息计数
 			msgCount := len(m.messages)
 			if msgCount > 0 {
@@ -244,7 +254,7 @@ func (m *cliModel) View() tea.View {
 			// 模型名称（使用缓存，避免每次 View() 重复查找）
 			if m.cachedModelName != "" {
 				modelHint := m.cachedModelName
-				if m.channel != nil && m.channel.modelLister != nil && len(m.channel.modelLister.ListAllModels()) > 1 {
+				if m.modelCount > 1 {
 					modelHint += " [Ctrl+N]"
 				}
 				readyParts = append(readyParts, modelHint)
@@ -269,15 +279,24 @@ func (m *cliModel) View() tea.View {
 				status = hint
 			}
 		}
-		// Background task + agent indicator
-		totalItems := m.bgTaskCount + m.agentCount
-		if totalItems > 0 {
+		// Background task indicator
+		if m.bgTaskCount > 0 {
 			bgHint := m.styles.WarningSt.Render(
-				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, m.agentCount))
+				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount))
 			if status != "" {
 				status += "  " + bgHint
 			} else {
 				status = bgHint
+			}
+		}
+		// Agent indicator
+		if m.agentCount > 0 {
+			agentHint := m.styles.WarningSt.Render(
+				fmt.Sprintf(m.locale.AgentRunning, m.agentCount))
+			if status != "" {
+				status += "  " + agentHint
+			} else {
+				status = agentHint
 			}
 		}
 		// Message queue indicator (persistent, not temp status)
@@ -681,10 +700,8 @@ func (m *cliModel) renderFooter() string {
 			if m.subscriptionMgr != nil {
 				hints = append(hints, m.ctrlKey("p", "Subs"))
 			}
-			if len(m.inputHistory) > 0 && len(m.messageQueue) > 0 {
-				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
-			}
-			if m.bgTaskCount > 0 || m.agentCount > 0 {
+			hints = append(hints, m.ctrlKey("t", "Sessions"))
+			if m.bgTaskCount > 0 {
 				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
 			}
 		} else {

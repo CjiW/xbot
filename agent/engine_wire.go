@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"xbot/bus"
@@ -66,7 +67,7 @@ func (a *Agent) buildBaseRunConfig(
 ) (RunConfig, int) {
 	sessionKey := channel + ":" + chatID
 
-	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(senderID)
+	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLMForChat(senderID, chatID)
 
 	// LLM 并发限流回调（per-tenant）
 	llmSemAcquire := a.llmFactory.LLMSemAcquireForUser(senderID)
@@ -103,9 +104,8 @@ func (a *Agent) buildBaseRunConfig(
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
-		MaxIterations:    a.getMaxIterations(),
-		MaxOutputTokens:  a.llmFactory.GetMaxOutputTokens(senderID),
-		DynamicMaxTokens: a.dynamicMaxTokens(),
+		MaxIterations:   a.getMaxIterations(),
+		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(senderID),
 
 		// Session
 		SessionKey: sessionKey,
@@ -206,13 +206,26 @@ func (a *Agent) buildMainRunConfig(
 		case "cli":
 			var cliCh *channelpkg.CLIChannel
 			var remoteCLICh *channelpkg.RemoteCLIChannel
-			if ch, ok := a.channelFinder("cli"); ok {
-				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-					cliCh = cc
-				} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
-					remoteCLICh = rc
+			if a.channelFinder != nil {
+				if ch, ok := a.channelFinder("cli"); ok {
+					if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+						cliCh = cc
+					} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+						remoteCLICh = rc
+					} else {
+						log.WithField("type", fmt.Sprintf("%T", ch)).Warn("buildMainRunConfig: channelFinder('cli') returned unexpected type")
+					}
+				} else {
+					log.Warn("buildMainRunConfig: channelFinder('cli') returned not found")
 				}
+			} else {
+				log.Warn("buildMainRunConfig: channelFinder is nil")
 			}
+			log.WithFields(log.Fields{
+				"hasCliCh":       cliCh != nil,
+				"hasRemoteCLICh": remoteCLICh != nil,
+				"progressKey":    channel + ":" + chatID,
+			}).Info("buildMainRunConfig: cli channel resolution")
 			if cliCh != nil || remoteCLICh != nil {
 				progressKey := channel + ":" + chatID
 				cfg.ProgressEventHandler = func(event *ProgressEvent) {
@@ -222,10 +235,12 @@ func (a *Agent) buildMainRunConfig(
 					s := event.Structured
 					if cliCh != nil {
 						payload := &channelpkg.CLIProgressPayload{
-							Phase:     string(s.Phase),
-							Iteration: s.Iteration,
-							Thinking:  s.ThinkingContent,
-							Reasoning: s.ReasoningContent,
+							ChatID:           progressKey,
+							Phase:            string(s.Phase),
+							Iteration:        s.Iteration,
+							Thinking:         s.ThinkingContent,
+							Reasoning:        s.ReasoningContent,
+							HistoryCompacted: s.HistoryCompacted,
 						}
 						for _, t := range s.ActiveTools {
 							payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
@@ -278,28 +293,14 @@ func (a *Agent) buildMainRunConfig(
 						}
 						cliCh.SendProgress(chatID, payload)
 						// Save snapshot + track iteration history for mid-session reconnect.
-						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
-							prev := prevSnap.(*channelpkg.CLIProgressPayload)
-							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
-								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
-								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
-								already := false
-								for _, h := range hist {
-									if h.Iteration == prev.Iteration {
-										already = true
-										break
-									}
-								}
-								if !already {
-									updated := append(hist, *prev)
-									a.iterationHistories.Store(progressKey, &updated)
-								}
-							}
-						}
+						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
+							return s.Iteration > prev.Iteration && prev.Iteration >= 0
+						})
 						a.lastProgressSnapshot.Store(progressKey, payload)
 					}
 					if remoteCLICh != nil {
 						payload := &channelpkg.WsProgressPayload{
+							ChatID:    progressKey,
 							Phase:     string(s.Phase),
 							Iteration: s.Iteration,
 							Thinking:  s.ThinkingContent,
@@ -350,6 +351,68 @@ func (a *Agent) buildMainRunConfig(
 							}
 						}
 						remoteCLICh.SendProgress(chatID, payload)
+						// Store progress snapshot for remote CLI reconnect recovery.
+						// Without this, GetActiveProgress returns nil after CLI restart
+						// because only the local cliCh path stored snapshots.
+						cliPayload := &channelpkg.CLIProgressPayload{
+							ChatID:    progressKey,
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+							Reasoning: s.ReasoningContent,
+						}
+						for _, t := range s.ActiveTools {
+							cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
+								Name: t.Name, Label: t.Label, Status: string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+							})
+						}
+						for _, t := range s.CompletedTools {
+							cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
+								Name: t.Name, Label: t.Label, Status: string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+							})
+						}
+						if len(event.Lines) > 0 {
+							subAgents := ExtractSubAgentTree(event.Lines)
+							if len(subAgents) > 0 {
+								cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
+								for i, sa := range subAgents {
+									cliSubAgents[i] = channelpkg.CLISubAgent{
+										Role:     sa.Role,
+										Status:   sa.Status,
+										Desc:     sa.Desc,
+										Children: convertCLISubAgentTree(sa.Children),
+									}
+								}
+								cliPayload.SubAgents = cliSubAgents
+							}
+						}
+						if len(s.Todos) > 0 {
+							cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+							for i, td := range s.Todos {
+								cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+							}
+						}
+						if s.TokenUsage != nil {
+							cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+							}
+						}
+						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
+							return s.Iteration > prev.Iteration && prev.Iteration >= 0
+						})
+						a.lastProgressSnapshot.Store(progressKey, cliPayload)
+						log.WithFields(log.Fields{
+							"key":       progressKey,
+							"phase":     cliPayload.Phase,
+							"iteration": cliPayload.Iteration,
+							"active":    len(cliPayload.ActiveTools),
+							"completed": len(cliPayload.CompletedTools),
+						}).Info("remote CLI: stored progress snapshot")
 					}
 				}
 			}
@@ -430,26 +493,9 @@ func (a *Agent) buildMainRunConfig(
 						// Track iteration history: when iteration advances, snapshot the
 						// PREVIOUS iteration into the history list for mid-session reconnect.
 						cliSnapshot := payload.ToCLIProgressPayload()
-						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
-							prev := prevSnap.(*channelpkg.CLIProgressPayload)
-							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
-								// Iteration advanced — save previous iteration to history
-								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
-								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
-								// Only append if this iteration isn't already recorded
-								already := false
-								for _, h := range hist {
-									if h.Iteration == prev.Iteration {
-										already = true
-										break
-									}
-								}
-								if !already {
-									updated := append(hist, *prev)
-									a.iterationHistories.Store(progressKey, &updated)
-								}
-							}
-						}
+						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
+							return s.Iteration > prev.Iteration && prev.Iteration >= 0
+						})
 						// Save current iteration snapshot
 						a.lastProgressSnapshot.Store(progressKey, cliSnapshot)
 					}
@@ -514,7 +560,7 @@ func (a *Agent) buildMainRunConfig(
 			}
 			cfg.StreamContentFunc = func(content string) {
 				if cliCh != nil {
-					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{StreamContent: content})
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, StreamContent: content})
 				}
 				if remoteCLICh != nil {
 					remoteCLICh.SendStreamContent(chatID, content, "")
@@ -525,7 +571,7 @@ func (a *Agent) buildMainRunConfig(
 			}
 			cfg.StreamReasoningFunc = func(content string) {
 				if cliCh != nil {
-					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ReasoningStreamContent: content})
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, ReasoningStreamContent: content})
 				}
 				if remoteCLICh != nil {
 					remoteCLICh.SendStreamContent(chatID, "", content)
@@ -716,7 +762,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	subAgentID := parentAgentID + "/" + roleName
 
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
-	// 如果角色指定了模型，则通过 GetLLMForModel 智能查找对应的订阅
+	// 如果角色指定了模型（含 tier 名称如 vanguard/balance/swift），则通过 GetLLMForModel
+	// 智能查找对应的订阅。当 tier 未配置模型时，自动 fallback 到 GetLLM(originUserID)，
+	// 即父 agent 当前使用的模型和订阅。model 为空时同理。
 	var llmClient llm.LLM
 	var subModel string
 	var userMaxCtx int
@@ -738,19 +786,18 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	cfg := RunConfig{
-		LLMClient:        llmClient,
-		Model:            subModel,
-		ThinkingMode:     thinkingMode,
-		Stream:           stream,
-		MaxOutputTokens:  a.llmFactory.GetMaxOutputTokens(originUserID),
-		DynamicMaxTokens: a.dynamicMaxTokens(),
-		Tools:            subTools,
-		Messages:         messages,
-		AgentID:          subAgentID,
-		Channel:          parentCtx.Channel,
-		ChatID:           parentCtx.ChatID,
-		SenderID:         parentAgentID, // SubAgent: 直接调用者 = 父 Agent
-		OriginUserID:     originUserID,  // SubAgent: 继承原始用户 ID
+		LLMClient:       llmClient,
+		Model:           subModel,
+		ThinkingMode:    thinkingMode,
+		Stream:          stream,
+		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(originUserID),
+		Tools:           subTools,
+		Messages:        messages,
+		AgentID:         subAgentID,
+		Channel:         parentCtx.Channel,
+		ChatID:          parentCtx.ChatID,
+		SenderID:        parentAgentID, // SubAgent: 直接调用者 = 父 Agent
+		OriginUserID:    originUserID,  // SubAgent: 继承原始用户 ID
 
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,
@@ -869,6 +916,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	// HookChain — SubAgent inherits parent Agent's hook chain
 	cfg.HookChain = a.hookChain
 	cfg.SettingsSvc = a.settingsSvc
+	cfg.MessageSender = a.messageSender
+	cfg.RegisterAgentChannel = a.registerAgentChannel
+	cfg.UnregisterAgentChannel = a.unregisterAgentChannel
 
 	// Interactive 回调独立注入，不依赖 SpawnAgent
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
@@ -915,21 +965,24 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		SenderName:   senderName,
 		SendFunc:     a.sendMessage,
 
-		WorkingDir:       workingDir,
-		WorkspaceRoot:    workspaceRoot,
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SkillsDirs:       a.globalSkillDirs,
-		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, sandboxUserID),
-		GlobalMCPConfig:  filepath.Join(a.xbotHome, "mcp.json"),
-		DataDir:          a.workDir,
-		SandboxEnabled:   a.sandboxMode != "none",
-		PreferredSandbox: a.sandboxMode,
-		Sandbox:          resolveSandbox(a.sandbox, sandboxUserID),
-		SandboxMode:      a.sandboxMode,
-		InjectInbound:    a.injectInbound,
-		Tools:            a.tools,
-		BgTaskManager:    a.bgTaskMgr,
+		WorkingDir:             workingDir,
+		WorkspaceRoot:          workspaceRoot,
+		ReadOnlyRoots:          a.globalSkillDirs,
+		SkillsDirs:             a.globalSkillDirs,
+		AgentsDir:              a.agentsDir,
+		MCPConfigPath:          tools.UserMCPConfigPath(a.workDir, sandboxUserID),
+		GlobalMCPConfig:        filepath.Join(a.xbotHome, "mcp.json"),
+		DataDir:                a.workDir,
+		SandboxEnabled:         a.sandboxMode != "none",
+		PreferredSandbox:       a.sandboxMode,
+		Sandbox:                resolveSandbox(a.sandbox, sandboxUserID),
+		SandboxMode:            a.sandboxMode,
+		InjectInbound:          a.injectInbound,
+		Tools:                  a.tools,
+		BgTaskManager:          a.bgTaskMgr,
+		MessageSender:          a.messageSender,
+		RegisterAgentChannel:   a.registerAgentChannel,
+		UnregisterAgentChannel: a.unregisterAgentChannel,
 	}
 
 	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
@@ -957,14 +1010,19 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 	cfg.HookChain = a.hookChain
 	cfg.SettingsSvc = a.settingsSvc
 
+	var sessionOnce sync.Once
+
 	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		// Lazy-inject session so buildToolContext can persist CWD across tool calls.
 		// Without this, Cd stores CWD in a ToolContext that is discarded on next call.
-		if cfg.Session == nil {
-			if sess, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
-				cfg.Session = sess
+		// Use sync.Once to prevent concurrent goroutines from racing on cfg.Session.
+		sessionOnce.Do(func() {
+			if cfg.Session == nil {
+				if sess, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
+					cfg.Session = sess
+				}
 			}
-		}
+		})
 
 		// 1. 工具查找：session MCP 优先，然后全局注册表
 		var tool tools.Tool
@@ -1355,7 +1413,7 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	}
 
 	// Register one-shot subagent in interactiveSubAgents so it's visible
-	// in the task & agents panel. Removed immediately after Run completes.
+	// in the Ctrl+T panel. Kept after completion for history viewing; TTL cleans it up.
 	oneshotInstance := fmt.Sprintf("oneshot-%s-%d", roleName, time.Now().UnixNano())
 	oneshotKey := interactiveKey(originChannel, originChatID, roleName, oneshotInstance)
 	oneshotIA := &interactiveAgent{
@@ -1367,6 +1425,23 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		task:       task,
 	}
 	a.interactiveSubAgents.Store(oneshotKey, oneshotIA)
+
+	// Create TenantSession for message persistence (same as interactive SubAgents).
+	agentTenantSession, err := a.multiSession.GetOrCreateSession("agent", oneshotKey)
+	if err != nil {
+		a.interactiveSubAgents.Delete(oneshotKey)
+		return nil, fmt.Errorf("create oneshot agent tenant session: %w", err)
+	}
+	cfg.Session = agentTenantSession
+	_ = agentTenantSession.Clear()
+
+	// Eager-save user message so get_history returns it during Run().
+	if err := agentTenantSession.AddMessage(llm.NewUserMessage(task)); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to eager-save oneshot agent user message")
+	}
+
+	// Wire CLI progress + stream callbacks so Ctrl+T shows real-time progress.
+	a.wireSubAgentCLIProgress(oneshotKey, originChatID, &cfg)
 
 	// Wire incremental snapshot callback so iteration history is available
 	// during Run() for panel preview and inspect — not only after completion.
@@ -1388,15 +1463,14 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	} else {
 		log.Ctx(ctx).Warn("oneshot subagent returned nil output")
 		oneshotIA.mu.Unlock()
-		a.interactiveSubAgents.Delete(oneshotKey)
+		a.destroyInteractiveSession(oneshotKey)
 		return &bus.OutboundMessage{}, nil
 	}
 	oneshotIA.mu.Unlock()
-	// One-shot agents are ephemeral: remove immediately after completion.
-	// Unlike interactive sessions, there's no "send more messages" use case.
-	// Also cascade: cancel any bg sessions spawned during this one-shot's Run().
+	// Cascade-cancel any bg sessions spawned during this one-shot's Run(),
+	// then destroy the one-shot session immediately (no TTL retention).
 	a.cancelChildSessions(oneshotKey)
-	a.interactiveSubAgents.Delete(oneshotKey)
+	a.destroyInteractiveSession(oneshotKey)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,

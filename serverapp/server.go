@@ -135,148 +135,38 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****"
 }
 
-func adminConfigSubscriptions(cfg *config.Config) []channel.Subscription {
-	result := make([]channel.Subscription, len(cfg.Subscriptions))
-	for i, s := range cfg.Subscriptions {
-		result[i] = channel.Subscription{
-			ID:       s.ID,
-			Name:     s.Name,
-			Provider: s.Provider,
-			BaseURL:  s.BaseURL,
-			APIKey:   maskAPIKey(s.APIKey),
-			Model:    s.Model,
-			Active:   s.Active,
-		}
+// createAdminLLM creates a new LLM client from the admin config.
+func createAdminLLM(cfg *config.Config) (llm_pkg.LLM, error) {
+	switch cfg.LLM.Provider {
+	case "openai":
+		return llm_pkg.NewOpenAILLM(llm_pkg.OpenAIConfig{
+			BaseURL:      cfg.LLM.BaseURL,
+			APIKey:       cfg.LLM.APIKey,
+			DefaultModel: cfg.LLM.Model,
+			MaxTokens:    cfg.LLM.MaxOutputTokens,
+		}), nil
+	case "anthropic":
+		return llm_pkg.NewAnthropicLLM(llm_pkg.AnthropicConfig{
+			BaseURL:      cfg.LLM.BaseURL,
+			APIKey:       cfg.LLM.APIKey,
+			DefaultModel: cfg.LLM.Model,
+			MaxTokens:    cfg.LLM.MaxOutputTokens,
+		}), nil
+	default:
+		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.LLM.Provider)
 	}
-	return result
-}
-
-func adminGetDefaultSubscription(cfg *config.Config) *channel.Subscription {
-	for _, s := range cfg.Subscriptions {
-		if s.Active {
-			return &channel.Subscription{
-				ID:       s.ID,
-				Name:     s.Name,
-				Provider: s.Provider,
-				BaseURL:  s.BaseURL,
-				APIKey:   maskAPIKey(s.APIKey),
-				Model:    s.Model,
-				Active:   true,
-			}
-		}
-	}
-	return nil
-}
-
-func syncLLMFromActiveAdminSub(cfg *config.Config) {
-	for _, sc := range cfg.Subscriptions {
-		if sc.Active {
-			cfg.LLM.Provider = sc.Provider
-			cfg.LLM.BaseURL = sc.BaseURL
-			cfg.LLM.APIKey = sc.APIKey
-			cfg.LLM.Model = sc.Model
-			cfg.LLM.MaxOutputTokens = sc.MaxOutputTokens
-			cfg.LLM.ThinkingMode = sc.ThinkingMode
-			return
-		}
-	}
-}
-
-func persistAdminSubscriptions(cfg *config.Config, backend agent.AgentBackend) error {
-	syncLLMFromActiveAdminSub(cfg)
-	if backend.LLMFactory() != nil {
-		backend.LLMFactory().SetModelTiers(cfg.LLM)
-		backend.LLMFactory().Invalidate(adminSenderID)
-	}
-	return config.SaveToFile(config.ConfigFilePath(), cfg)
-}
-
-func adminAddSubscription(cfg *config.Config, backend agent.AgentBackend, sub channel.Subscription) error {
-	cfg.Subscriptions = append(cfg.Subscriptions, config.SubscriptionConfig{
-		ID:       sub.ID,
-		Name:     sub.Name,
-		Provider: sub.Provider,
-		BaseURL:  sub.BaseURL,
-		APIKey:   sub.APIKey,
-		Model:    sub.Model,
-		Active:   sub.Active,
-	})
-	return persistAdminSubscriptions(cfg, backend)
-}
-
-func adminUpdateSubscription(cfg *config.Config, backend agent.AgentBackend, id string, sub channel.Subscription) error {
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Name = sub.Name
-			cfg.Subscriptions[i].Provider = sub.Provider
-			cfg.Subscriptions[i].BaseURL = sub.BaseURL
-			if !strings.HasSuffix(sub.APIKey, "****") {
-				cfg.Subscriptions[i].APIKey = sub.APIKey
-			}
-			cfg.Subscriptions[i].Model = sub.Model
-			return persistAdminSubscriptions(cfg, backend)
-		}
-	}
-	return fmt.Errorf("subscription %s not found", id)
-}
-
-func adminRemoveSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
-	filtered := cfg.Subscriptions[:0]
-	removed := false
-	for _, s := range cfg.Subscriptions {
-		if s.ID == id {
-			removed = true
-			continue
-		}
-		filtered = append(filtered, s)
-	}
-	if !removed {
-		return fmt.Errorf("subscription %s not found", id)
-	}
-	cfg.Subscriptions = filtered
-	return persistAdminSubscriptions(cfg, backend)
-}
-
-func adminSetDefaultSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
-	found := false
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Active = true
-			found = true
-		} else {
-			cfg.Subscriptions[i].Active = false
-		}
-	}
-	if !found {
-		return fmt.Errorf("subscription %s not found", id)
-	}
-	return persistAdminSubscriptions(cfg, backend)
-}
-
-func adminRenameSubscription(cfg *config.Config, backend agent.AgentBackend, id, name string) error {
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Name = name
-			return persistAdminSubscriptions(cfg, backend)
-		}
-	}
-	return fmt.Errorf("subscription %s not found", id)
-}
-
-func adminSetSubscriptionModel(cfg *config.Config, backend agent.AgentBackend, id, model string) error {
-	for i := range cfg.Subscriptions {
-		if cfg.Subscriptions[i].ID == id {
-			cfg.Subscriptions[i].Model = model
-			return persistAdminSubscriptions(cfg, backend)
-		}
-	}
-	return fmt.Errorf("subscription %s not found", id)
 }
 
 // handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
 // to the server's LocalBackend. This is the server-side counterpart of
 // RemoteBackend.callRPC().
 func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
+	// bizID is the resolved business identity for DB operations.
+	// senderID is the WS auth identity, used ONLY for isAdmin() authorization.
+	// Admin ("admin") is a role, not a business ID — all admin's CLI data
+	// lives under cliSenderID ("cli_user").
+	bizID := senderIDFromParams(params, senderID)
+
 	switch method {
 	// --- Context / settings ---
 	case "get_context_mode":
@@ -307,27 +197,24 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		effectiveSenderID := senderID
-		if p.SenderID != "" {
-			effectiveSenderID = p.SenderID
-		}
-		if effectiveSenderID == "admin" {
-			result, err := getGlobalCLISettings(cfg)
-			if err != nil {
-				return nil, err
-			}
-			return json.Marshal(result)
-		}
-		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
+		// All users (including admin) go through DB settings service.
+		// Migrate config.json values on first access if DB has no data yet.
+		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, bizID); err != nil {
 			return nil, err
 		}
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
 		}
-		result, err := backend.SettingsService().GetSettings(p.Namespace, effectiveSenderID)
+		result, err := backend.SettingsService().GetSettings(p.Namespace, bizID)
 		if err != nil {
 			return nil, err
 		}
+		// Remove LLM keys from settings response — they come from user_llm_subscriptions.
+		// The CLI mergeCLISettingsValues() reads LLM fields from subscriptionMgr.GetDefault().
+		delete(result, "llm_provider")
+		delete(result, "llm_api_key")
+		delete(result, "llm_model")
+		delete(result, "llm_base_url")
 		return json.Marshal(result)
 	case "set_setting":
 		var p struct {
@@ -339,23 +226,26 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		effectiveSenderID := senderID
-		if p.SenderID != "" {
-			effectiveSenderID = p.SenderID
-		}
-		if effectiveSenderID == "admin" {
-			if err := setGlobalCLISetting(cfg, backend, p.Key, p.Value); err != nil {
-				return nil, err
-			}
-			return nil, nil
-		}
-		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
+		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, bizID); err != nil {
 			return nil, err
+		}
+		// LLM fields are managed exclusively via update_subscription RPC.
+		// Silently ignore them here for backward compatibility.
+		switch p.Key {
+		case "llm_provider", "llm_api_key", "llm_model", "llm_base_url":
+			return nil, nil
 		}
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
 		}
-		return nil, backend.SettingsService().SetSetting(p.Namespace, effectiveSenderID, p.Key, p.Value)
+		if err := backend.SettingsService().SetSetting(p.Namespace, bizID, p.Key, p.Value); err != nil {
+			return nil, err
+		}
+		// Apply runtime changes for admin
+		if isAdmin(senderID) {
+			applyRuntimeSetting(cfg, backend, bizID, p.Key, p.Value)
+		}
+		return nil, nil
 
 	// --- Max iterations / concurrency / context tokens ---
 	case "set_max_iterations":
@@ -390,15 +280,15 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 	case "get_default_model":
 		model := ""
 		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
-			if sub, err := subSvc.GetDefault(senderID); err == nil && sub != nil && sub.Model != "" {
+			if sub, err := subSvc.GetDefault(bizID); err == nil && sub != nil && sub.Model != "" {
 				model = sub.Model
 			}
 		}
 		if model == "" {
-			_, m, _, _ := backend.LLMFactory().GetLLM(senderID)
+			_, m, _, _ := backend.LLMFactory().GetLLM(bizID)
 			model = m
 		}
-		log.WithField("sender_id", senderID).WithField("model", model).Info("RPC get_default_model")
+		log.WithField("sender_id", bizID).WithField("model", model).Debug("RPC get_default_model")
 		return json.Marshal(model)
 	case "set_user_model":
 		var p struct {
@@ -407,7 +297,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserModel(senderID, p.Model)
+		return nil, backend.SetUserModel(bizID, p.Model)
 	case "switch_model":
 		var p struct {
 			Model string `json:"model"`
@@ -415,22 +305,18 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		log.WithField("sender_id", senderID).WithField("model", p.Model).Info("RPC switch_model")
-		backend.SwitchModel(senderID, p.Model)
+		log.WithField("sender_id", bizID).WithField("model", p.Model).Info("RPC switch_model")
+		backend.SwitchModel(bizID, p.Model)
 		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
-			if sub, err := subSvc.GetDefault(senderID); err == nil && sub != nil {
+			if sub, err := subSvc.GetDefault(bizID); err == nil && sub != nil {
 				if err := subSvc.SetModel(sub.ID, p.Model); err != nil {
 					log.WithError(err).Warn("RPC switch_model: SetModel failed")
-				} else {
-					log.WithField("sub_id", sub.ID).Debug("RPC switch_model: persisted")
 				}
-			} else {
-				log.WithField("sender_id", senderID).Warn("RPC switch_model: no default subscription")
 			}
 		}
 		return nil, nil
 	case "get_user_max_context":
-		return json.Marshal(backend.GetUserMaxContext(senderID))
+		return json.Marshal(backend.GetUserMaxContext(bizID))
 	case "set_user_max_context":
 		var p struct {
 			MaxContext int `json:"max_context"`
@@ -438,9 +324,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserMaxContext(senderID, p.MaxContext)
+		return nil, backend.SetUserMaxContext(bizID, p.MaxContext)
 	case "get_user_max_output_tokens":
-		return json.Marshal(backend.GetUserMaxOutputTokens(senderID))
+		return json.Marshal(backend.GetUserMaxOutputTokens(bizID))
 	case "set_user_max_output_tokens":
 		var p struct {
 			MaxTokens int `json:"max_tokens"`
@@ -448,9 +334,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserMaxOutputTokens(senderID, p.MaxTokens)
+		return nil, backend.SetUserMaxOutputTokens(bizID, p.MaxTokens)
 	case "get_user_thinking_mode":
-		return json.Marshal(backend.GetUserThinkingMode(senderID))
+		return json.Marshal(backend.GetUserThinkingMode(bizID))
 	case "set_user_thinking_mode":
 		var p struct {
 			Mode string `json:"mode"`
@@ -458,9 +344,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserThinkingMode(senderID, p.Mode)
+		return nil, backend.SetUserThinkingMode(bizID, p.Mode)
 	case "get_llm_concurrency":
-		return json.Marshal(backend.GetLLMConcurrency(senderID))
+		return json.Marshal(backend.GetLLMConcurrency(bizID))
 	case "set_llm_concurrency":
 		var p struct {
 			Personal int `json:"personal"`
@@ -468,7 +354,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetLLMConcurrency(senderID, p.Personal)
+		return nil, backend.SetLLMConcurrency(bizID, p.Personal)
 	case "set_default_thinking_mode":
 		var p struct {
 			Mode string `json:"mode"`
@@ -485,12 +371,16 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		return json.Marshal(backend.LLMFactory().ListModels())
+		client, _, _, _ := backend.LLMFactory().GetLLM(bizID)
+		models := client.ListModels()
+		return json.Marshal(models)
 	case "list_all_models":
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		return json.Marshal(backend.LLMFactory().ListAllModelsForUser(senderID))
+		models := backend.LLMFactory().ListAllModelsForUser(bizID)
+		log.WithField("count", len(models)).Debug("RPC list_all_models")
+		return json.Marshal(models)
 	case "set_model_tiers":
 		if !isAdmin(senderID) {
 			return nil, fmt.Errorf("admin only")
@@ -515,11 +405,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// SetProxyLLM(nil) would store a nil client and crash GetLLM,
 		// so use SwitchModel instead which only updates the cached model name.
 		if backend.LLMFactory() != nil {
-			backend.LLMFactory().SwitchModel(senderID, p.Model)
+			backend.LLMFactory().SwitchModel(bizID, p.Model)
 		}
 		return nil, nil
 	case "clear_proxy_llm":
-		backend.ClearProxyLLM(senderID)
+		backend.ClearProxyLLM(bizID)
 		return nil, nil
 
 	// --- Memory ---
@@ -536,13 +426,13 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("multi-session not available")
 		}
 		// Non-admin users can only clear their own memory
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, senderID)
+		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, bizID)
 	case "get_memory_stats":
 		var p struct {
 			Channel string `json:"channel"`
@@ -555,26 +445,28 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("multi-session not available")
 		}
 		// Non-admin users can only view their own memory stats
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, senderID)
+		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, bizID)
 		return json.Marshal(result)
 	case "get_user_token_usage":
+		bizID := bizID
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		usage, err := backend.MultiSession().GetUserTokenUsage(senderID)
+		usage, err := backend.MultiSession().GetUserTokenUsage(bizID)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(usage)
 	case "get_daily_token_usage":
 		var p struct {
-			Days int `json:"days"`
+			Days     int    `json:"days"`
+			SenderID string `json:"sender_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -582,7 +474,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		daily, err := backend.MultiSession().GetDailyTokenUsage(senderID, p.Days)
+		bizID := bizID
+		daily, err := backend.MultiSession().GetDailyTokenUsage(bizID, p.Days)
 		if err != nil {
 			return nil, err
 		}
@@ -597,11 +490,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
 		return json.Marshal(backend.CountInteractiveSessions(p.Channel, p.ChatID))
 	case "list_interactive_sessions":
@@ -612,11 +505,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
 		return json.Marshal(backend.ListInteractiveSessions(p.Channel, p.ChatID))
 	case "inspect_interactive_session":
@@ -630,19 +523,74 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
 		result, err := backend.InspectInteractiveSession(context.Background(), p.Role, p.Channel, p.ChatID, p.Instance, p.TailCount)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(result)
+	case "get_session_messages":
+		var p struct {
+			Channel  string `json:"channel"`
+			ChatID   string `json:"chat_id"`
+			Role     string `json:"role"`
+			Instance string `json:"instance"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = bizID
+		}
+		msgs, _ := backend.GetSessionMessages(p.Channel, p.ChatID, p.Role, p.Instance)
+		if msgs == nil {
+			msgs = []agent.SessionMessage{}
+		}
+		return json.Marshal(msgs)
+	case "get_agent_session_dump":
+		var p struct {
+			Channel  string `json:"channel"`
+			ChatID   string `json:"chat_id"`
+			Role     string `json:"role"`
+			Instance string `json:"instance"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = bizID
+		}
+		dump, _ := backend.GetAgentSessionDump(p.Channel, p.ChatID, p.Role, p.Instance)
+		if dump == nil {
+			dump = &agent.AgentSessionDump{}
+		}
+		return json.Marshal(dump)
 
-	// --- Background tasks ---
+	case "get_agent_session_dump_by_full_key":
+		var p struct {
+			FullKey string `json:"full_key"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		dump, _ := backend.GetAgentSessionDumpByFullKey(p.FullKey)
+		if dump == nil {
+			dump = &agent.AgentSessionDump{}
+		}
+		return json.Marshal(dump)
+
+		// --- Background tasks ---
 	case "get_bg_task_count":
 		var p struct {
 			SessionKey string `json:"session_key"`
@@ -653,7 +601,113 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.BgTaskManager() == nil {
 			return json.Marshal(0)
 		}
-		return json.Marshal(len(backend.BgTaskManager().List(p.SessionKey)))
+		return json.Marshal(len(backend.BgTaskManager().ListRunning(p.SessionKey)))
+	case "list_bg_tasks":
+		var p struct {
+			SessionKey string `json:"session_key"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.BgTaskManager() == nil {
+			return json.Marshal([]struct{}{})
+		}
+		// Return ALL tasks (running + done + error), not just running.
+		// The task panel needs to show completed tasks too.
+		tasks := backend.BgTaskManager().ListAllForSession(p.SessionKey)
+		// Strip internal fields before serialization
+		type bgTaskJSON struct {
+			ID         string `json:"id"`
+			Command    string `json:"command"`
+			Status     string `json:"status"`
+			StartedAt  string `json:"started_at"`
+			FinishedAt string `json:"finished_at,omitempty"`
+			Output     string `json:"output"`
+			ExitCode   int    `json:"exit_code"`
+			Error      string `json:"error,omitempty"`
+		}
+		result := make([]bgTaskJSON, len(tasks))
+		for i, t := range tasks {
+			result[i] = bgTaskJSON{
+				ID:        t.ID,
+				Command:   t.Command,
+				Status:    string(t.Status),
+				StartedAt: t.StartedAt.Format(time.RFC3339),
+				ExitCode:  t.ExitCode,
+				Output:    t.Output,
+				Error:     t.Error,
+			}
+			if t.FinishedAt != nil {
+				result[i].FinishedAt = t.FinishedAt.Format(time.RFC3339)
+			}
+		}
+		return json.Marshal(result)
+	case "kill_bg_task":
+		var p struct {
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.BgTaskManager() == nil {
+			return nil, fmt.Errorf("background tasks not available")
+		}
+		return nil, backend.BgTaskManager().Kill(p.TaskID)
+	case "cleanup_completed_bg_tasks":
+		var p struct {
+			SessionKey string `json:"session_key"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.BgTaskManager() != nil {
+			backend.BgTaskManager().RemoveCompletedTasks(p.SessionKey)
+		}
+		return json.Marshal(true)
+
+	case "list_tenants":
+		// List tenants (sessions) for the authenticated user only.
+		if backend.MultiSession() == nil {
+			return json.Marshal([]struct{}{})
+		}
+		db := backend.MultiSession().DB()
+		if db == nil {
+			return json.Marshal([]struct{}{})
+		}
+		tenantSvc := sqlite.NewTenantService(db)
+		tenants, err := tenantSvc.ListTenants()
+		if err != nil {
+			return nil, err
+		}
+		// Filter: skip agent tenants — they are internal bookkeeping for
+		// interactive SubAgent persistence and listed separately via
+		// ListInteractiveSessions. The CLI session panel decides which
+		// tenants' SubAgent sessions to show based on the active workdir.
+		var filtered []sqlite.TenantInfo
+		for _, t := range tenants {
+			if t.Channel == "agent" {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		type tenantJSON struct {
+			ID           int64  `json:"id"`
+			Channel      string `json:"channel"`
+			ChatID       string `json:"chat_id"`
+			CreatedAt    string `json:"created_at"`
+			LastActiveAt string `json:"last_active_at"`
+		}
+		result := make([]tenantJSON, len(filtered))
+		for i, t := range filtered {
+			result[i] = tenantJSON{
+				ID:           t.ID,
+				Channel:      t.Channel,
+				ChatID:       t.ChatID,
+				CreatedAt:    t.CreatedAt.Format(time.RFC3339),
+				LastActiveAt: t.LastActiveAt.Format(time.RFC3339),
+			}
+		}
+		return json.Marshal(result)
 
 	// --- History ---
 	case "get_history":
@@ -669,9 +723,13 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			p.Channel = "web"
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		// Agent sessions (channel="agent") are child resources of the
+		// parent CLI session. Admin users can access them; the chatID is
+		// an interactiveKey (e.g. "cli:/path/role:instance") that never
+		// matches bizID.
+		if !isAdmin(senderID) && p.ChatID != bizID && p.Channel != "agent" {
 			return nil, fmt.Errorf("access denied")
 		}
 		history, err := backend.GetHistory(p.Channel, p.ChatID)
@@ -693,9 +751,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			p.Channel = "web"
 		}
 		if p.ChatID == "" {
-			p.ChatID = senderID
+			p.ChatID = bizID
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		var cutoff time.Time
@@ -719,7 +777,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.Channel == "" {
 			p.Channel = "web"
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
 		}
 		return json.Marshal(backend.IsProcessing(p.Channel, p.ChatID))
@@ -735,7 +793,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.Channel == "" {
 			p.Channel = "web"
 		}
-		if !isAdmin(senderID) && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != bizID && p.Channel != "agent" {
 			return nil, fmt.Errorf("access denied")
 		}
 		progress := backend.GetActiveProgress(p.Channel, p.ChatID)
@@ -746,9 +804,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 
 		// --- Subscriptions ---
 	case "list_subscriptions":
-		if isAdmin(senderID) {
-			return json.Marshal(adminConfigSubscriptions(cfg))
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -756,7 +811,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return json.Marshal([]channel.Subscription{})
 		}
-		subs, err := svc.List(senderID)
+		subs, err := svc.List(bizID)
 		if err != nil {
 			return nil, err
 		}
@@ -766,13 +821,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 				ID: s.ID, Name: s.Name, Provider: s.Provider,
 				BaseURL: s.BaseURL, APIKey: maskAPIKey(s.APIKey),
 				Model: s.Model, Active: s.IsDefault,
+				MaxOutputTokens: s.MaxOutputTokens, ThinkingMode: s.ThinkingMode,
 			}
 		}
 		return json.Marshal(result)
 	case "get_default_subscription":
-		if isAdmin(senderID) {
-			return json.Marshal(adminGetDefaultSubscription(cfg))
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -780,14 +833,20 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, nil
 		}
-		sub, err := svc.GetDefault(senderID)
-		if err != nil || sub == nil {
+		sub, err := svc.GetDefault(bizID)
+		if err != nil {
+			log.WithError(err).WithField("biz_id", bizID).Error("[RPC] get_default_subscription: GetDefault error")
 			return nil, err
+		}
+		if sub == nil {
+			log.WithField("biz_id", bizID).Warn("[RPC] get_default_subscription: no default subscription")
+			return nil, nil
 		}
 		return json.Marshal(channel.Subscription{
 			ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
 			BaseURL: sub.BaseURL, APIKey: maskAPIKey(sub.APIKey),
 			Model: sub.Model, Active: sub.IsDefault,
+			MaxOutputTokens: sub.MaxOutputTokens, ThinkingMode: sub.ThinkingMode,
 		})
 	case "add_subscription":
 		var p struct {
@@ -796,12 +855,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminAddSubscription(cfg, backend, channel.Subscription{
-				ID: p.Sub.ID, Name: p.Sub.Name, Provider: p.Sub.Provider,
-				BaseURL: p.Sub.BaseURL, APIKey: p.Sub.APIKey, Model: p.Sub.Model, Active: p.Sub.IsDefault,
-			})
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -809,7 +862,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
-		p.Sub.SenderID = senderID
+		p.Sub.SenderID = bizID
 		return nil, svc.Add(&p.Sub)
 	case "update_subscription":
 		var p struct {
@@ -818,12 +871,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
-		}
-		if isAdmin(senderID) {
-			return nil, adminUpdateSubscription(cfg, backend, p.ID, channel.Subscription{
-				ID: p.ID, Name: p.Sub.Name, Provider: p.Sub.Provider,
-				BaseURL: p.Sub.BaseURL, APIKey: p.Sub.APIKey, Model: p.Sub.Model, Active: p.Sub.IsDefault,
-			})
 		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
@@ -836,11 +883,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && existing.SenderID != senderID {
+		if !isAdmin(senderID) && existing.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		p.Sub.ID = p.ID
 		p.Sub.SenderID = existing.SenderID
+		p.Sub.IsDefault = existing.IsDefault // preserve is_default (client sends zero)
 		if strings.HasSuffix(p.Sub.APIKey, "****") {
 			p.Sub.APIKey = existing.APIKey
 		}
@@ -848,6 +896,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, err
 		}
 		backend.LLMFactory().Invalidate(existing.SenderID)
+		// If this is the default subscription, also switch the cached LLM client
+		// so that list_models/generate immediately use the new config.
+		if existing.IsDefault {
+			backend.LLMFactory().SwitchSubscription(bizID, &p.Sub, "")
+		}
 		return nil, nil
 	case "remove_subscription":
 		var p struct {
@@ -855,9 +908,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
-		}
-		if isAdmin(senderID) {
-			return nil, adminRemoveSubscription(cfg, backend, p.ID)
 		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
@@ -870,7 +920,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		if err := svc.Remove(p.ID); err != nil {
@@ -880,13 +930,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		return nil, nil
 	case "set_default_subscription":
 		var p struct {
-			ID string `json:"id"`
+			ID     string `json:"id"`
+			ChatID string `json:"chat_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
-		}
-		if isAdmin(senderID) {
-			return nil, adminSetDefaultSubscription(cfg, backend, p.ID)
 		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
@@ -899,13 +947,20 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		if err := svc.SetDefault(p.ID); err != nil {
 			return nil, err
 		}
-		backend.LLMFactory().Invalidate(sub.SenderID)
+		// Use bizID for LLM factory operations. The business identity is the
+		// cache key for GetLLM(bizID). SwitchSubscription must use the same key
+		// that list_models / generate uses, otherwise the cache holds a stale
+		// client and the user keeps seeing the old subscription's models.
+		backend.LLMFactory().Invalidate(bizID)
+		if err := backend.LLMFactory().SwitchSubscription(bizID, sub, p.ChatID); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	case "rename_subscription":
 		var p struct {
@@ -915,9 +970,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminRenameSubscription(cfg, backend, p.ID, p.Name)
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -929,7 +981,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		return nil, svc.Rename(p.ID, p.Name)
@@ -942,9 +994,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminSetSubscriptionModel(cfg, backend, p.ID, p.Model)
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -956,10 +1005,26 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if !isAdmin(senderID) && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != bizID {
 			return nil, fmt.Errorf("subscription not found")
 		}
-		return nil, svc.SetModel(p.ID, p.Model)
+		if err := svc.SetModel(p.ID, p.Model); err != nil {
+			return nil, err
+		}
+		updated, err := svc.Get(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if updated != nil {
+			def, _ := svc.GetDefault(updated.SenderID)
+			if def != nil && def.ID == updated.ID {
+				backend.LLMFactory().Invalidate(updated.SenderID)
+				if err := backend.LLMFactory().SwitchSubscription(updated.SenderID, updated, ""); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return nil, nil
 
 	case "reset_token_state":
 		backend.ResetTokenState()
@@ -971,7 +1036,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 }
 
 // buildWebCallbacks creates WebCallbacks with all Runner/Registry closures.
-func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.WebCallbacks {
+func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sql.DB) channel.WebCallbacks {
 	callbacks := channel.WebCallbacks{
 		RunnerTokenGet: func(senderID string) string {
 			db := tools.GetRunnerTokenDB()
@@ -1049,10 +1114,7 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 			if err != nil {
 				return "", err
 			}
-			pubURL := cfg.Sandbox.PublicURL
-			if pubURL == "" {
-				pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-			}
+			pubURL := cfg.PublicWSAddr()
 			cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
 			if mode == "docker" && dockerImage != "" {
 				cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
@@ -1173,7 +1235,110 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 	callbacks.GetActiveProgress = func(channel, chatID string) *channel.CLIProgressPayload {
 		return backend.GetActiveProgress(channel, chatID)
 	}
+	// Wire SessionsList — returns interactive SubAgent sessions for the user as ChatRooms.
+	callbacks.SessionsList = func(senderID string) []channel.SessionInfo {
+		sessions := backend.ListInteractiveSessions("web", senderID)
+		result := make([]channel.SessionInfo, len(sessions))
+		for i, s := range sessions {
+			result[i] = channel.ChatRoom{
+				ID:       s.Role + "/" + s.Instance,
+				Type:     "subagent",
+				Label:    s.Role + "/" + s.Instance,
+				Role:     s.Role,
+				Instance: s.Instance,
+				Running:  s.Running,
+				Preview:  s.Preview,
+				Members:  "Agent ↔ " + s.Role,
+			}
+		}
+		return result
+	}
+	// Wire SessionMessages — returns conversation messages for a SubAgent session.
+	callbacks.SessionMessages = func(senderID, roleName, instance string) ([]channel.SessionChatMessage, bool) {
+		msgs, ok := backend.GetSessionMessages("web", senderID, roleName, instance)
+		if !ok {
+			return nil, false
+		}
+		result := make([]channel.SessionChatMessage, len(msgs))
+		for i, m := range msgs {
+			result[i] = channel.SessionChatMessage{Role: m.Role, Content: m.Content}
+		}
+		return result, true
+	}
+
+	// Wire ChatList — list user's chatrooms
+	callbacks.ChatList = func(senderID, currentChatID string) ([]channel.UserChatWithPreview, error) {
+		if webDB == nil {
+			return nil, nil
+		}
+		cs := sqlite.NewChatService(webDB)
+		chats, err := cs.ListUserChats("web", senderID, currentChatID)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]channel.UserChatWithPreview, len(chats))
+		for i, c := range chats {
+			result[i] = channel.UserChatWithPreview{
+				ChatID:     c.ChatID,
+				Label:      c.Label,
+				LastActive: c.LastActive.Format(time.RFC3339),
+				Preview:    c.Preview,
+				IsCurrent:  c.IsCurrent,
+			}
+		}
+		return result, nil
+	}
+
+	// Wire ChatCreate — create new chatroom
+	callbacks.ChatCreate = func(senderID, label string) (string, error) {
+		if webDB == nil {
+			return "", fmt.Errorf("database not available")
+		}
+		cs := sqlite.NewChatService(webDB)
+		return cs.CreateChat("web", senderID, label)
+	}
+
+	// Wire ChatDelete — delete chatroom
+	callbacks.ChatDelete = func(senderID, chatID string) error {
+		if webDB == nil {
+			return fmt.Errorf("database not available")
+		}
+		cs := sqlite.NewChatService(webDB)
+		return cs.DeleteChat("web", senderID, chatID)
+	}
+
+	// Wire ChatRename — rename chatroom
+	callbacks.ChatRename = func(senderID, chatID, label string) error {
+		if webDB == nil {
+			return fmt.Errorf("database not available")
+		}
+		cs := sqlite.NewChatService(webDB)
+		return cs.RenameChat("web", senderID, chatID, label)
+	}
 	return callbacks
+}
+
+// resolveStaticDir returns the frontend static directory.
+// Priority: explicit config → binary-relative web/dist → XBOT_HOME/web/dist.
+func resolveStaticDir(cfg *config.Config) string {
+	if cfg.Web.StaticDir != "" {
+		return cfg.Web.StaticDir
+	}
+	// 1. Binary-relative: <exe_dir>/web/dist/ (Docker image layout)
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "web", "dist")
+		if fi, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !fi.IsDir() {
+			return candidate
+		}
+	}
+	// 2. XBOT_HOME-relative: ~/.xbot/web/dist/ (install script layout)
+	if home := config.XbotHome(); home != "" {
+		candidate := filepath.Join(home, "web", "dist")
+		if fi, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !fi.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // registerChannels creates and registers all channels.
@@ -1222,8 +1387,11 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 				InviteOnly: cfg.Web.InviteOnly,
 				PublicURL:  cfg.Sandbox.PublicURL,
 			}, msgBus)
-			if cfg.Web.StaticDir != "" {
-				webCh.SetStaticDir(cfg.Web.StaticDir)
+			// Auto-detect frontend static files if not explicitly configured.
+			staticDir := resolveStaticDir(cfg)
+			if staticDir != "" {
+				webCh.SetStaticDir(staticDir)
+				log.WithField("static_dir", staticDir).Info("Frontend static files detected")
 			}
 			// Web file uploads go through cloud OSS only — no local storage
 			webCh.SetWorkDir(workDir)
@@ -1248,7 +1416,7 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 				}
 			}
 
-			webCh.SetCallbacks(buildWebCallbacks(cfg, backend))
+			webCh.SetCallbacks(buildWebCallbacks(cfg, backend, webDB))
 			// Wire up RemoteSandbox callbacks to push real-time status to WebChannel.
 			// In WebChannel, senderID == chatID (see handleWS: client.userID = senderID, chatID := c.userID).
 			sb := tools.GetSandbox()
@@ -1347,8 +1515,63 @@ func Run(args []string) error {
 	// This ensures admin is a normal DB user with real subscriptions,
 	// so model switches persist across restarts.
 	if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
-		if err := migrateConfigSubscriptions(cfg, subSvc, adminSenderID); err != nil {
+		if err := migrateConfigSubscriptions(cfg, subSvc, cliSenderID); err != nil {
 			log.WithError(err).Warn("Failed to migrate config subscriptions to DB")
+		}
+		// Sync LLM client from DB's active subscription (not config.json).
+		// After migration, DB is the source of truth.
+		defSub, errDef := subSvc.GetDefault(cliSenderID)
+		if errDef != nil {
+			log.WithError(errDef).Error("GetDefault failed")
+		} else if defSub == nil {
+			log.Warn("GetDefault returned nil — no default subscription in DB")
+		} else {
+			log.WithFields(log.Fields{
+				"id": defSub.ID, "name": defSub.Name, "model": defSub.Model,
+				"provider": defSub.Provider, "max_output_tokens": defSub.MaxOutputTokens,
+			}).Info("Default subscription from DB")
+			cfg.LLM.Provider = defSub.Provider
+			cfg.LLM.BaseURL = defSub.BaseURL
+			cfg.LLM.APIKey = defSub.APIKey
+			cfg.LLM.Model = defSub.Model
+			cfg.LLM.MaxOutputTokens = defSub.MaxOutputTokens
+			if newClient, err := createAdminLLM(cfg); err == nil {
+				backend.LLMFactory().SetDefaults(newClient, defSub.Model)
+				// SetDefaults clears all per-user caches. Re-populate them from
+				// the default subscription so that GetMaxOutputTokens/GetLLM
+				// return correct values for cli_user without waiting for a
+				// SwitchSubscription call.
+				backend.LLMFactory().SetUserMaxOutputTokens(cliSenderID, defSub.MaxOutputTokens)
+				backend.LLMFactory().SetUserThinkingMode(cliSenderID, defSub.ThinkingMode)
+				log.WithFields(log.Fields{"provider": defSub.Provider, "model": defSub.Model, "max_output_tokens": defSub.MaxOutputTokens}).Info("LLM client synced from DB default subscription")
+			}
+		}
+	}
+
+	// Clean up subscription-scoped keys that were migrated from user_settings
+	// to user_llm_subscriptions. Stale rows in user_settings can overwrite
+	// correct subscription values on startup (e.g. name→provider, max_output_tokens→8192).
+	if ss := backend.SettingsService(); ss != nil {
+		cleaned := 0
+		for _, key := range []string{
+			"llm_provider", "llm_api_key", "llm_model", "llm_base_url",
+			"max_output_tokens", "thinking_mode",
+		} {
+			if err := ss.DeleteSetting("cli", cliSenderID, key); err == nil {
+				cleaned++
+			}
+		}
+		if cleaned > 0 {
+			log.WithField("count", cleaned).Info("Cleaned subscription-scoped keys from user_settings")
+		}
+	}
+
+	// Sync Agent runtime settings from DB (admin user).
+	// DB is the source of truth — config.json may be stale after user changes.
+	if ss := backend.SettingsService(); ss != nil {
+		if vals, err := ss.GetSettings("cli", cliSenderID); err == nil {
+			applyRuntimeSettings(cfg, backend, cliSenderID, vals)
+			log.Info("Agent runtime settings synced from DB")
 		}
 	}
 
@@ -1477,6 +1700,20 @@ func Run(args []string) error {
 		return disp.SendDirect(msg)
 	})
 	backend.SetChannelFinder(disp.GetChannel)
+	backend.Agent().SetMessageSender(disp)
+	backend.Agent().SetAgentChannelRegistry(
+		func(name string, runFn bus.RunFn) error {
+			ac := channel.NewAgentChannel(name, runFn)
+			if err := ac.Start(); err != nil {
+				return fmt.Errorf("start AgentChannel %s: %w", name, err)
+			}
+			disp.Register(ac)
+			return nil
+		},
+		func(name string) {
+			disp.Unregister(name)
+		},
+	)
 
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {
@@ -1549,7 +1786,7 @@ func Run(args []string) error {
 					return fmt.Errorf("unknown tier: %s", tier)
 				}
 				backend.LLMFactory().SetModelTiers(cfg.LLM)
-				return config.SaveToFile(config.ConfigFilePath(), cfg)
+				return saveServerConfig(cfg)
 			},
 			LLMListAllModels: func() []string {
 				return backend.LLMFactory().ListAllModelsForUser("")
@@ -1562,13 +1799,10 @@ func Run(args []string) error {
 				result := make([]channel.Subscription, len(subs))
 				for i, s := range subs {
 					result[i] = channel.Subscription{
-						ID:       s.ID,
-						Name:     s.Name,
-						Provider: s.Provider,
-						BaseURL:  s.BaseURL,
-						APIKey:   s.APIKey,
-						Model:    s.Model,
-						Active:   s.IsDefault,
+						ID: s.ID, Name: s.Name, Provider: s.Provider,
+						BaseURL: s.BaseURL, APIKey: maskAPIKey(s.APIKey),
+						Model: s.Model, Active: s.IsDefault,
+						MaxOutputTokens: s.MaxOutputTokens, ThinkingMode: s.ThinkingMode,
 					}
 				}
 				return result, nil
@@ -1579,13 +1813,10 @@ func Run(args []string) error {
 					return nil, err
 				}
 				return &channel.Subscription{
-					ID:       sub.ID,
-					Name:     sub.Name,
-					Provider: sub.Provider,
-					BaseURL:  sub.BaseURL,
-					APIKey:   sub.APIKey,
-					Model:    sub.Model,
-					Active:   sub.IsDefault,
+					ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
+					BaseURL: sub.BaseURL, APIKey: sub.APIKey,
+					Model: sub.Model, Active: sub.IsDefault,
+					MaxOutputTokens: sub.MaxOutputTokens, ThinkingMode: sub.ThinkingMode,
 				}, nil
 			},
 			LLMAddSubscription: func(senderID string, sub *channel.Subscription) error {
@@ -1684,11 +1915,7 @@ func Run(args []string) error {
 				if token == "" {
 					return ""
 				}
-				pubURL := cfg.Sandbox.PublicURL
-				if pubURL == "" {
-					// Fallback: use the xbot server address directly.
-					pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-				}
+				pubURL := cfg.PublicWSAddr()
 				return fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
 			},
 			RunnerTokenGet: func(senderID string) string {
@@ -1767,10 +1994,7 @@ func Run(args []string) error {
 				if err != nil {
 					return "", err
 				}
-				pubURL := cfg.Sandbox.PublicURL
-				if pubURL == "" {
-					pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-				}
+				pubURL := cfg.PublicWSAddr()
 				cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
 				if mode == "docker" && dockerImage != "" {
 					cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
@@ -2109,10 +2333,7 @@ func (a *feishuPromptAdapter) ChannelSystemParts(ctx context.Context, chatID, se
 
 // buildRunnerConnectCmd constructs the xbot-runner CLI command from a token entry.
 func buildRunnerConnectCmd(cfg *config.Config, entry *tools.RunnerTokenEntry) string {
-	pubURL := cfg.Sandbox.PublicURL
-	if pubURL == "" {
-		pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-	}
+	pubURL := cfg.PublicWSAddr()
 	cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, entry.UserID, entry.Token)
 	if entry.Settings.Mode == "docker" {
 		cmd += " --mode docker"
@@ -2164,98 +2385,58 @@ func migrateCLIUserSettingsFromGlobalIfNeeded(cfg *config.Config, backend agent.
 	return nil
 }
 
-func getGlobalCLISettings(cfg *config.Config) (map[string]string, error) {
-	vals := map[string]string{
-		"llm_provider":       cfg.LLM.Provider,
-		"llm_api_key":        cfg.LLM.APIKey,
-		"llm_model":          cfg.LLM.Model,
-		"llm_base_url":       cfg.LLM.BaseURL,
-		"vanguard_model":     cfg.LLM.VanguardModel,
-		"balance_model":      cfg.LLM.BalanceModel,
-		"swift_model":        cfg.LLM.SwiftModel,
-		"sandbox_mode":       cfg.Sandbox.Mode,
-		"memory_provider":    cfg.Agent.MemoryProvider,
-		"tavily_api_key":     cfg.TavilyAPIKey,
-		"context_mode":       cfg.Agent.ContextMode,
-		"max_iterations":     fmt.Sprintf("%d", cfg.Agent.MaxIterations),
-		"max_concurrency":    fmt.Sprintf("%d", cfg.Agent.MaxConcurrency),
-		"max_context_tokens": fmt.Sprintf("%d", cfg.Agent.MaxContextTokens),
-		"theme":              "midnight",
+// saveServerConfig persists only the config sections the server actually modifies.
+// It reads the current disk config first, overwrites ONLY LLM and Agent,
+// then writes back — all other sections are preserved untouched.
+//
+// ⚠️ IMPORTANT: Do NOT add more sections here without careful review.
+// Every field copied here must be one that the server actually modifies at runtime.
+// Copying extra fields (Sandbox, CLI, Admin, Web, etc.) will overwrite user-set
+// values with in-memory defaults, which is exactly the class of bug this function prevents.
+func saveServerConfig(cfg *config.Config) error {
+	merged := config.LoadFromFile(config.ConfigFilePath())
+	if merged == nil {
+		merged = &config.Config{}
 	}
-	if cfg.Agent.EnableAutoCompress != nil {
-		vals["enable_auto_compress"] = fmt.Sprintf("%t", *cfg.Agent.EnableAutoCompress)
-	} else {
-		vals["enable_auto_compress"] = "true"
-	}
-	if vals["sandbox_mode"] == "" {
-		vals["sandbox_mode"] = "none"
-	}
-	if vals["memory_provider"] == "" {
-		vals["memory_provider"] = "flat"
-	}
-	return vals, nil
+	// Server only ever modifies these two sections:
+	merged.LLM = cfg.LLM     // via applyRuntimeSetting / rebuildLLMFromSubscription
+	merged.Agent = cfg.Agent // via applyRuntimeSetting (max_iterations, max_concurrency, etc.)
+	return config.SaveToFile(config.ConfigFilePath(), merged)
 }
 
-func setGlobalCLISetting(cfg *config.Config, backend agent.AgentBackend, key, value string) error {
-	switch key {
-	case "llm_provider":
-		cfg.LLM.Provider = value
-	case "llm_api_key":
-		cfg.LLM.APIKey = value
-	case "llm_model":
-		cfg.LLM.Model = value
-	case "llm_base_url":
-		cfg.LLM.BaseURL = value
-	case "vanguard_model":
-		cfg.LLM.VanguardModel = value
-	case "balance_model":
-		cfg.LLM.BalanceModel = value
-	case "swift_model":
-		cfg.LLM.SwiftModel = value
-	case "sandbox_mode":
-		cfg.Sandbox.Mode = value
-	case "memory_provider":
-		cfg.Agent.MemoryProvider = value
-	case "tavily_api_key":
-		cfg.TavilyAPIKey = value
-	case "context_mode":
-		cfg.Agent.ContextMode = value
-		backend.SetContextMode(value)
-	case "max_iterations":
-		cfg.Agent.MaxIterations = mustParseInt(value, cfg.Agent.MaxIterations)
-		backend.SetMaxIterations(cfg.Agent.MaxIterations)
-	case "max_concurrency":
-		cfg.Agent.MaxConcurrency = mustParseInt(value, cfg.Agent.MaxConcurrency)
-		backend.SetMaxConcurrency(cfg.Agent.MaxConcurrency)
-	case "max_context_tokens":
-		cfg.Agent.MaxContextTokens = mustParseInt(value, cfg.Agent.MaxContextTokens)
-		backend.SetMaxContextTokens(cfg.Agent.MaxContextTokens)
-	case "enable_auto_compress":
-		b := strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
-		cfg.Agent.EnableAutoCompress = &b
-	default:
-		return nil
-	}
-	if backend.LLMFactory() != nil {
-		backend.LLMFactory().SetModelTiers(cfg.LLM)
-	}
-	return config.SaveToFile(config.ConfigFilePath(), cfg)
-}
-
-func mustParseInt(s string, def int) int {
-	var n int
-	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
-		return def
-	}
-	return n
-}
-
-// adminSenderID is the sender ID for the server admin (config-level user).
-// Use this constant instead of the literal "admin" string to prevent typos.
+// adminSenderID is the WS auth identity for admin users.
+// Used ONLY for role-based access control (isAdmin checks).
+// It is NOT a business senderID — never use it as a DB key for
+// settings, subscriptions, token usage, or other per-user state.
 const adminSenderID = "admin"
 
-// isAdmin checks if the given senderID belongs to the server admin.
-func isAdmin(senderID string) bool { return senderID == adminSenderID }
+// cliSenderID is the fixed business sender ID for CLI channel.
+// All CLI messages, settings, subscriptions, and per-user state use this ID.
+// Server-side startup code uses this constant when seeding DB data.
+const cliSenderID = "cli_user"
+
+// isAdmin checks if the given WS auth senderID has admin privileges.
+// Admin is a ROLE (authorization), not a business identity.
+func isAdmin(authSenderID string) bool { return authSenderID == adminSenderID }
+
+// senderIDFromParams extracts the business sender_id from RPC params.
+// For admin users (WS auth identity "admin"), if params don't specify a sender_id,
+// it defaults to cliSenderID — because admin is a ROLE, not a business identity.
+// All CLI subscriptions, settings, and per-user state live under cliSenderID.
+//
+// For non-admin web users, falls back to their WS auth identity directly.
+func senderIDFromParams(params json.RawMessage, authSenderID string) string {
+	var p struct {
+		SenderID string `json:"sender_id"`
+	}
+	if err := json.Unmarshal(params, &p); err == nil && p.SenderID != "" {
+		return p.SenderID
+	}
+	if isAdmin(authSenderID) {
+		return cliSenderID
+	}
+	return authSenderID
+}
 
 // migrateConfigSubscriptions seeds config.json subscriptions into the DB for a given user.
 // Idempotent — skips if the user already has DB subscriptions.

@@ -16,6 +16,7 @@ import (
 
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/clipanic"
 	"xbot/cron"
 	"xbot/event"
 	"xbot/llm"
@@ -187,12 +188,11 @@ func (a *Agent) IndexGlobalTools() {
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus                     *bus.MessageBus
-	multiSession            *session.MultiTenantSession // Multi-tenant session manager
-	tools                   *tools.Registry
-	maxIterations           int
-	dynamicMaxTokensEnabled bool
-	purgeOldMessages        bool
+	bus              *bus.MessageBus
+	multiSession     *session.MultiTenantSession // Multi-tenant session manager
+	tools            *tools.Registry
+	maxIterations    int
+	purgeOldMessages bool
 
 	skills             *SkillStore
 	agents             *AgentStore
@@ -207,6 +207,8 @@ type Agent struct {
 	sandboxIdleTimeout time.Duration    // 沙箱空闲超时（0 禁用）
 	directWorkspace    string           // 非空时 workspaceRoot() 直接返回此值（CLI 模式使用，取代 singleUser 的 workspace 短路）
 	maxConcurrency     int              // 最大并发会话处理数
+	globalSem          chan struct{}    // 全局并发信号量（SetMaxConcurrency 动态重建）
+	globalSemMu        sync.Mutex       // 保护 globalSem 替换
 	globalSkillDirs    []string         // 全局 skill 目录（宿主机路径）
 	agentsDir          string
 	xbotHome           string // global xbot config dir (e.g. ~/.xbot), used for mcp.json etc.
@@ -260,6 +262,13 @@ type Agent struct {
 	// sync.Map provides atomic Load/Store/Delete/LoadOrStore, no additional mutex needed
 	interactiveSubAgents sync.Map
 
+	// messageSender allows sending messages to any Channel via Dispatcher.
+	messageSender bus.MessageSender
+	// registerAgentChannel registers an AgentChannel in the Dispatcher.
+	registerAgentChannel func(name string, runFn bus.RunFn) error
+	// unregisterAgentChannel removes an AgentChannel from the Dispatcher.
+	unregisterAgentChannel func(name string)
+
 	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
 	hookChain *tools.HookChain
 
@@ -294,15 +303,6 @@ type Agent struct {
 	// 0 when idle. Used by bgNotifyLoop to decide routing.
 	bgRunActive int32
 
-	// lastPromptTokens stores the prompt_tokens from the most recent LLM API call.
-	// This is the authoritative token count for the full input (messages + tool defs).
-	// Updated after each Run() completes. Used by /context info and maybeCompress.
-	lastPromptTokens atomic.Int64
-
-	// lastCompletionTokens stores the completion_tokens from the most recent LLM API call.
-	// Updated after each Run() completes. Used to restore token tracking across Run() calls.
-	lastCompletionTokens atomic.Int64
-
 	// bgRunPending buffers bg notifications that arrived during an active Run.
 	// The Run loop drains these between iterations.
 	bgRunPending   []tools.BgNotification
@@ -326,6 +326,15 @@ func (a *Agent) LLMFactory() *LLMFactory { return a.llmFactory }
 
 // BgTaskManager returns the Agent's BackgroundTaskManager.
 func (a *Agent) BgTaskManager() *tools.BackgroundTaskManager { return a.bgTaskMgr }
+
+// SetMessageSender sets the Dispatcher reference for unified messaging.
+func (a *Agent) SetMessageSender(ms bus.MessageSender) { a.messageSender = ms }
+
+// SetAgentChannelRegistry sets the callbacks for registering/unregistering AgentChannels.
+func (a *Agent) SetAgentChannelRegistry(register func(name string, runFn bus.RunFn) error, unregister func(name string)) {
+	a.registerAgentChannel = register
+	a.unregisterAgentChannel = unregister
+}
 
 // RegistryManager returns the Agent's RegistryManager (for external injection of callbacks).
 func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }
@@ -478,8 +487,11 @@ type Config struct {
 	// 压缩后清理旧消息
 	PurgeOldMessages bool // 压缩后自动删除旧消息（默认 false）
 
-	// OffloadDir: offload 文件存储目录（默认 WorkDir/.xbot/offload_store）
+	// OffloadDir: offload 文件存储目录（默认 ~/.xbot/offload_store）
 	OffloadDir string
+
+	// MaskDir: mask 文件存储基目录（默认 ~/.xbot/mask/{tenantID}）
+	MaskDir string
 }
 
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
@@ -665,8 +677,13 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
 	// 默认关闭：通过 settings 的 enable_masking 开启。
 	// 始终创建（工具注册需要），但 engine 层通过 RunConfig.MaskStore 控制。
-	maskDir := filepath.Join(cfg.WorkDir, ".xbot", "mask_store")
-	a.maskStore = NewObservationMaskStore(200, maskDir)
+	// 磁盘落在全局 ~/.xbot/mask/{tenantID}/，避免污染当前工作目录。
+	maskDir := cfg.MaskDir
+	if maskDir == "" {
+		maskDir = filepath.Join(a.xbotHome, "mask")
+	}
+	a.maskStore = NewObservationMaskStore(200)
+	a.maskStore.SetBaseDir(maskDir)
 	go a.maskStore.CleanStale(7)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
@@ -792,13 +809,12 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	agent := &Agent{
-		bus:                     cfg.Bus,
-		multiSession:            multiSession,
-		tools:                   registry,
-		maxIterations:           cfg.MaxIterations,
-		maxConcurrency:          cfg.MaxConcurrency,
-		dynamicMaxTokensEnabled: cfg.DynamicMaxTokens,
-		purgeOldMessages:        cfg.PurgeOldMessages,
+		bus:              cfg.Bus,
+		multiSession:     multiSession,
+		tools:            registry,
+		maxIterations:    cfg.MaxIterations,
+		maxConcurrency:   cfg.MaxConcurrency,
+		purgeOldMessages: cfg.PurgeOldMessages,
 
 		skills:             skillStore,
 		agents:             agentStore,
@@ -865,8 +881,13 @@ func (a *Agent) SetContextMode(mode string) error {
 		return nil
 	}
 
+	// "auto" is a user-facing alias for "phase1" (automatic compression)
+	if target == "auto" {
+		target = ContextModePhase1
+	}
+
 	if !IsValidContextMode(target) {
-		return fmt.Errorf("invalid mode %q; valid: phase1, none, default", mode)
+		return fmt.Errorf("invalid mode %q; valid: phase1, auto, none, default", mode)
 	}
 
 	cfg.SetRuntimeMode(target)
@@ -883,6 +904,10 @@ func (a *Agent) SetMaxConcurrency(n int) {
 	a.contextManagerMu.Lock()
 	a.maxConcurrency = n
 	a.contextManagerMu.Unlock()
+	// Rebuild global semaphore with new capacity
+	a.globalSemMu.Lock()
+	a.globalSem = make(chan struct{}, n)
+	a.globalSemMu.Unlock()
 }
 func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerMu.Lock()
@@ -896,14 +921,22 @@ func (a *Agent) getMaxIterations() int {
 	return a.maxIterations
 }
 
-func (a *Agent) dynamicMaxTokens() bool {
-	return a.dynamicMaxTokensEnabled
-}
-
 func (a *Agent) getMaxConcurrency() int {
 	a.contextManagerMu.RLock()
 	defer a.contextManagerMu.RUnlock()
+	if a.maxConcurrency < 1 {
+		return 1
+	}
 	return a.maxConcurrency
+}
+
+// getGlobalSem returns the current global semaphore channel.
+// Must be called each time a semaphore is needed (not cached) so that
+// SetMaxConcurrency rebuilds take effect immediately.
+func (a *Agent) getGlobalSem() chan struct{} {
+	a.globalSemMu.Lock()
+	defer a.globalSemMu.Unlock()
+	return a.globalSem
 }
 
 func (a *Agent) getMaxContextTokens() int {
@@ -1000,15 +1033,15 @@ func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 	return a.cardBuilder
 }
 
-// getUserSemaphore 获取用户独立的信号量，用于有自定义 LLM 配置的用户
-// 每个用户有独立的信号量（容量为1），确保该用户的请求串行处理
-// 使用 LoadOrStore 原子操作避免并发创建多个信号量
+// getUserSemaphore 获取用户独立的信号量，用于有自定义 LLM 配置的用户。
+// 容量与 maxConcurrency 一致：允许同一用户的不同会话并行处理，
+// 但总并发不超过全局上限。
+// 使用 LoadOrStore 原子操作避免并发创建多个信号量。
 func (a *Agent) getUserSemaphore(senderID string) chan struct{} {
 	if val, ok := a.userSemaphores.Load(senderID); ok {
 		return val.(chan struct{})
 	}
-	// LoadOrStore 原子操作：如果 key 不存在则存储，返回存储的值
-	sem, _ := a.userSemaphores.LoadOrStore(senderID, make(chan struct{}, 1))
+	sem, _ := a.userSemaphores.LoadOrStore(senderID, make(chan struct{}, a.getMaxConcurrency()))
 	return sem.(chan struct{})
 }
 
@@ -1084,6 +1117,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 
 	sem := make(chan struct{}, a.getMaxConcurrency())
+	a.globalSemMu.Lock()
+	a.globalSem = sem
+	a.globalSemMu.Unlock()
 
 	var mu sync.Mutex
 	chatQueues := make(map[string]chan bus.InboundMessage)
@@ -1100,9 +1136,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		q := make(chan bus.InboundMessage, 32)
 		chatQueues[key] = q
 
-		// 始终传入全局信号量，实际信号量在 chatWorker 内部动态选择
 		wg.Go(func() {
-			a.chatWorker(ctx, key, q, sem)
+			a.chatWorker(ctx, key, q)
 			mu.Lock()
 			delete(chatQueues, key)
 			mu.Unlock()
@@ -1245,7 +1280,8 @@ func (a *Agent) isGroupChat(msg bus.InboundMessage) bool {
 // getSemaphoreForMessage 获取消息应该使用的信号量
 // 私聊：用户有自定义 LLM 则使用独立信号量
 // 群聊：始终使用全局信号量（因为群里有多人，使用独立信号量会导致其他人的消息也被阻塞）
-func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan struct{}) chan struct{} {
+func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage) chan struct{} {
+	globalSem := a.getGlobalSem()
 	senderID := msg.SenderID
 	if senderID == "" {
 		return globalSem
@@ -1273,16 +1309,16 @@ func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan st
 //   - 普通消息：发送到内部 msgCh，由专门的 goroutine 串行处理（带信号量 + cancel）
 //
 // 这样即使普通消息正在长时间处理（LLM 推理），主循环仍能取出并执行命令消息。
-func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage) {
 	// 内部普通消息队列：主循环写入，processLoop 消费
 	msgCh := make(chan bus.InboundMessage, 32)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() {
+	clipanic.Go("agent.chatWorker.processLoop", func() {
 		defer wg.Done()
-		a.chatProcessLoop(ctx, chatKey, msgCh, globalSem)
-	}()
+		a.chatProcessLoop(ctx, chatKey, msgCh)
+	})
 
 	for msg := range ch {
 		if ctx.Err() != nil {
@@ -1293,7 +1329,15 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		if cmd := a.commands.Match(msg.Content); cmd != nil {
 			if cmd.Concurrent() {
 				// 无状态命令：独立 goroutine 处理，不占信号量，不阻塞
-				go func(m bus.InboundMessage, c Command) {
+				m := msg
+				c := cmd
+				clipanic.Go("agent.chatWorker.concurrentCommand", func() {
+					// 清除 sessionFinalSent：command 不走 processMessage，
+					// 需要手动清除否则 sendMessage 会被拦截
+					cmdKey := m.Channel + ":" + m.ChatID
+					a.sessionMsgIDs.Delete(cmdKey)
+					a.sessionFinalSent.Delete(cmdKey)
+
 					response, err := c.Execute(ctx, a, m)
 					if err != nil {
 						log.WithFields(log.Fields{"request_id": m.RequestID, "chat": chatKey}).WithError(err).Error("Error processing command")
@@ -1312,7 +1356,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 							a.bus.Outbound <- *response
 						}
 					}
-				}(msg, cmd)
+				})
 			} else {
 				// 有状态命令（/new, /compress, /set-llm 等）：走串行队列，
 				// 避免与正在处理的普通消息产生 session 数据竞态
@@ -1336,7 +1380,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 }
 
 // chatProcessLoop 串行处理普通消息（非命令），带信号量控制和 per-request cancel 支持。
-func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage) {
 	var idleTimer *time.Timer
 	defer func() {
 		if idleTimer != nil {
@@ -1361,7 +1405,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			}
 		}
 
-		sem := a.getSemaphoreForMessage(msg, globalSem)
+		sem := a.getSemaphoreForMessage(msg)
 
 		select {
 		case sem <- struct{}{}:
@@ -1379,13 +1423,13 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		reqCtx, reqCancel := context.WithCancel(ctx)
 
 		// 监听 cancel 信号
-		go func() {
+		clipanic.Go("agent.chatProcessLoop.cancelListener", func() {
 			select {
 			case <-cancelCh:
 				reqCancel()
 			case <-reqCtx.Done():
 			}
-		}()
+		})
 
 		// 执行消息处理，完成后检查是否被取消
 		// 注意：必须在 reqCancel() 调用前检查，否则 reqCtx.Err() 总是返回 Canceled
@@ -1542,9 +1586,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, fmt.Errorf("get/create tenant session: %w", err)
 	}
 
-	// Set tenant ID for context editor persistence (context edits happen during engine run)
+	// Set tenant-scoped stores for this request.
+	tenantID := tenantSession.TenantID()
 	if a.contextEditor != nil {
-		a.contextEditor.SetTenantID(tenantSession.TenantID())
+		a.contextEditor.SetTenantID(tenantID)
+	}
+	if a.maskStore != nil {
+		a.maskStore.SetTenantID(tenantID)
 	}
 
 	// 缓存消息到聊天历史（用于 ChatHistory 工具查询）
@@ -1632,18 +1680,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
-	// 恢复上次 Run() 的 token 计数，确保 maybeCompress 在重启后仍能使用 API 精确值
-	// 优先使用内存值（同进程内多次 Run），回退到 DB 值（进程重启后）
-	if promptTokens := a.lastPromptTokens.Load(); promptTokens > 0 {
-		cfg.LastPromptTokens = promptTokens
-		cfg.LastCompletionTokens = a.lastCompletionTokens.Load()
-	} else if extras := cfg.ToolContextExtras; extras != nil && extras.MemorySvc != nil && extras.TenantID != 0 {
+	// 恢复上次 Run() 的 token 计数，确保 maybeCompress 在重启后仍能使用 API 精确值。
+	// 必须从当前 tenant 的 DB 读取 — Agent 级别的 lastPromptTokens 是全局共享的，
+	// 跨 chat 会导致新窗口误用其他 chat 的 token 计数而触发压缩。
+	if extras := cfg.ToolContextExtras; extras != nil && extras.MemorySvc != nil && extras.TenantID != 0 {
 		if pt, ct, err := extras.MemorySvc.GetTokenState(ctx, extras.TenantID); err == nil && pt > 0 {
 			cfg.LastPromptTokens = pt
 			cfg.LastCompletionTokens = ct
-			// 恢复到内存中供后续 Run() 直接使用
-			a.lastPromptTokens.Store(pt)
-			a.lastCompletionTokens.Store(ct)
 		}
 	}
 	// Mark Run as active so bgNotifyLoop buffers notifications instead of processing idle
@@ -1699,18 +1742,34 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		}
 	}
 
-	// Wire drain callback so Run loop can inject bg notifications as tool messages
+	// Wire drain callback so Run loop can inject bg notifications as tool messages.
+	// Only return notifications matching THIS session's key. Other sessions' notifications
+	// are put back into the pending list to prevent cross-session contamination.
+	currentSessionKey := msg.Channel + ":" + msg.ChatID
 	cfg.DrainBgNotifications = func() []tools.BgNotification {
 		a.bgRunPendingMu.Lock()
 		pending := a.bgRunPending
 		a.bgRunPending = nil
 		a.bgRunPendingMu.Unlock()
-		return pending
+		var mine []tools.BgNotification
+		var others []tools.BgNotification
+		for _, n := range pending {
+			if n.SessionKey() == currentSessionKey {
+				mine = append(mine, n)
+			} else {
+				others = append(others, n)
+			}
+		}
+		// Put other sessions' notifications back
+		if len(others) > 0 {
+			a.bgRunPendingMu.Lock()
+			a.bgRunPending = append(a.bgRunPending, others...)
+			a.bgRunPendingMu.Unlock()
+		}
+		return mine
 	}
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)
-	a.lastPromptTokens.Store(out.LastPromptTokens)
-	a.lastCompletionTokens.Store(out.LastCompletionTokens)
 	// Drain any bg notifications that arrived after Run's last iteration.
 	// Process them as user messages (idle path).
 	a.bgRunPendingMu.Lock()
@@ -1961,6 +2020,9 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
+	// Fixup: strip trailing unpaired tool_calls left by a cancelled Run.
+	// Both Anthropic and OpenAI APIs reject requests with unpaired tool_calls.
+	history = llm.FixupTrailingToolCalls(history)
 	sbUID := sandboxUserID(msg)
 	workspaceRoot := a.workspaceRoot(sbUID)
 	if err := a.ensureWorkspace(ctx, workspaceRoot, sbUID); err != nil {

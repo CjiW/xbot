@@ -2,8 +2,29 @@ package tools
 
 import "strings"
 
+// shellUnquoteValue 反转 shellEscapeValue 的编码，将 shell 单引号转义还原为原始值。
+// shellEscapeValue 将值编码为 '...' 形式：
+//   - 内嵌单引号用 '\” 表示（关闭引号 → 转义单引号 → 重新开引号）
+//   - 换行用 '\n' 表示（关闭引号 → 字面 \n → 重新开引号），这是有损转换
+//
+// 本函数做逆向处理：去除外层单引号，将 '\” 还原为 '，将 '\n' 还原为 \n（两字符）。
+func shellUnquoteValue(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) < 2 || v[0] != '\'' || v[len(v)-1] != '\'' {
+		return v
+	}
+	// 去除外层单引号
+	inner := v[1 : len(v)-1]
+	// 将 '\'' 还原为 '（shell 单引号内嵌转义）
+	inner = strings.ReplaceAll(inner, "'\\''", "'")
+	// 将 '\n' 还原为 \n（shellEscapeValue 对换行的有损编码）
+	inner = strings.ReplaceAll(inner, "'\\n'", "\\n")
+	return inner
+}
+
 // parseEnvFileLines 解析 .xbot_env 文件内容为 envMap。
 // 正确处理 "export " 前缀（包括多次堆积），避免因前缀导致的 key 不匹配。
+// 对单引号包裹的值执行 unquote，防止反复读写导致引号指数级膨胀。
 func parseEnvFileLines(content string) map[string]string {
 	envMap := make(map[string]string)
 	for _, line := range strings.Split(content, "\n") {
@@ -19,7 +40,7 @@ func parseEnvFileLines(content string) map[string]string {
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
-			envMap[parts[0]] = parts[1]
+			envMap[parts[0]] = shellUnquoteValue(parts[1])
 		}
 	}
 	return envMap

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"xbot/bus"
 	"xbot/llm"
 	"xbot/memory"
 	"xbot/storage/sqlite"
@@ -71,6 +72,14 @@ type ToolContext struct {
 	BgTaskManager *BackgroundTaskManager
 	// SessionKey for task scoping (set by engine, not via RunConfig)
 	BgSessionKey string
+	// MessageSender allows sending messages to any Channel via Dispatcher.
+	MessageSender bus.MessageSender
+	// RegisterAgentChannel registers an AgentChannel in the Dispatcher.
+	// Called by CreateChat/SubAgent after spawning a SubAgent.
+	RegisterAgentChannel func(name string, runFn bus.RunFn) error
+	// UnregisterAgentChannel removes an AgentChannel from the Dispatcher.
+	// Called on unload/cleanup.
+	UnregisterAgentChannel func(name string)
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -81,6 +90,8 @@ type SubAgentManager interface {
 	// model 为可选的模型覆盖，为空时继承主 Agent 模型
 	RunSubAgent(parentCtx *ToolContext, task string, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, roleName string, model string) (string, error)
 }
+
+// --- Tool Registry ---
 
 // ToolResult 工具执行结果
 type ToolResult struct {
@@ -623,6 +634,9 @@ func DefaultRegistry(memoryProvider string) *Registry {
 	r.RegisterCore(&FileCreateTool{})
 	r.RegisterCore(&FileReplaceTool{})
 	r.RegisterCore(&SubAgentTool{})
+	// CreateChatTool — creates agent private chats and moderated group chats.
+	r.RegisterCore(&CreateChatTool{})
+	r.RegisterCore(&SendMessageTool{})
 	r.RegisterCore(&SkillTool{})
 	r.RegisterCore(&TaskStatusTool{})
 	r.RegisterCore(&TaskKillTool{})

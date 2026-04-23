@@ -43,6 +43,7 @@ func (bc BackendConfig) AgentConfig() Config {
 	}
 
 	offloadDir := filepath.Join(bc.XbotHome, "offload_store")
+	maskDir := filepath.Join(bc.XbotHome, "mask")
 
 	return Config{
 		Bus:                  bc.Bus,
@@ -71,12 +72,12 @@ func (bc BackendConfig) AgentConfig() Config {
 		EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
 		MaxContextTokens:     cfg.Agent.MaxContextTokens,
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
-		DynamicMaxTokens:     cfg.Agent.EffectiveDynamicMaxTokens(),
 		ContextMode:          ContextMode(cfg.Agent.ContextMode),
 		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
 		PurgeOldMessages:     cfg.Agent.PurgeOldMessages,
 		SandboxIdleTimeout:   cfg.Sandbox.IdleTimeout,
 		PersonaIsolation:     bc.PersonaIsolation,
 		OffloadDir:           offloadDir,
+		MaskDir:              maskDir,
 	}
 }

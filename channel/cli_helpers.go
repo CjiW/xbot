@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,22 +24,55 @@ var cliUserScopedSettingKeys = map[string]struct{}{
 }
 
 var cliGlobalScopedSettingKeys = map[string]struct{}{
-	"llm_provider":      {},
-	"llm_api_key":       {},
-	"llm_model":         {},
-	"llm_base_url":      {},
-	"vanguard_model":    {},
-	"balance_model":     {},
-	"swift_model":       {},
-	"sandbox_mode":      {},
-	"memory_provider":   {},
-	"tavily_api_key":    {},
-	"max_output_tokens": {},
-	"thinking_mode":     {},
-	"enable_stream":     {},
-	"enable_masking":    {},
-	"default_user":      {},
-	"privileged_user":   {},
+	"vanguard_model":  {},
+	"balance_model":   {},
+	"swift_model":     {},
+	"sandbox_mode":    {},
+	"memory_provider": {},
+	"tavily_api_key":  {},
+	"enable_stream":   {},
+	"enable_masking":  {},
+	"default_user":    {},
+	"privileged_user": {},
+}
+
+// CLIRuntimeSettingKeys lists all setting keys that require runtime application
+// beyond DB persistence. Both serverapp and cmd/xbot-cli use this list to verify
+// every runtime-affecting key has a handler registered.
+//
+// To add a new runtime setting:
+//  1. Add the key here
+//  2. Add a handler to settingHandlerRegistry (serverapp) AND cliRuntimeHandlers (cmd/xbot-cli)
+//  3. That's it. The test TestAllRuntimeKeysHaveHandlers will catch omissions.
+var CLIRuntimeSettingKeys = []string{
+	"vanguard_model",
+	"balance_model",
+	"swift_model",
+	"sandbox_mode",
+	"memory_provider",
+	"tavily_api_key",
+	"context_mode",
+	"max_iterations",
+	"max_concurrency",
+	"max_context_tokens",
+	"enable_auto_compress",
+}
+
+// ParseSettingBool parses a boolean setting value.
+// Accepts "true", "1", "yes" (case-insensitive) as true; everything else as false.
+// Shared between serverapp and cmd/xbot-cli for consistent behavior.
+func ParseSettingBool(value string) bool {
+	return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+}
+
+// ParseSettingInt parses an integer setting value, returning fallback on failure.
+// Shared between serverapp and cmd/xbot-cli for consistent behavior.
+func ParseSettingInt(value string, fallback int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 var cliActionSettingKeys = map[string]struct{}{
@@ -48,10 +82,12 @@ var cliActionSettingKeys = map[string]struct{}{
 }
 
 var cliSubscriptionScopedSettingKeys = map[string]struct{}{
-	"llm_provider": {},
-	"llm_api_key":  {},
-	"llm_model":    {},
-	"llm_base_url": {},
+	"llm_provider":      {},
+	"llm_api_key":       {},
+	"llm_model":         {},
+	"llm_base_url":      {},
+	"max_output_tokens": {},
+	"thinking_mode":     {},
 }
 
 func isUserScopedSettingKey(key string) bool {
@@ -81,6 +117,9 @@ func cliSettingScope(key string) string {
 	if isGlobalScopedSettingKey(key) {
 		return "global"
 	}
+	if isSubscriptionScopedSettingKey(key) {
+		return "subscription"
+	}
 	if isActionSettingKey(key) {
 		return "action"
 	}
@@ -92,11 +131,26 @@ func (m *cliModel) mergeCLISettingsValues() map[string]string {
 	if m.channel == nil {
 		return values
 	}
+	// Non-LLM settings from GetCurrentValues (theme, language, tiers, etc.)
 	if m.channel.config.GetCurrentValues != nil {
 		for k, v := range m.channel.config.GetCurrentValues() {
 			values[k] = v
 		}
 	}
+	// LLM fields come exclusively from the active subscription (single source of truth).
+	// This replaces the old path where LLM values came from GetCurrentValues / user_settings.
+	if m.channel.subscriptionMgr != nil {
+		if sub, err := m.channel.subscriptionMgr.GetDefault(m.senderID); err == nil && sub != nil {
+			values["llm_provider"] = sub.Provider
+			values["llm_base_url"] = sub.BaseURL
+			values["llm_model"] = sub.Model
+			values["max_output_tokens"] = strconv.Itoa(sub.MaxOutputTokens)
+			values["thinking_mode"] = sub.ThinkingMode
+			// Don't overwrite api_key if GetCurrentValues already set it
+			// ( GetCurrentValues may have the unmasked key from backend)
+		}
+	}
+	// User-scoped settings (theme, language, context_mode, etc.) override GetCurrentValues
 	if m.channel.settingsSvc != nil {
 		vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
 		if err == nil {
@@ -132,6 +186,8 @@ func (m *cliModel) persistCLISettingsValues(values map[string]string) {
 // This pattern appears in theme change, locale change, resize, and tool-summary toggle.
 func (m *cliModel) invalidateAllCache(updateViewport bool) {
 	m.renderCacheValid = false
+	m.lastViewportContent = "" // Force viewport refresh on next updateViewportContent
+	m.lastViewportWidth = 0
 	for i := range m.messages {
 		m.messages[i].dirty = true
 	}
@@ -221,6 +277,7 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
+	m.turnCancelled = false // clear any previous cancel flag
 	// Remote mode: optimistically show initial progress so the user sees
 	// immediate feedback (progress bubble) without waiting for the server's
 	// first progress_structured event (which has network round-trip latency).
@@ -245,6 +302,87 @@ func (m *cliModel) startAgentTurn() {
 	m.resetProgressState()
 }
 
+// restoreProgressSnapshot applies a progress snapshot to the model for seamless
+// reconnect/session-switch. Used when CLI reconnects to a running agent turn.
+// Sets the model into typing state with the full iteration history restored.
+// Safe to call before BubbleTea program starts (no channel sends).
+func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
+	if payload == nil || payload.Phase == "done" {
+		return
+	}
+
+	// Start agent turn (sets typing=true, increments turnID).
+	// Note: startAgentTurn calls resetProgressState which clears m.progress,
+	// but we overwrite it below.
+	m.startAgentTurn()
+
+	// Apply the progress payload
+	m.progress = payload
+
+	// Restore StartedAt for active tools so live elapsed timers work.
+	for i := range m.progress.ActiveTools {
+		t := &m.progress.ActiveTools[i]
+		if t.StartedAt.IsZero() && t.Elapsed > 0 {
+			t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+		}
+	}
+
+	// Restore iteration history from the progress snapshot.
+	if len(payload.IterationHistory) > 0 {
+		for _, ih := range payload.IterationHistory {
+			snap := cliIterationSnapshot{
+				Iteration: ih.Iteration,
+				Thinking:  ih.Thinking,
+				Reasoning: ih.Reasoning,
+				Tools:     ih.CompletedTools,
+			}
+			for i := range snap.Tools {
+				t := &snap.Tools[i]
+				if t.StartedAt.IsZero() && t.Elapsed > 0 {
+					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+				}
+			}
+			m.iterationHistory = append(m.iterationHistory, snap)
+		}
+		if len(m.iterationHistory) > 0 {
+			lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+			if lastIter > m.lastSeenIteration {
+				m.lastSeenIteration = lastIter
+			}
+		}
+
+		// Deduplicate: remove ALL tool_summary messages. When progress is
+		// active, the progress block owns iteration display — any static
+		// tool_summary would duplicate content with mismatched iteration numbers.
+		m.removeAllToolSummaries()
+	}
+
+	m.invalidateAllCache(false)
+	// Do NOT call updateViewportContent() here — terminal size may not be
+	// initialized yet (pre-program path), causing panic in truncateToWidth.
+	// View() will rebuild on the next render cycle.
+	m.viewport.GotoBottom()
+}
+
+// dedupToolSummary removes the last tool_summary message from m.messages when
+// restoring active progress. The last tool_summary in messages comes from
+// intermediate assistant messages (postToolProcessing) of the in-progress turn.
+// The progress snapshot's IterationHistory contains the same data plus live state,
+// removeAllToolSummaries removes ALL tool_summary messages from m.messages.
+// Used when restoring active progress on session switch: the progress block
+// owns iteration display entirely, and any static tool_summary from
+// ConvertMessagesToHistory would duplicate content with mismatched iteration numbers.
+func (m *cliModel) removeAllToolSummaries() {
+	filtered := m.messages[:0] // reuse backing array
+	for _, msg := range m.messages {
+		if msg.role != "tool_summary" {
+			filtered = append(filtered, msg)
+		}
+	}
+	m.messages = filtered
+	m.renderCacheValid = false
+}
+
 // endAgentTurn resets all agent-turn tracking state and returns to idle.
 // Takes the turnID that triggered this end. If a new turn has already
 // started (turnID != m.agentTurnID), the call is a no-op — this prevents
@@ -265,6 +403,7 @@ func (m *cliModel) endAgentTurn(turnID uint64) {
 	m.rwVisible = 0
 	m.typing = false
 	m.typewriterTickActive = false
+	m.turnCancelled = true // prevent stale progress from auto-starting after cancel
 	// Refresh agent count so the tick chain continues if agents exist
 	if m.agentCountFn != nil {
 		m.agentCount = m.agentCountFn()
@@ -396,6 +535,25 @@ func (m *cliModel) ensureBgCursorVisible() {
 	}
 
 	totalLines := cursorLine + 2 // +2 for header and bottom padding
+	if totalLines <= visibleH {
+		m.panelScrollY = 0
+		return
+	}
+	if cursorLine >= m.panelScrollY+visibleH {
+		m.panelScrollY = cursorLine - visibleH + 1
+	}
+	if cursorLine < m.panelScrollY {
+		m.panelScrollY = cursorLine
+	}
+}
+
+// ensureSessionCursorVisible adjusts panelScrollY so the session cursor is within the visible area.
+// Each session entry takes exactly 1 rendered line.
+func (m *cliModel) ensureSessionCursorVisible() {
+	visibleH := m.panelVisibleHeight()
+	// +1 for header line
+	cursorLine := m.panelSessionCursor + 1
+	totalLines := len(m.panelSessionItems) + 1
 	if totalLines <= visibleH {
 		m.panelScrollY = 0
 		return

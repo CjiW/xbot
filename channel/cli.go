@@ -22,6 +22,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/google/uuid"
 	"xbot/bus"
+	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/tools"
@@ -98,9 +99,26 @@ func (c *CLIChannel) Start() error {
 	if c.pendingSendInboundFn != nil {
 		c.model.sendInboundFn = c.pendingSendInboundFn
 	}
+	// Apply pending remote bg task callbacks (remote mode: set before Start)
+	if c.pendingBgTaskCountFn != nil {
+		c.model.bgTaskCountFn = c.pendingBgTaskCountFn
+	}
+	if c.pendingBgTaskListFn != nil {
+		c.model.bgTaskListFn = c.pendingBgTaskListFn
+	}
+	if c.pendingBgTaskKillFn != nil {
+		c.model.bgTaskKillFn = c.pendingBgTaskKillFn
+	}
+	if c.pendingBgTaskCleanupFn != nil {
+		c.model.bgTaskCleanupFn = c.pendingBgTaskCleanupFn
+	}
 	if c.pendingHistory != nil {
 		c.LoadHistory(c.pendingHistory)
 		c.pendingHistory = nil
+	}
+	if c.pendingProgress != nil {
+		c.model.restoreProgressSnapshot(c.pendingProgress)
+		c.pendingProgress = nil
 	}
 	c.model.channelName = "cli"
 	c.model.defaultChatID = c.config.ChatID
@@ -187,11 +205,11 @@ func (c *CLIChannel) Start() error {
 	// 启动 progress coalescing goroutine: drains progressCh and forwards
 	// to the unified async channel.
 	c.wg.Add(1)
-	go c.handleProgressDrain()
+	clipanic.Go("channel.CLIChannel.handleProgressDrain", c.handleProgressDrain)
 
 	// 启动 unified async drain goroutine: single sender to p.msgs
 	c.wg.Add(1)
-	go c.handleAsyncDrain()
+	clipanic.Go("channel.CLIChannel.handleAsyncDrain", c.handleAsyncDrain)
 
 	// §13 异步检查更新（不阻塞 TUI 启动）
 	c.CheckUpdateAsync()
@@ -205,7 +223,7 @@ func (c *CLIChannel) Start() error {
 		}
 		c.programMu.Unlock()
 		// Delay connection slightly to let TUI render first
-		go func() {
+		clipanic.Go("channel.CLIChannel.runnerAutoConnect", func() {
 			time.Sleep(500 * time.Millisecond)
 			c.programMu.Lock()
 			model := c.model
@@ -221,7 +239,7 @@ func (c *CLIChannel) Start() error {
 					c.getLLMProvider(),
 				)
 			}
-		}()
+		})
 	}
 
 	// --debug: start Unix socket for key injection
@@ -303,6 +321,9 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 	if payload == nil || c.program == nil {
 		return
 	}
+	if payload.ChatID == "" {
+		payload.ChatID = chatID
+	}
 	select {
 	case c.progressCh <- payload:
 	default:
@@ -374,6 +395,26 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.updateBgTaskCountFn()
 }
 
+// SetBgTaskRemoteCallbacks configures remote-mode background task callbacks.
+// Used when BgTaskManager is not available (remote CLI mode) to enable
+// background task display and management via RPC.
+func (c *CLIChannel) SetBgTaskRemoteCallbacks(sessionKey string, countFn func() int, listFn func() []*tools.BackgroundTask, killFn func(taskID string) error, cleanupFn func()) {
+	c.bgSessionKey = sessionKey
+	c.bgTaskKill = killFn
+	if c.model != nil {
+		c.model.bgTaskCountFn = countFn
+		c.model.bgTaskListFn = listFn
+		c.model.bgTaskKillFn = killFn
+		c.model.bgTaskCleanupFn = cleanupFn
+	} else {
+		// Model not created yet (Start() not called) — save as pending
+		c.pendingBgTaskCountFn = countFn
+		c.pendingBgTaskListFn = listFn
+		c.pendingBgTaskKillFn = killFn
+		c.pendingBgTaskCleanupFn = cleanupFn
+	}
+}
+
 // LoadHistory loads session history into the CLI model.
 // Used by remote mode where history must be fetched via RPC after the WS connection
 // is established. Thread-safe: always goes through asyncCh to avoid racing with
@@ -424,6 +465,55 @@ func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 	case c.asyncCh <- cliHistoryLoadMsg{history: msgs}:
 	default:
 		log.Warn("LoadHistory: asyncCh full, history not applied")
+	}
+}
+
+// RestoreInitialProgress applies an active agent turn progress snapshot to the model.
+// Handles both pre-program startup (direct model mutation) and running program
+// (async channel). This is the correct way to inject progress from RPC/reconnect
+// because SendProgress silently drops when c.program is nil (before Start()).
+//
+// Thread-safe: acquires programMu, and only mutates model directly when View()
+// has not been called yet (program == nil).
+func (c *CLIChannel) RestoreInitialProgress(chatID string, payload *CLIProgressPayload) {
+	if payload == nil || payload.Phase == "done" {
+		return
+	}
+	if payload.ChatID == "" {
+		payload.ChatID = chatID
+	}
+
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+
+	if c.model == nil {
+		// Model not created yet — cache for later.
+		c.pendingProgress = payload
+		log.WithFields(log.Fields{
+			"chatID":    chatID,
+			"phase":     payload.Phase,
+			"iteration": payload.Iteration,
+		}).Info("Cached initial progress (model not ready yet)")
+		return
+	}
+
+	if c.program == nil {
+		// Program not started yet — safe to mutate directly.
+		// View() hasn't been called, so no concurrent rendering.
+		c.model.restoreProgressSnapshot(payload)
+		log.WithFields(log.Fields{
+			"chatID":    chatID,
+			"phase":     payload.Phase,
+			"iteration": payload.Iteration,
+		}).Info("Applied initial progress (before program start)")
+		return
+	}
+
+	// Program is running — send through asyncCh.
+	select {
+	case c.asyncCh <- cliProgressMsg{payload: payload}:
+	default:
+		log.Warn("RestoreInitialProgress: asyncCh full, progress not applied")
 	}
 }
 
@@ -483,6 +573,12 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 		c.model.bgTaskCountFn = func() int {
 			return len(c.bgTaskMgr.ListRunning(key))
 		}
+		c.model.bgTaskListFn = func() []*tools.BackgroundTask {
+			return c.bgTaskMgr.ListAllForSession(key)
+		}
+		c.model.bgTaskKillFn = func(taskID string) error {
+			return c.bgTaskMgr.Kill(taskID)
+		}
 	}
 	// Wire agent count/list callbacks
 	if c.config.AgentCount != nil {
@@ -501,6 +597,13 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 	if c.config.AgentInspect != nil {
 		c.model.agentInspectFn = c.config.AgentInspect
 	}
+	if c.config.AgentMessages != nil {
+		c.model.agentMessagesFn = c.config.AgentMessages
+	}
+	// Wire sessions list callback
+	if c.config.SessionsList != nil {
+		c.model.sessionsListFn = c.config.SessionsList
+	}
 	// Wire usage query callback
 	if c.config.UsageQuery != nil {
 		c.model.usageQueryFn = c.config.UsageQuery
@@ -513,13 +616,13 @@ func (c *CLIChannel) CheckUpdateAsync() {
 	if c.program == nil {
 		return
 	}
-	go func() {
+	clipanic.Go("channel.CLIChannel.CheckUpdateAsync", func() {
 		info := version.CheckUpdate(context.Background())
 		select {
 		case c.asyncCh <- cliUpdateCheckMsg{info: info}:
 		default:
 		}
-	}()
+	})
 }
 
 // handleOutbound 处理从 agent 发来的消息 — 通过 asyncCh 合并发送

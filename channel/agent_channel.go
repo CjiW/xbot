@@ -55,10 +55,7 @@ func (ac *AgentChannel) Start() error {
 			select {
 			case <-ctx.Done():
 				return
-			case req, ok := <-ac.inbox:
-				if !ok {
-					return
-				}
+			case req := <-ac.inbox:
 				result, err := ac.runFn(ctx, req.task)
 				if err != nil {
 					result = "Error: " + err.Error()
@@ -75,15 +72,18 @@ func (ac *AgentChannel) Start() error {
 }
 
 // Stop cancels the SubAgent and waits for it to finish.
+// Does NOT close inbox — avoids send-on-closed-channel panic in Send().
+// The processing loop exits via ctx.Done(); inbox is GC'd with AgentChannel.
 func (ac *AgentChannel) Stop() {
 	ac.mu.Lock()
 	if ac.closed.Swap(true) {
 		ac.mu.Unlock()
 		return
 	}
-	close(ac.inbox)
 	ac.mu.Unlock()
 
+	// Cancel context first so processing loop exits via ctx.Done().
+	// Send() slow-path also unblocks via ctx.Done().
 	if ac.cancel != nil {
 		ac.cancel()
 	}

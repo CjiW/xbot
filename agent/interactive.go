@@ -83,7 +83,7 @@ func (a *Agent) cleanupExpiredSessions() {
 
 // recordIterationSnapshot appends the previous snapshot to iteration history if the
 // shouldAppend predicate returns true. Uses CAS loop to avoid TOCTOU races on sync.Map.
-func (a *Agent) recordIterationSnapshot(key string, current *channelpkg.CLIProgressPayload, shouldAppend func(prev *channelpkg.CLIProgressPayload) bool) {
+func (a *Agent) recordIterationSnapshot(key string, shouldAppend func(prev *channelpkg.CLIProgressPayload) bool) {
 	prevSnap, loaded := a.lastProgressSnapshot.Load(key)
 	if !loaded {
 		return
@@ -195,7 +195,7 @@ func (a *Agent) wireSubAgentCLIProgress(key, originChatID string, cfg *RunConfig
 		}
 
 		// Save snapshot + track iteration history for mid-session reconnect.
-		a.recordIterationSnapshot(agentProgressKey, cliPayload, func(prev *channelpkg.CLIProgressPayload) bool {
+		a.recordIterationSnapshot(agentProgressKey, func(prev *channelpkg.CLIProgressPayload) bool {
 			return s.Iteration > prev.Iteration && prev.Iteration >= 0
 		})
 		a.lastProgressSnapshot.Store(agentProgressKey, cliPayload)

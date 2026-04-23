@@ -293,7 +293,7 @@ func (a *Agent) buildMainRunConfig(
 						}
 						cliCh.SendProgress(chatID, payload)
 						// Save snapshot + track iteration history for mid-session reconnect.
-						a.recordIterationSnapshot(progressKey, payload, func(prev *channelpkg.CLIProgressPayload) bool {
+						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
 							return s.Iteration > prev.Iteration && prev.Iteration >= 0
 						})
 						a.lastProgressSnapshot.Store(progressKey, payload)
@@ -402,7 +402,7 @@ func (a *Agent) buildMainRunConfig(
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
 							}
 						}
-						a.recordIterationSnapshot(progressKey, cliPayload, func(prev *channelpkg.CLIProgressPayload) bool {
+						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
 							return s.Iteration > prev.Iteration && prev.Iteration >= 0
 						})
 						a.lastProgressSnapshot.Store(progressKey, cliPayload)
@@ -493,7 +493,7 @@ func (a *Agent) buildMainRunConfig(
 						// Track iteration history: when iteration advances, snapshot the
 						// PREVIOUS iteration into the history list for mid-session reconnect.
 						cliSnapshot := payload.ToCLIProgressPayload()
-						a.recordIterationSnapshot(progressKey, cliSnapshot, func(prev *channelpkg.CLIProgressPayload) bool {
+						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
 							return s.Iteration > prev.Iteration && prev.Iteration >= 0
 						})
 						// Save current iteration snapshot

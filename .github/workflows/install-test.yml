@@ -264,12 +264,12 @@ jobs:
         env:
           MODE: standalone
           VERSION: v0.0.23
-          InstallPath: D:\test-install\bin
+          INSTALL_PATH: D:\test-install\bin
           XBOT_HOME: D:\test-install\.xbot
         shell: pwsh
         run: |
           .\scripts\install.ps1 -NonInteractive
-          $binPath = Join-Path $env:InstallPath "xbot-cli.exe"
+          $binPath = Join-Path $env:INSTALL_PATH "xbot-cli.exe"
           Test-Path $binPath | Should -BeTrue
           Write-Host "✅ Binary installed"
           $configPath = Join-Path $env:XBOT_HOME "config.json"
@@ -291,12 +291,12 @@ jobs:
           MODE: server-client
           PORT: "6666"
           VERSION: v0.0.23
-          InstallPath: D:\test-install\bin
+          INSTALL_PATH: D:\test-install\bin
           XBOT_HOME: D:\test-install\.xbot
         shell: pwsh
         run: |
           .\scripts\install.ps1 -NonInteractive
-          $binPath = Join-Path $env:InstallPath "xbot-cli.exe"
+          $binPath = Join-Path $env:INSTALL_PATH "xbot-cli.exe"
           Test-Path $binPath | Should -BeTrue
           Write-Host "✅ Binary installed"
           $configPath = Join-Path $env:XBOT_HOME "config.json"

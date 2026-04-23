@@ -55,7 +55,7 @@ $ConfigPath = Join-Path $XbotHome "config.json"
 
 function Write-Info  { param([string]$Msg) Write-Host "[INFO] $Msg" -ForegroundColor Green }
 function Write-Warn  { param([string]$Msg) Write-Host "[WARN] $Msg" -ForegroundColor Yellow }
-function Write-Err   { param([string]$Msg) Write-Host "[ERROR] $Msg" -ForegroundColor Red; exit 1 }
+function Write-Err   { param([string]$Msg) Write-Host "[ERROR] $Msg" -ForegroundColor Red; throw $Msg }
 
 function ConvertTo-Ht {
     param([Parameter(ValueFromPipeline)]$InputObject)
@@ -216,18 +216,31 @@ function Install-UserAutostart {
     $vbsLauncher = Join-Path $wrapperDir "start-xbot-hidden.vbs"
     Set-Content -Path $vbsLauncher -Value "Set WshShell = CreateObject(`"WScript.Shell`")`r`nWshShell.Run chr(34) & `"$wrapperBat`" & Chr(34), 0, False" -Encoding ASCII
 
-    # Place VBS shortcut in user's Startup folder (auto-runs at login, no admin needed)
+    # Place launcher in user's Startup folder (auto-runs at login, no admin needed)
     $startupFolder = [Environment]::GetFolderPath("Startup")
-    $shortcutPath = Join-Path $startupFolder "xbot-server.lnk"
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = "wscript.exe"
-    $shortcut.Arguments = "`"$vbsLauncher`""
-    $shortcut.WorkingDirectory = $wrapperDir
-    $shortcut.Description = "xbot AI Agent Server"
-    $shortcut.WindowStyle = 7  # Minimized
-    $shortcut.Save()
-    Write-Info "Autostart shortcut created in Startup folder (no admin needed)"
+    $useShortcut = $false
+    try {
+        $shortcutPath = Join-Path $startupFolder "xbot-server.lnk"
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = "wscript.exe"
+        $shortcut.Arguments = "`"$vbsLauncher`""
+        $shortcut.WorkingDirectory = $wrapperDir
+        $shortcut.Description = "xbot AI Agent Server"
+        $shortcut.WindowStyle = 7  # Minimized
+        $shortcut.Save()
+        $useShortcut = $true
+        Write-Info "Autostart shortcut created in Startup folder (no admin needed)"
+    } catch {
+        Write-Warn "COM shortcut creation failed, using batch file in Startup folder"
+    }
+
+    # Fallback: copy batch file directly to Startup folder (shows console window briefly)
+    if (-not $useShortcut) {
+        $startupBat = Join-Path $startupFolder "xbot-server.bat"
+        Copy-Item $wrapperBat $startupBat -Force
+        Write-Info "Autostart batch copied to Startup folder (no admin needed)"
+    }
 
     # Remove any leftover scheduled task from previous installs
     Unregister-ScheduledTask -TaskName "xbot-server" -Confirm:$false -ErrorAction SilentlyContinue
@@ -415,6 +428,7 @@ function Install-WindowsService {
 # Main
 # ============================================================
 
+try {
 Write-Host ""
 Write-Host "  =======================================" -ForegroundColor Cyan
 Write-Host "         xbot-cli Installer (Windows)" -ForegroundColor Cyan
@@ -515,7 +529,8 @@ if ($selectedMode -eq "server-client") {
     } else {
         Write-Host "  Manage the server:" -ForegroundColor Cyan
         Write-Host "    Stop:   Task Manager > xbot-cli.exe > End task" -ForegroundColor DarkGray
-        Write-Host "    Start:  wscript `"`"$(Join-Path $XbotHome 'scripts\start-xbot-hidden.vbs')`"" -ForegroundColor DarkGray
+        $vbsPath = Join-Path $XbotHome "scripts\start-xbot-hidden.vbs"
+        Write-Host "    Start:  wscript `"$vbsPath`"" -ForegroundColor DarkGray
         $startupFolder = [Environment]::GetFolderPath("Startup")
         Write-Host "    Remove: del `"$startupFolder\xbot-server.lnk`"" -ForegroundColor DarkGray
     }
@@ -531,6 +546,18 @@ Write-Host ""
 Write-Host "  Project:  https://github.com/$REPO" -ForegroundColor DarkGray
 Write-Host "  License:  MIT" -ForegroundColor DarkGray
 Write-Host ""
+
+} catch {
+    Write-Host ""
+    Write-Host "[ERROR] Installation failed: $_" -ForegroundColor Red
+    Write-Host ""
+}
+
+# Keep terminal open so user can read the output
+if (-not $NonInteractive) {
+    Write-Host "Press Enter to close..." -ForegroundColor DarkGray
+    Read-Host | Out-Null
+}
 
 # Ensure clean exit code (native exe calls like schtasks.exe may leave $LASTEXITCODE non-zero)
 $global:LASTEXITCODE = 0

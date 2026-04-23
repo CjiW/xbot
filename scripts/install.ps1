@@ -225,11 +225,15 @@ function Install-ScheduledTask {
             Write-Err "Failed to create scheduled task: $_"
         }
     }
-    try {
-        Start-ScheduledTask -TaskName $taskName
-        Write-Info "Server started"
-    } catch {
-        Write-Warn "Could not auto-start. It will start at next logon."
+    if (-not $NonInteractive) {
+        try {
+            Start-ScheduledTask -TaskName $taskName
+            Write-Info "Server started"
+        } catch {
+            Write-Warn "Could not auto-start. It will start at next logon."
+        }
+    } else {
+        Write-Info "NONINTERACTIVE: skipped auto-start"
     }
 }
 

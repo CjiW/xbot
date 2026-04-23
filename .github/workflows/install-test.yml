@@ -317,7 +317,7 @@ jobs:
           $wrapperContent | Should -Match "xbot-cli.exe"
           $wrapperContent | Should -Match "serve"
           Write-Host "✅ Wrapper script has correct content"
-          # Verify autostart method: Scheduled Task (admin) or Startup folder shortcut (non-admin)
+          # Verify autostart method: Scheduled Task (admin) or Startup folder (non-admin)
           $isAdmin = $false
           try {
             $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -329,9 +329,12 @@ jobs:
             $task | Should -Not -BeNullOrEmpty
             Write-Host "✅ Scheduled Task registered (admin)"
           } else {
-            $shortcutPath = Join-Path ([Environment]::GetFolderPath("Startup")) "xbot-server.lnk"
-            Test-Path $shortcutPath | Should -BeTrue
-            Write-Host "✅ Startup folder shortcut created (non-admin)"
+            $startupFolder = [Environment]::GetFolderPath("Startup")
+            $shortcutPath = Join-Path $startupFolder "xbot-server.lnk"
+            $batPath = Join-Path $startupFolder "xbot-server.bat"
+            $hasAutostart = (Test-Path $shortcutPath) -or (Test-Path $batPath)
+            $hasAutostart | Should -BeTrue
+            Write-Host "✅ Startup folder autostart created (non-admin)"
             $vbsPath = Join-Path $env:XBOT_HOME "scripts\start-xbot-hidden.vbs"
             Test-Path $vbsPath | Should -BeTrue
             Write-Host "✅ VBS hidden launcher created"

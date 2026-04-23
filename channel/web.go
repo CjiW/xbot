@@ -1371,6 +1371,19 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				log.Warn("RPC response channel full, dropping response to CLI client")
 			}
 			continue
+		case "subscribe":
+			// CLI RemoteBackend subscribes to a business chatID so the Hub
+			// can route progress/stream/outbound events to this WS client.
+			// Without this, RPC-only sessions (reconnect) never subscribe,
+			// and all server-pushed events are silently buffered.
+			var subMsg struct {
+				ChatID string `json:"chat_id"`
+			}
+			if err := json.Unmarshal(raw, &subMsg); err != nil || subMsg.ChatID == "" {
+				continue
+			}
+			wc.hub.subscribe(c.id, subMsg.ChatID)
+			log.WithFields(log.Fields{"client_id": c.id, "chat_id": subMsg.ChatID}).Debug("CLI client subscribed to chatID")
 		case "message":
 			if msg.Content == "" && len(msg.UploadKeys) == 0 {
 				continue

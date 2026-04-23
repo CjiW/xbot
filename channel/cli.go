@@ -116,6 +116,10 @@ func (c *CLIChannel) Start() error {
 		c.LoadHistory(c.pendingHistory)
 		c.pendingHistory = nil
 	}
+	if c.pendingProgress != nil {
+		c.model.restoreProgressSnapshot(c.pendingProgress)
+		c.pendingProgress = nil
+	}
 	c.model.channelName = "cli"
 	c.model.defaultChatID = c.config.ChatID
 	c.model.chatID = c.config.ChatID
@@ -461,6 +465,55 @@ func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 	case c.asyncCh <- cliHistoryLoadMsg{history: msgs}:
 	default:
 		log.Warn("LoadHistory: asyncCh full, history not applied")
+	}
+}
+
+// RestoreInitialProgress applies an active agent turn progress snapshot to the model.
+// Handles both pre-program startup (direct model mutation) and running program
+// (async channel). This is the correct way to inject progress from RPC/reconnect
+// because SendProgress silently drops when c.program is nil (before Start()).
+//
+// Thread-safe: acquires programMu, and only mutates model directly when View()
+// has not been called yet (program == nil).
+func (c *CLIChannel) RestoreInitialProgress(chatID string, payload *CLIProgressPayload) {
+	if payload == nil || payload.Phase == "done" {
+		return
+	}
+	if payload.ChatID == "" {
+		payload.ChatID = chatID
+	}
+
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+
+	if c.model == nil {
+		// Model not created yet — cache for later.
+		c.pendingProgress = payload
+		log.WithFields(log.Fields{
+			"chatID":    chatID,
+			"phase":     payload.Phase,
+			"iteration": payload.Iteration,
+		}).Info("Cached initial progress (model not ready yet)")
+		return
+	}
+
+	if c.program == nil {
+		// Program not started yet — safe to mutate directly.
+		// View() hasn't been called, so no concurrent rendering.
+		c.model.restoreProgressSnapshot(payload)
+		log.WithFields(log.Fields{
+			"chatID":    chatID,
+			"phase":     payload.Phase,
+			"iteration": payload.Iteration,
+		}).Info("Applied initial progress (before program start)")
+		return
+	}
+
+	// Program is running — send through asyncCh.
+	select {
+	case c.asyncCh <- cliProgressMsg{payload: payload}:
+	default:
+		log.Warn("RestoreInitialProgress: asyncCh full, progress not applied")
 	}
 }
 

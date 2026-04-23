@@ -375,23 +375,13 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 				m.lastSeenIteration = lastIter
 			}
 		}
-		// Deduplicate: remove the last tool_summary message if it overlaps with
+		// Deduplicate: remove trailing tool_summary if it overlaps with
 		// the restored iteration history. History load may have produced a
 		// tool_summary from incremental assistant messages (postToolProcessing),
 		// and the progress snapshot's IterationHistory contains the same data.
 		// Without dedup, the user sees both a static Tools block and a live
 		// progress block rendering the same iterations.
-		if len(m.messages) > 0 {
-			lastMsg := &m.messages[len(m.messages)-1]
-			if lastMsg.role == "tool_summary" && len(lastMsg.iterations) > 0 {
-				lastHistIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
-				lastMsgIter := lastMsg.iterations[len(lastMsg.iterations)-1].Iteration
-				if lastMsgIter <= lastHistIter {
-					m.messages = m.messages[:len(m.messages)-1]
-					m.renderCacheValid = false
-				}
-			}
-		}
+		m.dedupToolSummary()
 	}
 
 	// Preserve StartedAt across progress updates so live timers don't reset.
@@ -773,18 +763,9 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) {
 					m.lastSeenIteration = lastIter
 				}
 			}
-			// Deduplicate: remove last tool_summary message if its iterations
+			// Deduplicate: remove trailing tool_summary if its iterations
 			// are covered by the restored iterationHistory.
-			if len(m.messages) > 0 {
-				lastMsg := &m.messages[len(m.messages)-1]
-				if lastMsg.role == "tool_summary" && len(lastMsg.iterations) > 0 {
-					lastHistIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
-					lastMsgIter := lastMsg.iterations[len(lastMsg.iterations)-1].Iteration
-					if lastMsgIter <= lastHistIter {
-						m.messages = m.messages[:len(m.messages)-1]
-					}
-				}
-			}
+			m.dedupToolSummary()
 		}
 	}
 }
@@ -834,12 +815,24 @@ func (m *cliModel) handleSplashTick(msg splashTickMsg) (tea.Model, tea.Cmd) {
 	if m.ready && msg.frame >= 20 {
 		// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
 		m.splashDone = true
-		return m, idleTickCmd()
+		cmds = append(cmds, idleTickCmd())
+		// If progress was restored during splash (reconnect with active turn),
+		// start the fast tick chain immediately for spinner animation.
+		if m.typing && m.progress != nil && !m.fastTickActive {
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
+		}
+		return m, tea.Batch(cmds...)
 	}
 	// 兜底上限：~2 秒（40 帧）
 	if msg.frame >= 40 {
 		m.splashDone = true
-		return m, idleTickCmd()
+		cmds = append(cmds, idleTickCmd())
+		if m.typing && m.progress != nil && !m.fastTickActive {
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
+		}
+		return m, tea.Batch(cmds...)
 	}
 	cmds = append(cmds, m.splashTick(msg.frame))
 	return m, tea.Batch(cmds...)

@@ -45,6 +45,9 @@ func maxBubbleWidth(termWidth int) int {
 // characters) fits within maxWidth columns.  If truncated, "..." is appended.
 // This avoids slicing mid-UTF-8-byte which would corrupt terminal rendering.
 func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
 	if runewidth.StringWidth(s) <= maxWidth {
 		return s
 	}
@@ -306,6 +309,91 @@ type iterToolSnap struct {
 	Summary   string `json:"summary,omitempty"`
 }
 
+// formatToolLabel generates a short human-readable label from a tool name and its JSON arguments.
+// Used when restoring progress from intermediate assistant messages (no Detail snapshot),
+// e.g. after server restart. Produces labels like "Shell(tail -100 file.log)" or "Read(path)".
+func formatToolLabel(name, argsJSON string) string {
+	const maxLen = 60
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return name
+	}
+
+	get := func(key string) string {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		return ""
+	}
+
+	switch name {
+	case "Shell":
+		cmd := get("command")
+		if cmd != "" {
+			if len(cmd) > maxLen-len(name)-2 {
+				cmd = cmd[:maxLen-len(name)-5] + "..."
+			}
+			return name + "(" + cmd + ")"
+		}
+	case "Read":
+		p := get("path")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Grep":
+		p := get("pattern")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Glob":
+		p := get("pattern")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Write", "FileCreate":
+		p := get("path")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "Edit", "FileReplace":
+		p := get("path")
+		if p != "" {
+			return name + "(" + p + ")"
+		}
+	case "WebSearch":
+		q := get("query")
+		if q != "" {
+			return name + "(" + q + ")"
+		}
+	case "SubAgent":
+		r := get("role")
+		t := get("task")
+		if r != "" {
+			if t != "" && len(t) > 30 {
+				t = t[:27] + "..."
+			}
+			if t != "" {
+				return name + "(" + r + ": " + t + ")"
+			}
+			return name + "(" + r + ")"
+		}
+	default:
+		// Generic: show first string parameter
+		for _, v := range args {
+			if s, ok := v.(string); ok && s != "" {
+				if len(s) > maxLen-len(name)-2 {
+					s = s[:maxLen-len(name)-5] + "..."
+				}
+				return name + "(" + s + ")"
+			}
+		}
+	}
+	return name
+}
+
 // ConvertMessagesToHistory converts raw DB messages into HistoryMessages for CLI display.
 // It handles three scenarios:
 //  1. Normal completed turn: assistant with Detail → one tool_summary + assistant
@@ -406,7 +494,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 				for _, tc := range m.ToolCalls {
 					curIterTools = append(curIterTools, CLIToolProgress{
 						Name:      tc.Name,
-						Label:     tc.Name,
+						Label:     formatToolLabel(tc.Name, tc.Arguments),
 						Status:    "done",
 						Elapsed:   0,
 						Iteration: curIterIdx,
@@ -550,7 +638,8 @@ type CLIChannel struct {
 	// Pending injections (set before model exists, applied in Start)
 	pendingTrimHistoryFn     func(time.Time) error
 	pendingResetTokenStateFn func()
-	pendingHistory           []HistoryMessage // remote mode: cached history before model is ready
+	pendingHistory           []HistoryMessage    // remote mode: cached history before model is ready
+	pendingProgress          *CLIProgressPayload // remote mode: cached progress before model is ready
 	pendingCheckpointHook    *tools.CheckpointHook
 	pendingSendInboundFn     func(bus.InboundMessage) bool
 	// Pending remote bg task callbacks (set before model exists in remote mode)

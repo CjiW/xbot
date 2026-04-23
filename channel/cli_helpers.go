@@ -300,6 +300,90 @@ func (m *cliModel) startAgentTurn() {
 	m.resetProgressState()
 }
 
+// restoreProgressSnapshot applies a progress snapshot to the model for seamless
+// reconnect/session-switch. Used when CLI reconnects to a running agent turn.
+// Sets the model into typing state with the full iteration history restored.
+// Safe to call before BubbleTea program starts (no channel sends).
+func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
+	if payload == nil || payload.Phase == "done" {
+		return
+	}
+
+	// Start agent turn (sets typing=true, increments turnID).
+	// Note: startAgentTurn calls resetProgressState which clears m.progress,
+	// but we overwrite it below.
+	m.startAgentTurn()
+
+	// Apply the progress payload
+	m.progress = payload
+
+	// Restore StartedAt for active tools so live elapsed timers work.
+	for i := range m.progress.ActiveTools {
+		t := &m.progress.ActiveTools[i]
+		if t.StartedAt.IsZero() && t.Elapsed > 0 {
+			t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+		}
+	}
+
+	// Restore iteration history from the progress snapshot.
+	if len(payload.IterationHistory) > 0 {
+		for _, ih := range payload.IterationHistory {
+			snap := cliIterationSnapshot{
+				Iteration: ih.Iteration,
+				Thinking:  ih.Thinking,
+				Reasoning: ih.Reasoning,
+				Tools:     ih.CompletedTools,
+			}
+			for i := range snap.Tools {
+				t := &snap.Tools[i]
+				if t.StartedAt.IsZero() && t.Elapsed > 0 {
+					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+				}
+			}
+			m.iterationHistory = append(m.iterationHistory, snap)
+		}
+		if len(m.iterationHistory) > 0 {
+			lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+			if lastIter > m.lastSeenIteration {
+				m.lastSeenIteration = lastIter
+			}
+		}
+
+		// Deduplicate: remove trailing tool_summary message if its iterations
+		// overlap with the restored iteration history. This prevents showing
+		// both a static Tools block and a live progress block for the same iterations.
+		// Searches from the end because tool_summary may be followed by assistant content.
+		m.dedupToolSummary()
+	}
+
+	m.invalidateAllCache(false)
+	// Do NOT call updateViewportContent() here — terminal size may not be
+	// initialized yet (pre-program path), causing panic in truncateToWidth.
+	// View() will rebuild on the next render cycle.
+	m.viewport.GotoBottom()
+}
+
+// dedupToolSummary removes the last tool_summary message from m.messages when
+// restoring active progress. The last tool_summary in messages comes from
+// intermediate assistant messages (postToolProcessing) of the in-progress turn.
+// The progress snapshot's IterationHistory contains the same data plus live state,
+// so we always remove the tool_summary to avoid rendering both Tools and Progress blocks.
+// Searches from the end because tool_summary may be followed by assistant content.
+func (m *cliModel) dedupToolSummary() {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		msg := &m.messages[i]
+		if msg.role == "tool_summary" {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			return
+		}
+		// Stop searching at user/system messages — tool_summary is always
+		// adjacent to the progress block (no other message types between).
+		if msg.role == "user" || msg.role == "system" {
+			return
+		}
+	}
+}
+
 // endAgentTurn resets all agent-turn tracking state and returns to idle.
 // Takes the turnID that triggered this end. If a new turn has already
 // started (turnID != m.agentTurnID), the call is a no-op — this prevents

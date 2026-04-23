@@ -8,8 +8,6 @@ import (
 	"xbot/bus"
 )
 
-const testChatID = "cli:/test"
-
 // initTestModel creates a model with channelName/chatID set for progress tests.
 func initTestModel() *cliModel {
 	model := newCLIModel()

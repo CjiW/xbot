@@ -1398,6 +1398,13 @@ func main() {
 				cliCh.LoadHistory(history)
 			}
 		}
+		// Subscribe to business chatID so Hub routes server-pushed events
+		// (progress, stream, outbound) to this WS connection.
+		// Without this, RPC-only sessions never subscribe and all pushed
+		// events are silently buffered.
+		if rb, ok := app.backend.(*agent.RemoteBackend); ok {
+			rb.SubscribeChat(remoteChatID)
+		}
 		// Check if server has an active agent turn for this chat (mid-session reconnect).
 		// Run in goroutine to avoid blocking TUI startup on RPC timeout.
 		clipanic.Go("main.remote.RestoreActiveProgress", func() {
@@ -1411,10 +1418,10 @@ func main() {
 					"completed": len(progress.CompletedTools),
 					"histLen":   len(progress.IterationHistory),
 				}).Info("RestoreActiveProgress: restoring progress snapshot")
-				// Set processing BEFORE sending progress — otherwise handleProgressMsg
-				// rejects it via the stale guard (!m.typing check).
-				cliCh.SetProcessing(true)
-				cliCh.SendProgress("cli:"+cliCfg.ChatID, progress)
+				// Use RestoreInitialProgress which handles both pre-program
+				// (direct model mutation) and running-program cases.
+				// SendProgress silently drops when c.program is nil (before Start()).
+				cliCh.RestoreInitialProgress("cli:"+cliCfg.ChatID, progress)
 			} else {
 				log.WithField("chatID", remoteChatID).Info("RestoreActiveProgress: no active progress")
 			}
@@ -1424,6 +1431,10 @@ func main() {
 		if rb, ok := app.backend.(interface{ OnReconnect(func()) }); ok {
 			rb.OnReconnect(func() {
 				defer clipanic.Recover("main.remote.OnReconnect", nil, false)
+				// Re-subscribe to business chatID for new WS connection.
+				if rb, ok := app.backend.(*agent.RemoteBackend); ok {
+					rb.SubscribeChat(remoteChatID)
+				}
 				// Re-sync CWD on reconnect (server may have restarted, losing in-memory cwd)
 				if isLocalServer(app.cfg.CLI.ServerURL) {
 					if cwd, err := os.Getwd(); err == nil {
@@ -1439,8 +1450,9 @@ func main() {
 				if app.backend.IsProcessing("cli", remoteChatID) {
 					cliCh.SetProcessing(true)
 					// Restore active progress snapshot (iteration history + stream state).
+					// Use RestoreInitialProgress for full iteration history restore + dedup.
 					if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
-						cliCh.SendProgress("cli:"+cliCfg.ChatID, progress)
+						cliCh.RestoreInitialProgress("cli:"+cliCfg.ChatID, progress)
 					}
 				} else {
 					cliCh.SetProcessing(false)

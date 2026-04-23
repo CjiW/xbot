@@ -365,6 +365,24 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 	return nil
 }
 
+// SubscribeChat sends a subscribe message to the server so the Hub routes
+// server-pushed events (progress, stream, outbound) to this WS client.
+// Must be called after connect() with the business chatID (e.g. "/home/user").
+func (b *RemoteBackend) SubscribeChat(chatID string) {
+	b.connMu.Lock()
+	conn := b.conn
+	b.connMu.Unlock()
+	if conn == nil {
+		return
+	}
+	subMsg := wsOutgoingMessage{Type: "subscribe", ChatID: chatID}
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(subMsg); err != nil {
+		log.WithError(err).Warn("Failed to send subscribe message")
+	}
+	conn.SetWriteDeadline(time.Time{})
+}
+
 // ---------------------------------------------------------------------------
 // Read pump — dispatches server messages
 // ---------------------------------------------------------------------------

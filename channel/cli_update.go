@@ -6,7 +6,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"fmt"
 	"image/color"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -319,6 +318,13 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 
 	case cliProgressMsg:
 		m.handleProgressMsg(msg)
+		// Ensure fast tick chain is active when restoring progress (reconnect/switch).
+		// Normal progress events don't need this (tick already running), but restored
+		// snapshots arrive before the idle tick self-heal fires (3s delay).
+		if m.typing && !m.fastTickActive {
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
+		}
 
 	case cliProcessingMsg:
 		if msg.processing && !m.typing {
@@ -453,6 +459,13 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 		// §14 启动画面结束确认
 		m.splashDone = true
 		cmds = append(cmds, idleTickCmd())
+		// If progress was restored before splash ended (reconnect with active turn),
+		// start the fast tick chain immediately so the spinner animates without
+		// waiting for the 3s idle tick self-heal.
+		if m.typing && m.progress != nil && !m.fastTickActive {
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
+		}
 
 	case suHistoryLoadMsg:
 		m.handleSuHistoryLoad(msg)
@@ -807,11 +820,4 @@ func (m *cliModel) handleRunnerStatusMsg(msg runnerStatusMsg) tea.Cmd {
 		return m.clearTempStatusCmd()
 	}
 	return nil
-}
-
-func configXbotHome() string {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".xbot")
-	}
-	return ".xbot"
 }

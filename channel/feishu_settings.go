@@ -120,7 +120,9 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_set_max_context":
 		maxCtxStr := parsed["max_context"]
 		if maxCtxStr == "" {
-			maxCtxStr = formStr(actionData, "settings_max_context_input")
+			if opt, ok := actionData["selected_option"].(string); ok {
+				maxCtxStr = opt
+			}
 		}
 		if maxCtxStr == "" {
 			return nil, fmt.Errorf("missing max_context")
@@ -143,7 +145,9 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_set_max_output_tokens":
 		maxOutStr := parsed["max_output_tokens"]
 		if maxOutStr == "" {
-			maxOutStr = formStr(actionData, "settings_max_output_tokens_input")
+			if opt, ok := actionData["selected_option"].(string); ok {
+				maxOutStr = opt
+			}
 		}
 		if maxOutStr == "" {
 			return nil, fmt.Errorf("missing max_output_tokens")
@@ -1134,18 +1138,39 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		maxContextDisplay = fmt.Sprintf("%dk", currentMaxContext/1000)
 	}
 
-	maxContextInitial := "0"
-	if currentMaxContext > 0 {
-		maxContextInitial = fmt.Sprintf("%d", currentMaxContext/1000)
+	// Build options in k units, always include current value.
+	currentMaxCtxK := currentMaxContext / 1000
+	presetKCtx := []int{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024}
+	maxCtxOptions := make([]map[string]any, 0, len(presetKCtx)+1)
+	seenCtx := make(map[int]bool)
+	if currentMaxCtxK > 0 {
+		seenCtx[currentMaxCtxK] = true
+		maxCtxOptions = append(maxCtxOptions, map[string]any{
+			"text":  map[string]any{"tag": "plain_text", "content": fmt.Sprintf("%dk", currentMaxCtxK)},
+			"value": fmt.Sprintf("%d", currentMaxCtxK),
+		})
+	}
+	for _, v := range presetKCtx {
+		if !seenCtx[v] {
+			label := "默认"
+			if v > 0 {
+				label = fmt.Sprintf("%dk", v)
+			}
+			maxCtxOptions = append(maxCtxOptions, map[string]any{
+				"text":  map[string]any{"tag": "plain_text", "content": label},
+				"value": fmt.Sprintf("%d", v),
+			})
+		}
 	}
 	elements = append(elements, buildSettingRow(
 		"最大上下文 (k)",
 		maxContextDisplay,
 		map[string]any{
-			"tag":           "input",
-			"name":          "settings_max_context_input",
-			"placeholder":   map[string]any{"tag": "plain_text", "content": "如 128 = 128k"},
-			"initial_value": maxContextInitial,
+			"tag":            "select_static",
+			"name":           "settings_max_context_select",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择上下文长度 (k)..."},
+			"initial_option": fmt.Sprintf("%d", currentMaxCtxK),
+			"options":        maxCtxOptions,
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_set_max_context",
@@ -1164,18 +1189,38 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		maxOutputDisplay = fmt.Sprintf("%dk", currentMaxOutputTokens/1000)
 	}
 
-	maxOutputInitial := "0"
-	if currentMaxOutputTokens > 0 {
-		maxOutputInitial = fmt.Sprintf("%d", currentMaxOutputTokens/1000)
+	currentMaxOutK := currentMaxOutputTokens / 1000
+	presetKOut := []int{0, 1, 2, 4, 8, 16, 32, 64, 128, 256}
+	maxOutOptions := make([]map[string]any, 0, len(presetKOut)+1)
+	seenOut := make(map[int]bool)
+	if currentMaxOutK > 0 {
+		seenOut[currentMaxOutK] = true
+		maxOutOptions = append(maxOutOptions, map[string]any{
+			"text":  map[string]any{"tag": "plain_text", "content": fmt.Sprintf("%dk", currentMaxOutK)},
+			"value": fmt.Sprintf("%d", currentMaxOutK),
+		})
+	}
+	for _, v := range presetKOut {
+		if !seenOut[v] {
+			label := "默认"
+			if v > 0 {
+				label = fmt.Sprintf("%dk", v)
+			}
+			maxOutOptions = append(maxOutOptions, map[string]any{
+				"text":  map[string]any{"tag": "plain_text", "content": label},
+				"value": fmt.Sprintf("%d", v),
+			})
+		}
 	}
 	elements = append(elements, buildSettingRow(
 		"最大输出 Token (k)",
 		maxOutputDisplay,
 		map[string]any{
-			"tag":           "input",
-			"name":          "settings_max_output_tokens_input",
-			"placeholder":   map[string]any{"tag": "plain_text", "content": "如 16 = 16k"},
-			"initial_value": maxOutputInitial,
+			"tag":            "select_static",
+			"name":           "settings_max_output_tokens_select",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择最大输出 (k)..."},
+			"initial_option": fmt.Sprintf("%d", currentMaxOutK),
+			"options":        maxOutOptions,
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_set_max_output_tokens",

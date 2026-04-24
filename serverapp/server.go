@@ -601,14 +601,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		// Security: verify the caller owns this session (or is admin).
 		// full_key format: "channel:chatID/roleName[:instance]"
-		// Extract chatID (before '/') and verify it belongs to the caller.
-		{
-			keyParts := strings.SplitN(p.FullKey, ":", 2)
-			if len(keyParts) >= 2 {
-				chatIDPart := strings.SplitN(keyParts[1], "/", 2)[0]
-				if !isAdmin(senderID) && chatIDPart != bizID {
-					return nil, fmt.Errorf("access denied")
-				}
+		if p.FullKey == "" {
+			return nil, fmt.Errorf("full_key is required")
+		}
+		if owner := sessionKeyOwner(p.FullKey); owner != "" {
+			if !isAdmin(senderID) && owner != bizID {
+				return nil, fmt.Errorf("access denied")
 			}
 		}
 		dump, _ := backend.GetAgentSessionDumpByFullKey(p.FullKey)
@@ -625,6 +623,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
+		if !isAdmin(senderID) && p.SessionKey != "" {
+			if owner := sessionKeyOwner(p.SessionKey); owner != "" && owner != bizID {
+				return nil, fmt.Errorf("access denied")
+			}
+		}
 		if backend.BgTaskManager() == nil {
 			return json.Marshal(0)
 		}
@@ -635,6 +638,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
+		}
+		if !isAdmin(senderID) && p.SessionKey != "" {
+			if owner := sessionKeyOwner(p.SessionKey); owner != "" && owner != bizID {
+				return nil, fmt.Errorf("access denied")
+			}
 		}
 		if backend.BgTaskManager() == nil {
 			return json.Marshal([]struct{}{})
@@ -681,15 +689,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		// Security: verify the task belongs to the caller's session (or is admin).
 		if !isAdmin(senderID) {
-			if task, err := backend.BgTaskManager().Status(p.TaskID); err == nil {
-				sk := task.SessionKey()
-				skParts := strings.SplitN(sk, ":", 2)
-				if len(skParts) >= 2 {
-					skOwner := strings.SplitN(skParts[1], "/", 2)[0]
-					if skOwner != bizID {
-						return nil, fmt.Errorf("access denied")
-					}
-				}
+			task, err := backend.BgTaskManager().Status(p.TaskID)
+			if err != nil {
+				return nil, fmt.Errorf("access denied: task not found")
+			}
+			if owner := sessionKeyOwner(task.SessionKey()); owner != "" && owner != bizID {
+				return nil, fmt.Errorf("access denied")
 			}
 		}
 		return nil, backend.BgTaskManager().Kill(p.TaskID)
@@ -699,6 +704,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
+		}
+		if !isAdmin(senderID) && p.SessionKey != "" {
+			if owner := sessionKeyOwner(p.SessionKey); owner != "" && owner != bizID {
+				return nil, fmt.Errorf("access denied")
+			}
 		}
 		if backend.BgTaskManager() != nil {
 			backend.BgTaskManager().RemoveCompletedTasks(p.SessionKey)
@@ -2569,6 +2579,17 @@ const cliSenderID = "cli_user"
 // isAdmin checks if the given WS auth senderID has admin privileges.
 // Admin is a ROLE (authorization), not a business identity.
 func isAdmin(authSenderID string) bool { return authSenderID == adminSenderID }
+
+// sessionKeyOwner extracts the chatID (owner) from a session/full key.
+// Key format: "channel:chatID/roleName[:instance]"
+// Returns empty string if the format is invalid.
+func sessionKeyOwner(key string) string {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.SplitN(parts[1], "/", 2)[0]
+}
 
 // senderIDFromParams extracts the business sender_id from RPC params.
 // For admin users (WS auth identity "admin"), if params don't specify a sender_id,

@@ -1284,8 +1284,9 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 // parseInteractiveKeyChatID extracts the parent chatID from an interactive key.
 // Key format: "channel:chatID/roleName:instance"
 func parseInteractiveKeyChatID(key string) string {
-	// Find the "/" separator between chatID and roleName
-	slashIdx := strings.Index(key, "/")
+	// Find the last "/" separator between chatID and roleName.
+	// Use LastIndex because chatID can contain "/" (e.g. CLI absolute paths like /home/user/workspace).
+	slashIdx := strings.LastIndex(key, "/")
 	if slashIdx <= 0 {
 		return ""
 	}

@@ -23,6 +23,10 @@
 - Must send Usage before Done event (`openai.go:836`)
 - Provider without `finish_reason` but with tool_calls: infer reason as tool_calls (`openai.go:844`)
 
+## Reasoning History Replay
+
+- In OpenAI-compatible auto mode, if any assistant message in the conversation already has `reasoning_content`, replay all assistant history messages with a `reasoning_content` field as well (use `""` when the original reasoning was lost, e.g. after compression). Some reasoning providers reject mixed assistant history shapes.
+
 ## Retry Behavior
 
 - Creates fresh context per attempt (`context.Background()`), not inheriting parent deadline (`retry.go:230-257`)

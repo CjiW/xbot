@@ -290,11 +290,23 @@ type assistantMessageWithReasoning struct {
 	ToolCalls        any    `json:"tool_calls,omitempty"`
 }
 
+func hasAssistantReasoningHistory(messages []ChatMessage) bool {
+	for _, msg := range messages {
+		if msg.Role == "assistant" && msg.ReasoningContent != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // toOpenAIMessages 将业务消息转换为 OpenAI 消息格式。
-// thinkingMode 非 "disabled" 时，所有 assistant 消息都会包含 reasoning_content 字段
-// （即使为空字符串），以满足 DeepSeek thinking mode 的要求。
+// 显式开启 thinking mode 时，所有 assistant 消息都会包含 reasoning_content 字段。
+// 在 auto 模式下，只要历史里已经出现过 assistant reasoning，也会为所有 assistant
+// 消息补齐该字段（缺失时传空字符串），以满足 DeepSeek/OpenAI reasoning provider
+// 对历史消息形状的一致性要求。
 func toOpenAIMessages(messages []ChatMessage, thinkingMode string) []openai.ChatCompletionMessageParamUnion {
 	thinkingEnabled := thinkingMode != "" && thinkingMode != "disabled"
+	reasoningHistoryObserved := thinkingMode != "disabled" && hasAssistantReasoningHistory(messages)
 	result := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
 	for _, msg := range messages {
 		switch msg.Role {
@@ -329,7 +341,7 @@ func toOpenAIMessages(messages []ChatMessage, thinkingMode string) []openai.Chat
 		case "assistant":
 			// Thinking mode 开启，或有实际 reasoning_content 时，使用 param.Override 路径
 			// 确保 reasoning_content 字段始终传给 API（DeepSeek thinking mode 要求）
-			if thinkingEnabled || msg.ReasoningContent != "" {
+			if thinkingEnabled || reasoningHistoryObserved || msg.ReasoningContent != "" {
 				var content any = msg.Content
 				if msg.Content == "" {
 					content = nil // OpenAI 协议: 空 content 用 null

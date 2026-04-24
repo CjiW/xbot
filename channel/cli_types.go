@@ -183,9 +183,10 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
-	"/cancel", "/chat", "/clear", "/compact", "/context", "/exit", "/help",
-	"/new", "/quit", "/rewind", "/search", "/sessions", "/settings", "/setup",
-	"/ss", "/su", "/tasks", "/update", "/usage",
+	"/cancel", "/channel", "/chat", "/clear", "/compact", "/context", "/exit",
+	"/help", "/model", "/models", "/new", "/quit", "/rewind", "/search",
+	"/sessions", "/settings", "/setup", "/ss", "/su", "/tasks", "/update",
+	"/usage",
 }
 
 // §19 长消息折叠阈值

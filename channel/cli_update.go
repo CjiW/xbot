@@ -738,6 +738,30 @@ func (m *cliModel) panelWidth(want int) int {
 	return want
 }
 
+// truncateCompHint truncates a styled completion hint string to fit within
+// maxW columns. It uses lipgloss.Width for ANSI-aware measurement and
+// removes trailing items (from the last " · " separator backwards) until
+// it fits, appending "…" to indicate truncation.
+func truncateCompHint(hint string, maxW int) string {
+	if maxW <= 0 || lipgloss.Width(hint) <= maxW {
+		return hint
+	}
+	sep := " · "
+	for {
+		idx := strings.LastIndex(hint, sep)
+		if idx < 0 {
+			break
+		}
+		candidate := hint[:idx]
+		if lipgloss.Width(candidate+"…") <= maxW {
+			return candidate + "…"
+		}
+		hint = candidate
+	}
+	// Fallback: return as-is (should rarely happen; each item is short).
+	return hint
+}
+
 // renderCompletionsHint returns the dynamic border color and completions hint string
 // based on the current input content (slash commands, @ file references, etc.).
 func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.Color, hint string) {
@@ -759,7 +783,7 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.C
 					parts[i] = m.styles.CompItem.Render(c)
 				}
 			}
-			hint = m.styles.CompHint.Render(strings.Join(parts, " · "))
+			hint = truncateCompHint(m.styles.CompHint.Render(strings.Join(parts, " · ")), m.width)
 		} else {
 			var matches []string
 			for _, cmd := range cliCommands {
@@ -768,7 +792,7 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.C
 				}
 			}
 			if len(matches) > 0 {
-				hint = m.styles.CompHintBorder.Render("[Tab] " + strings.Join(matches, " · "))
+				hint = truncateCompHint(m.styles.CompHintBorder.Render("[Tab] "+strings.Join(matches, " · ")), m.width)
 			}
 		}
 		return

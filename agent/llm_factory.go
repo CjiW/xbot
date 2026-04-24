@@ -506,9 +506,18 @@ func (f *LLMFactory) ListAllModelsForUser(senderID string) []string {
 		}
 	}
 
-	// All subscription model fields (no API calls, just DB records)
-	if f.subscriptionSvc != nil && senderID != "" {
-		if subs, err := f.subscriptionSvc.List(senderID); err == nil {
+	// All subscription model fields (no API calls, just DB records).
+	// When senderID is empty, collect models from ALL subscriptions
+	// (used by settings card tier selectors which need a global model list).
+	if f.subscriptionSvc != nil {
+		var subs []*sqlite.LLMSubscription
+		var err error
+		if senderID != "" {
+			subs, err = f.subscriptionSvc.List(senderID)
+		} else {
+			subs, err = f.subscriptionSvc.ListAll()
+		}
+		if err == nil {
 			for _, sub := range subs {
 				if sub.Model != "" && !seen[sub.Model] {
 					seen[sub.Model] = true

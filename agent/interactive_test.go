@@ -24,6 +24,30 @@ func TestInteractiveKey(t *testing.T) {
 	}
 }
 
+func TestParseInteractiveKeyChatID(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"CLI absolute path", "cli:/home/user/workspace/explore:oneshot-explore-1234", "/home/user/workspace"},
+		{"Feishu chatID", "feishu:oc_abc123/explore:session-1", "oc_abc123"},
+		{"Web chatID", "web:senderID/explore:inst", "senderID"},
+		{"multi-slash path", "cli:/a/b/c/d/explore:oneshot-explore-9876", "/a/b/c/d"},
+		{"empty chatID", "cli:/explore:inst", ""},
+		{"no slash", "cli:explore:inst", ""},
+		{"no colon", "cli/explore:inst", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseInteractiveKeyChatID(tt.key)
+			if got != tt.want {
+				t.Errorf("parseInteractiveKeyChatID(%q) = %q, want %q", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveOriginIDs_WithMetadata(t *testing.T) {
 	msg := bus.InboundMessage{
 		Channel:  "agent",

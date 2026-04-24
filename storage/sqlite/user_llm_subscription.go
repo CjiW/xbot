@@ -74,6 +74,32 @@ func decryptAPIKey(sub *LLMSubscription, encryptedAPIKey string) {
 	}
 }
 
+// ListAll returns all subscriptions across all users, ordered by creation time.
+func (s *LLMSubscriptionService) ListAll() ([]*LLMSubscription, error) {
+	conn := s.db.Conn()
+	rows, err := conn.Query(`
+		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, cached_models, created_at, updated_at
+			FROM user_llm_subscriptions
+			ORDER BY created_at ASC
+		`)
+	if err != nil {
+		return nil, fmt.Errorf("list all subscriptions: %w", err)
+	}
+	defer rows.Close()
+
+	var subs []*LLMSubscription
+	for rows.Next() {
+		sub := &LLMSubscription{}
+		encryptedAPIKey, _, err := scanSubscription(rows, sub)
+		if err != nil {
+			return nil, fmt.Errorf("scan subscription: %w", err)
+		}
+		decryptAPIKey(sub, encryptedAPIKey)
+		subs = append(subs, sub)
+	}
+	return subs, rows.Err()
+}
+
 // List returns all subscriptions for a user, ordered by creation time.
 func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, error) {
 	conn := s.db.Conn()

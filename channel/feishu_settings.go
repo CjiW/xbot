@@ -1144,7 +1144,8 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 	})
 	elements = append(elements, map[string]any{
 		"tag": "form",
-		"name": []map[string]any{
+		"name": "max_context_form",
+		"elements": []map[string]any{
 			{
 				"tag":           "input",
 				"name":          "max_context_k",
@@ -1180,7 +1181,8 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 	})
 	elements = append(elements, map[string]any{
 		"tag": "form",
-		"name": []map[string]any{
+		"name": "max_output_form",
+		"elements": []map[string]any{
 			{
 				"tag":           "input",
 				"name":          "max_output_k",

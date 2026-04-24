@@ -186,6 +186,48 @@ func TestToOpenAIMessages_ThinkingModeEmptyReasoning(t *testing.T) {
 	}
 }
 
+func TestToOpenAIMessages_AutoModeWithReasoningHistoryKeepsEmptyReasoningField(t *testing.T) {
+	// Auto mode should preserve reasoning_content shape once the conversation
+	// already contains assistant reasoning. Some reasoning providers require
+	// all assistant history messages to carry the field, even when empty.
+	messages := []ChatMessage{
+		NewUserMessage("hello"),
+		{
+			Role:    "assistant",
+			Content: "Hi there!",
+		},
+		NewUserMessage("what is 1+1?"),
+		{
+			Role:             "assistant",
+			Content:          "The answer is 2.",
+			ReasoningContent: "Simple addition.",
+		},
+	}
+
+	result := toOpenAIMessages(messages, "")
+	if len(result) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(result))
+	}
+
+	jsonBytes1, _ := json.Marshal(result[1].OfAssistant)
+	var parsed1 map[string]any
+	json.Unmarshal(jsonBytes1, &parsed1)
+	if rc, ok := parsed1["reasoning_content"]; !ok {
+		t.Error("auto mode with reasoning history: assistant message MUST have reasoning_content field")
+	} else if rcStr, ok := rc.(string); !ok || rcStr != "" {
+		t.Errorf("auto mode with reasoning history: expected empty string for reasoning_content, got %v", rc)
+	}
+
+	jsonBytes2, _ := json.Marshal(result[3].OfAssistant)
+	var parsed2 map[string]any
+	json.Unmarshal(jsonBytes2, &parsed2)
+	if rc, ok := parsed2["reasoning_content"]; !ok {
+		t.Error("auto mode with reasoning history: final assistant message MUST have reasoning_content field")
+	} else if rcStr, ok := rc.(string); !ok || rcStr != "Simple addition." {
+		t.Errorf("auto mode with reasoning history: expected preserved reasoning_content, got %v", rc)
+	}
+}
+
 func TestToOpenAIMessages_ToolCallsArgumentsRemainJSONString(t *testing.T) {
 	// When assistant has both reasoning_content and tool_calls,
 	// DeepSeek/OpenAI-compatible APIs expect function.arguments to remain a JSON string.

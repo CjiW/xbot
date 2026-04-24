@@ -683,7 +683,12 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	// 构建 SubAgent 的 system prompt：通用模板 + 角色专有能力描述
+	// parentCtx.WorkspaceRoot 在 remote 模式下为空（buildToolContext 清空了宿主机路径），
+	// 回退到 a.workDir 确保提示词中始终包含正确的工作目录。
 	workDir := parentCtx.WorkspaceRoot
+	if workDir == "" {
+		workDir = a.workDir
+	}
 	if parentCtx.Sandbox != nil && parentCtx.Sandbox.Name() != "none" {
 		workDir = parentCtx.Sandbox.Workspace(parentCtx.OriginUserID)
 	}
@@ -817,7 +822,15 @@ func (a *Agent) buildSubAgentRunConfig(
 			}
 			return "none"
 		}(),
-		InitialCWD: parentCtx.CurrentDir, // 继承父 Agent 的 CWD
+		// 继承父 Agent 的 CWD。remote 模式下 parentCtx.CurrentDir 可能为空
+		//（buildToolContext 清空了宿主机路径，且 session 未存过 CWD），
+		// 回退到 a.workDir 确保子 Agent 有正确的初始目录。
+		InitialCWD: func() string {
+			if parentCtx.CurrentDir != "" {
+				return parentCtx.CurrentDir
+			}
+			return a.workDir
+		}(),
 
 		MaxIterations: a.getMaxIterations(), // 继承主 Agent 配置
 		// SubAgent 不设独立超时，直接使用父 context 携带的 deadline

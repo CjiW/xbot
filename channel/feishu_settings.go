@@ -120,7 +120,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_set_max_context":
 		maxCtxStr := parsed["max_context"]
 		if maxCtxStr == "" {
-			maxCtxStr = formStr(actionData, "settings_max_context_input")
+			maxCtxStr = formStr(actionData, "max_context_k")
 		}
 		if maxCtxStr == "" {
 			return nil, fmt.Errorf("missing max_context")
@@ -143,7 +143,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_set_max_output_tokens":
 		maxOutStr := parsed["max_output_tokens"]
 		if maxOutStr == "" {
-			maxOutStr = formStr(actionData, "settings_max_output_tokens_input")
+			maxOutStr = formStr(actionData, "max_output_k")
 		}
 		if maxOutStr == "" {
 			return nil, fmt.Errorf("missing max_output_tokens")
@@ -1134,25 +1134,31 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		maxContextDisplay = fmt.Sprintf("%dk", currentMaxContext/1000)
 	}
 
-	maxContextInitial := "0"
+	maxCtxInitial := ""
 	if currentMaxContext > 0 {
-		maxContextInitial = fmt.Sprintf("%d", currentMaxContext/1000)
+		maxCtxInitial = fmt.Sprintf("%d", currentMaxContext/1000)
 	}
-	elements = append(elements, buildSettingRow(
-		"最大上下文 (k)",
-		maxContextDisplay,
-		map[string]any{
-			"tag":           "input",
-			"name":          "settings_max_context_input",
-			"placeholder":   map[string]any{"tag": "plain_text", "content": "如 128 = 128k"},
-			"initial_value": maxContextInitial,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action": "settings_set_max_context",
-				}),
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": fmt.Sprintf("**最大上下文 (k)**　当前: %s", maxContextDisplay),
+	})
+	elements = append(elements, map[string]any{
+		"tag": "form",
+		"name": []map[string]any{
+			{
+				"tag":           "input",
+				"name":          "max_context_k",
+				"label":         map[string]any{"tag": "plain_text", "content": "上下文长度 (k)"},
+				"placeholder":   map[string]any{"tag": "plain_text", "content": "如 400 = 400k"},
+				"initial_value": maxCtxInitial,
 			},
 		},
-	))
+		"value": map[string]string{
+			"action_data": mustMapToJSON(map[string]string{
+				"action": "settings_set_max_context",
+			}),
+		},
+	})
 
 	// Max output tokens setting (unit: k, stored as k*1000)
 	currentMaxOutputTokens := 0
@@ -1164,25 +1170,31 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		maxOutputDisplay = fmt.Sprintf("%dk", currentMaxOutputTokens/1000)
 	}
 
-	maxOutputInitial := "0"
+	maxOutInitial := ""
 	if currentMaxOutputTokens > 0 {
-		maxOutputInitial = fmt.Sprintf("%d", currentMaxOutputTokens/1000)
+		maxOutInitial = fmt.Sprintf("%d", currentMaxOutputTokens/1000)
 	}
-	elements = append(elements, buildSettingRow(
-		"最大输出 Token (k)",
-		maxOutputDisplay,
-		map[string]any{
-			"tag":           "input",
-			"name":          "settings_max_output_tokens_input",
-			"placeholder":   map[string]any{"tag": "plain_text", "content": "如 16 = 16k"},
-			"initial_value": maxOutputInitial,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action": "settings_set_max_output_tokens",
-				}),
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": fmt.Sprintf("**最大输出 Token (k)**　当前: %s", maxOutputDisplay),
+	})
+	elements = append(elements, map[string]any{
+		"tag": "form",
+		"name": []map[string]any{
+			{
+				"tag":           "input",
+				"name":          "max_output_k",
+				"label":         map[string]any{"tag": "plain_text", "content": "最大输出 (k)"},
+				"placeholder":   map[string]any{"tag": "plain_text", "content": "如 16 = 16k，0 = 默认"},
+				"initial_value": maxOutInitial,
 			},
 		},
-	))
+		"value": map[string]string{
+			"action_data": mustMapToJSON(map[string]string{
+				"action": "settings_set_max_output_tokens",
+			}),
+		},
+	})
 
 	// LLM concurrency settings (personal only)
 	personalConc := 3 // default

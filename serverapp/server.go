@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -160,7 +161,7 @@ func createAdminLLM(cfg *config.Config) (llm_pkg.LLM, error) {
 // handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
 // to the server's LocalBackend. This is the server-side counterpart of
 // RemoteBackend.callRPC().
-func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
+func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.Dispatcher, msgBus *bus.MessageBus, method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
 	// bizID is the resolved business identity for DB operations.
 	// senderID is the WS auth identity, used ONLY for isAdmin() authorization.
 	// Admin ("admin") is a role, not a business ID — all admin's CLI data
@@ -1027,6 +1028,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		return nil, nil
 
 	case "get_channel_config":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("access denied")
+		}
 		cfgs, err := backend.GetChannelConfigs()
 		if err != nil {
 			return nil, err
@@ -1046,6 +1050,34 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := backend.SetChannelConfig(p.Channel, p.Values); err != nil {
 			return nil, err
+		}
+		// Dynamic channel start/stop: detect enabled flag change.
+		if enabledVal, ok := p.Values["enabled"]; ok {
+			if disp == nil || msgBus == nil {
+				return nil, nil // channels not yet initialized
+			}
+			enabled, _ := strconv.ParseBool(enabledVal)
+			_, alreadyRunning := disp.GetChannel(p.Channel)
+			if enabled && !alreadyRunning {
+				// Channel was disabled, now enabled — start it.
+				if ch := createChannelInstance(p.Channel, cfg, msgBus); ch != nil {
+					disp.Register(ch)
+					go func(n string, c channel.Channel) {
+						defer func() {
+							if r := recover(); r != nil {
+								log.WithFields(log.Fields{"channel": n, "panic": r}).Error("Dynamic channel start panicked\n" + string(debug.Stack()))
+							}
+						}()
+						log.WithField("channel", n).Info("Dynamically starting channel...")
+						if err := c.Start(); err != nil {
+							log.WithError(err).WithField("channel", n).Error("Dynamic channel failed")
+						}
+					}(ch.Name(), ch)
+				}
+			} else if !enabled && alreadyRunning {
+				// Channel was enabled, now disabled — stop it.
+				disp.Unregister(p.Channel)
+			}
 		}
 		return nil, nil
 
@@ -1241,10 +1273,7 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 			return ws, nil
 		},
 	}
-	// Wire RPC handler for CLI RemoteBackend clients
-	callbacks.RPCHandler = func(method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
-		return handleCLIRPC(cfg, backend, method, params, senderID)
-	}
+	// RPCHandler is wired in Run() after disp/msgBus are available.
 	// Wire IsProcessing — check if agent is actively processing a request for the user.
 	// In WebChannel, senderID == chatID.
 	callbacks.IsProcessing = func(senderID string) bool {
@@ -1358,6 +1387,36 @@ func resolveStaticDir(cfg *config.Config) string {
 		}
 	}
 	return ""
+}
+
+// createChannelInstance creates a channel instance by name using current config.
+// Returns nil for channels that require complex setup (e.g. web with DB/OSS).
+// Used for dynamic channel start/stop without server restart.
+func createChannelInstance(name string, cfg *config.Config, msgBus *bus.MessageBus) channel.Channel {
+	switch name {
+	case "feishu":
+		return channel.NewFeishuChannel(channel.FeishuConfig{
+			AppID:             cfg.Feishu.AppID,
+			AppSecret:         cfg.Feishu.AppSecret,
+			EncryptKey:        cfg.Feishu.EncryptKey,
+			VerificationToken: cfg.Feishu.VerificationToken,
+			AllowFrom:         cfg.Feishu.AllowFrom,
+		}, msgBus)
+	case "qq":
+		return channel.NewQQChannel(channel.QQConfig{
+			AppID:        cfg.QQ.AppID,
+			ClientSecret: cfg.QQ.ClientSecret,
+			AllowFrom:    cfg.QQ.AllowFrom,
+		}, msgBus)
+	case "napcat":
+		return channel.NewNapCatChannel(channel.NapCatConfig{
+			WSUrl:     cfg.NapCat.WSUrl,
+			Token:     cfg.NapCat.Token,
+			AllowFrom: cfg.NapCat.AllowFrom,
+		}, msgBus)
+	default:
+		return nil
+	}
 }
 
 // registerChannels creates and registers all channels.
@@ -1706,6 +1765,13 @@ func Run(args []string) error {
 	feishuCh, webCh, err := registerChannels(disp, cfg, msgBus, backend, webDB, workDir)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to register channels")
+	}
+
+	// Wire RPC handler for CLI RemoteBackend clients (after disp/msgBus are available).
+	if webCh != nil {
+		webCh.SetRPCHandler(func(method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
+			return handleCLIRPC(cfg, backend, disp, msgBus, method, params, senderID)
+		})
 	}
 
 	// Register virtual CLI channel for remote mode (CLI→WS→server).
@@ -2413,14 +2479,24 @@ func migrateCLIUserSettingsFromGlobalIfNeeded(cfg *config.Config, backend agent.
 // Copying extra fields (Sandbox, CLI, Admin, Web, etc.) will overwrite user-set
 // values with in-memory defaults, which is exactly the class of bug this function prevents.
 func saveServerConfig(cfg *config.Config) error {
-	merged := config.LoadFromFile(config.ConfigFilePath())
+	path := config.ConfigFilePath()
+	merged := config.LoadFromFile(path)
 	if merged == nil {
-		merged = &config.Config{}
+		// Config file doesn't exist or has parse errors.
+		// Refuse to overwrite — writing an empty config would destroy
+		// all user settings (feishu, qq, web, etc.).
+		// Only create a new file if it truly doesn't exist.
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			merged = &config.Config{}
+		} else {
+			log.WithField("path", path).Error("saveServerConfig: config file exists but cannot parse, refusing to overwrite")
+			return fmt.Errorf("config file parse error, not overwriting")
+		}
 	}
 	// Server only ever modifies these two sections:
 	merged.LLM = cfg.LLM     // via applyRuntimeSetting / rebuildLLMFromSubscription
 	merged.Agent = cfg.Agent // via applyRuntimeSetting (max_iterations, max_concurrency, etc.)
-	return config.SaveToFile(config.ConfigFilePath(), merged)
+	return config.SaveToFile(path, merged)
 }
 
 // adminSenderID is the WS auth identity for admin users.

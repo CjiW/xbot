@@ -271,17 +271,32 @@ func LoadFromFile(path string) *Config {
 }
 
 // SaveToFile 将配置保存到 JSON 文件（原子写入：先写临时文件再 rename）。
+// 它会先读取磁盘上已有的文件，将 Go struct 序列化后的顶层 key 覆盖到原始 JSON 上，
+// 同时保留磁盘文件中存在但 Go struct 未定义的字段（未知 key）。
+// 这样用户手动添加的自定义字段或未来新增的 struct 字段不会被静默丢弃。
 func SaveToFile(path string, cfg *Config) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+
+	// 序列化 Go struct
+	structData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
+
+	// 尝试读取磁盘上已有的文件，做 JSON 级合并以保留未知字段
+	finalData := structData
+	if existing, readErr := os.ReadFile(path); readErr == nil && len(existing) > 0 {
+		if merged, mergeErr := mergeJSONPreserveUnknown(existing, structData); mergeErr == nil {
+			finalData = merged
+		}
+		// 合并失败时回退到纯 struct 序列化（安全降级）
+	}
+
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, finalData, 0o600); err != nil {
 		return fmt.Errorf("write temp config: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -289,6 +304,61 @@ func SaveToFile(path string, cfg *Config) error {
 		return fmt.Errorf("rename config: %w", err)
 	}
 	return nil
+}
+
+// mergeJSONPreserveUnknown 将 structData 的顶层 key 深度合并到 existing 上。
+// 对于两边都是 JSON object 的嵌套值，递归合并以保留 unknown 字段。
+// structData 中的 key 始终覆盖 existing 中的同名 key（非 object 时直接替换）。
+func mergeJSONPreserveUnknown(existing, structData []byte) ([]byte, error) {
+	var existingMap map[string]json.RawMessage
+	if err := json.Unmarshal(existing, &existingMap); err != nil {
+		return nil, err
+	}
+	var structMap map[string]json.RawMessage
+	if err := json.Unmarshal(structData, &structMap); err != nil {
+		return nil, err
+	}
+	// 递归合并：两边都是 object 时深度合并，否则 struct 覆盖
+	for k, structVal := range structMap {
+		if existingVal, ok := existingMap[k]; ok {
+			merged, err := deepMergeJSON(existingVal, structVal)
+			if err != nil {
+				// 降级为直接覆盖
+				existingMap[k] = structVal
+				continue
+			}
+			existingMap[k] = merged
+		} else {
+			existingMap[k] = structVal
+		}
+	}
+	return json.MarshalIndent(existingMap, "", "  ")
+}
+
+// deepMergeJSON 对两个 JSON 值做深度合并。
+// 如果两者都是 JSON object，递归合并（structVal 的 key 覆盖 existingVal）。
+// 否则返回 structVal（直接替换）。
+func deepMergeJSON(existing, structVal json.RawMessage) (json.RawMessage, error) {
+	var existingObj, structObj map[string]json.RawMessage
+	existingIsObj := json.Unmarshal(existing, &existingObj) == nil
+	structIsObj := json.Unmarshal(structVal, &structObj) == nil
+
+	if existingIsObj && structIsObj {
+		for k, v := range structObj {
+			if ev, ok := existingObj[k]; ok {
+				merged, err := deepMergeJSON(ev, v)
+				if err != nil {
+					existingObj[k] = v
+					continue
+				}
+				existingObj[k] = merged
+			} else {
+				existingObj[k] = v
+			}
+		}
+		return json.Marshal(existingObj)
+	}
+	return structVal, nil
 }
 
 func splitCommaTrim(s string) []string {

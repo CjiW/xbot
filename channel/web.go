@@ -749,6 +749,12 @@ func (wc *WebChannel) SetCallbacks(cb WebCallbacks) {
 	wc.callbacks = cb
 }
 
+// SetRPCHandler sets or replaces the RPC handler. Used to wire the handler
+// after the dispatcher and message bus are available.
+func (wc *WebChannel) SetRPCHandler(fn func(method string, params json.RawMessage, senderID string) (json.RawMessage, error)) {
+	wc.callbacks.RPCHandler = fn
+}
+
 func (wc *WebChannel) Name() string { return "web" }
 
 // ---------------------------------------------------------------------------

@@ -103,9 +103,15 @@ func (app *cliApp) refreshRemoteValuesCache() {
 }
 
 func saveCLIConfig(cfg *config.Config) error {
-	merged := config.LoadFromFile(config.ConfigFilePath())
+	path := config.ConfigFilePath()
+	merged := config.LoadFromFile(path)
 	if merged == nil {
-		merged = &config.Config{}
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			merged = &config.Config{}
+		} else {
+			log.WithField("path", path).Error("saveCLIConfig: config file exists but cannot parse, refusing to overwrite")
+			return fmt.Errorf("config file parse error, not overwriting")
+		}
 	}
 	// CLI only ever modifies these sections:
 	merged.LLM = cfg.LLM     // via settings panel / subscription switch
@@ -114,7 +120,7 @@ func saveCLIConfig(cfg *config.Config) error {
 	if cfg.CLI.ServerURL != "" || cfg.CLI.Token != "" {
 		merged.CLI = cfg.CLI
 	}
-	return config.SaveToFile(config.ConfigFilePath(), merged)
+	return config.SaveToFile(path, merged)
 }
 
 func isCLISubscriptionSettingKey(key string) bool {
@@ -937,7 +943,7 @@ func main() {
 				defer app.agentCacheMu.RUnlock()
 				return app.agentCacheCount
 			}
-			return app.backend.CountInteractiveSessions("cli", "")
+			return app.backend.CountInteractiveSessions("cli", absWorkDir)
 		},
 		AgentList: func() []channel.AgentPanelEntry {
 			if app.backend == nil {
@@ -948,7 +954,7 @@ func main() {
 				defer app.agentCacheMu.RUnlock()
 				return app.agentCacheList
 			}
-			sessions := app.backend.ListInteractiveSessions("cli", "")
+			sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
 			entries := make([]channel.AgentPanelEntry, len(sessions))
 			for i, s := range sessions {
 				entries[i] = channel.AgentPanelEntry{
@@ -1042,7 +1048,7 @@ func main() {
 					Label:   "主会话  You ↔ Agent",
 					Active:  true,
 				})
-				sessions := app.backend.ListInteractiveSessions("cli", "")
+				sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
 				for _, s := range sessions {
 					agentKey := s.Role + ":" + s.Instance
 					if seen[agentKey] {
@@ -1498,8 +1504,8 @@ func main() {
 					if app.backend == nil {
 						return
 					}
-					count := app.backend.CountInteractiveSessions("cli", "")
-					sessions := app.backend.ListInteractiveSessions("cli", "")
+					count := app.backend.CountInteractiveSessions("cli", absWorkDir)
+					sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
 					entries := make([]channel.AgentPanelEntry, len(sessions))
 					for i, s := range sessions {
 						entries[i] = channel.AgentPanelEntry{

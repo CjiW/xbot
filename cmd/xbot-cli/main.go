@@ -125,7 +125,7 @@ func saveCLIConfig(cfg *config.Config) error {
 
 func isCLISubscriptionSettingKey(key string) bool {
 	switch key {
-	case "max_output_tokens", "thinking_mode":
+	case "llm_provider", "llm_api_key", "llm_base_url", "llm_model", "max_output_tokens", "thinking_mode":
 		return true
 	default:
 		return false

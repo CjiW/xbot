@@ -82,6 +82,10 @@ var cliActionSettingKeys = map[string]struct{}{
 }
 
 var cliSubscriptionScopedSettingKeys = map[string]struct{}{
+	"llm_provider":      {},
+	"llm_api_key":       {},
+	"llm_base_url":      {},
+	"llm_model":         {},
 	"max_output_tokens": {},
 	"thinking_mode":     {},
 }

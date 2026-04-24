@@ -1,101 +1,162 @@
 ---
-title: "Feishu Channel"
-weight: 20
+title: "飞书"
+weight: 22
 ---
 
-# Feishu (Lark) Channel
+# 飞书渠道
 
-WebSocket-based Feishu enterprise messaging bot. Supports interactive message cards, rich text, file/image handling, settings UI, and approval workflows.
+飞书是最常用的渠道。团队成员在飞书群里 @机器人即可与 Agent 对话，无需各自配置 API Key。
 
-## Setup
+**需要 Server 模式。**
 
-### 1. Create a Feishu App
+## 前置条件
 
-1. Open [Feishu Open Platform](https://open.feishu.cn/) and create a new application.
-2. In **App Credentials**, note the **App ID** and **App Secret**.
-3. Under **Event Subscriptions**, enable WebSocket mode (recommended over HTTP callback).
-4. Subscribe to the required events:
-   - `im.message.receive_v1` — receive messages
-   - `card.action.triggered` — interactive card callbacks
-5. Under **Permissions**, enable the required scopes (messages, contacts, etc.).
+1. xbot 已以 **Server 模式** 安装并运行
+2. 拥有飞书开放平台的开发者权限
+3. 一个飞书应用（App ID 和 App Secret）
 
-### 2. Configure Environment
+## 创建飞书应用
 
-```bash
-FEISHU_ENABLED=true
-FEISHU_APP_ID=cli_xxxxxxxx
-FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxx
+1. 打开 [飞书开放平台](https://open.feishu.cn) → 创建企业自建应用
+2. 记下 **App ID** 和 **App Secret**
+3. 在「事件订阅」中配置：
+   - 请求地址：填写你的服务器地址（公网可达）
+   - 加密策略：如果启用，记下 **Encrypt Key** 和 **Verification Token**；不启用则留空
+4. 添加事件订阅：
+   - `im.message.receive_v1`（接收消息）
+5. 发布应用
+
+## 最小必需权限
+
+在「权限管理」中开通以下权限：
+
+| 权限 | 权限标识 | 用途 |
+|------|----------|------|
+| 获取与发送单聊、群组消息 | `im:message` | 收发消息 |
+| 接收消息 | `im:message.receive_v1` | 接收用户消息事件 |
+| 以应用的身份发消息 | `im:message:send_as_bot` | 发送回复 |
+| 获取用户基本信息 | `contact:user.base:readonly` | 识别用户身份 |
+
+> 💡 以上是**最小权限集**。如果需要 Agent 操作飞书文档、多维表格等，还需要额外权限（见下方扩展权限）。
+
+### 扩展权限（可选）
+
+| 功能 | 需要的权限 |
+|------|-----------|
+| 上传图片/文件 | `im:resource` |
+| 操作文档 | `docx:document`、`wiki:wiki` |
+| 操作多维表格 | `bitable:app` |
+| 获取机器人信息 | `bot:bot:get_bot_info` |
+
+## 配置
+
+在 `~/.xbot/config.json` 中添加飞书配置：
+
+### 最小配置
+
+```json
+{
+  "feishu": {
+    "enabled": true,
+    "app_id": "cli_xxx",
+    "app_secret": "your-app-secret"
+  }
+}
 ```
 
-Optional for encrypted event subscriptions:
+### 完整配置
 
-```bash
-FEISHU_ENCRYPT_KEY=xxxxxxxxxxxxxxxxxx
-FEISHU_VERIFICATION_TOKEN=xxxxxxxxxxxxxxxxxx
+```json
+{
+  "feishu": {
+    "enabled": true,
+    "app_id": "cli_xxx",
+    "app_secret": "your-app-secret",
+    "encrypt_key": "your-encrypt-key",
+    "verification_token": "your-verification-token",
+    "allow_from": []
+  }
+}
 ```
 
-### 3. Restrict Access (Optional)
+| 字段 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | ✅ | `false` | 启用飞书渠道 |
+| `app_id` | ✅ | — | 飞书应用 App ID |
+| `app_secret` | ✅ | — | 飞书应用 App Secret |
+| `encrypt_key` | ❌ | `""` | 事件加密 Key（在飞书后台配置了加密才需要） |
+| `verification_token` | ❌ | `""` | 验证 Token（在飞书后台配置了加密才需要） |
+| `allow_from` | ❌ | `[]` | 允许的用户 open_id 列表，留空则允许所有人 |
 
-Limit the bot to specific users by their Open ID:
+## 全局 LLM：让全团队共享 API Key
 
-```bash
-FEISHU_ALLOW_FROM=ou_xxx1,ou_xxx2,ou_xxx3
+这是飞书渠道最常见的使用方式：**管理员配置一次 LLM，所有飞书用户直接使用。**
+
+### 配置步骤
+
+1. 在 `~/.xbot/config.json` 中配置全局 LLM：
+
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "api_key": "sk-xxx",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4o"
+  },
+  "feishu": {
+    "enabled": true,
+    "app_id": "cli_xxx",
+    "app_secret": "xxx"
+  }
+}
 ```
 
-## Features
+2. 启动 Server：`xbot-cli serve`
 
-### Message Types
+3. 飞书用户在群里 @机器人 即可对话，无需任何额外配置。
 
-- Text messages (plain text)
-- Rich text (markdown rendering)
-- Image messages (download and send)
-- File messages (download and send)
-- Post messages (threaded replies)
+### LLM 解析逻辑
 
-### Interactive Cards
+- 用户没有个人订阅 → 使用全局 `llm` 配置（即上面的配置）
+- 管理员可以为特定用户创建个人订阅（覆盖全局配置）
+- 全局 LLM 的 API Key 在数据库中加密存储
 
-Feishu cards (schema V2) with buttons, forms, and interactive elements:
+## 使用方式
 
-- **Settings UI** — Configure per-user settings via interactive card forms
-- **Approval Cards** — Permission control approval workflow with approve/deny buttons
-- **Card Tools** — Agent can create and send interactive cards programmatically via tools
+### 私聊
 
-### Slash Commands
+直接给机器人发消息即可。
 
-All standard commands are supported via Feishu messages:
+### 群聊
 
-| Command | Description |
-|---------|-------------|
-| `/settings` | View current settings |
-| `/settings set <key> <value>` | Update a setting |
-| `/new` | Start a new conversation |
-| `/help` | Show help |
+在群里 @机器人 + 你的问题。不带内容的纯 @ 会被忽略。
 
-### Feishu MCP Tools
+### 消息卡片
 
-When the Feishu channel is active, the agent gains access to 20+ Feishu API tools:
+Agent 可以发送交互式消息卡片（如设置面板、确认对话框等），用户可以直接点击卡片上的按钮操作。
 
-- **Wiki** — list spaces, nodes, read/create/move wiki pages
-- **Bitable** — CRUD on Bitable apps, tables, and records
-- **DocX** — create/read/write Feishu documents with block-level operations
-- **Drive** — upload, list, manage files and permissions
-- **Download** — download files and images from chat messages
+## 网络要求
 
-These tools require user-level OAuth authorization. The agent sends an authorization card when first accessing a protected resource.
+xbot 通过 **WebSocket** 连接飞书服务器（非 HTTP 回调），因此：
 
-## Architecture
+- Server 需要能**出站**访问飞书 WebSocket 端点
+- **不需要**公网 IP 或入站端口（与 HTTP 回调模式不同）
+- 如果服务器在 NAT/防火墙后面，只要能访问外网即可
 
-```
-Feishu WebSocket → Event Parser → MessageBus → Agent → Tool Execution
-                                                                      ↓
-                               Card Callback ← Interactive Cards ← Agent
-```
+## 常见问题
 
-## Troubleshooting
+**Q: 飞书渠道不生效？**
+- 确认 `feishu.enabled` 为 `true`
+- 确认 App ID 和 App Secret 正确
+- 确认 Server 正在运行：`xbot-cli serve`
+- 检查日志：`~/.xbot/logs/`
 
-| Issue | Solution |
-|-------|----------|
-| Bot doesn't receive messages | Check WebSocket connection in logs; verify event subscriptions |
-| Card buttons don't respond | Verify `card.action.triggered` event subscription is enabled |
-| Settings commands fail | Check that settings keys exist in the schema — use `/settings` to list |
-| MCP tools unauthorized | User must complete OAuth authorization when prompted |
+**Q: 机器人收不到消息？**
+- 确认已订阅 `im.message.receive_v1` 事件
+- 确认应用已发布
+- 群聊需要 @机器人
+
+**Q: 用户报 "no LLM configured"？**
+- 确认 `config.json` 中 `llm.api_key` 已配置
+- 全局 LLM 配置会让所有无个人订阅的用户共享此 Key

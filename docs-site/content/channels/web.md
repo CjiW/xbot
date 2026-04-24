@@ -1,95 +1,71 @@
 ---
-title: "Web Channel"
-weight: 30
+title: "Web"
+weight: 25
 ---
 
-# Web Channel
+# Web 渠道
 
-Browser-based chat interface with user authentication, REST API, WebSocket real-time communication, file upload, and marketplace support.
+浏览器聊天界面。支持用户注册/登录、邀请制和 Persona 隔离。
 
-## Setup
+**需要 Server 模式。**
 
-### Enable
+## 配置
 
-```bash
-WEB_ENABLED=true
-WEB_HOST=0.0.0.0
-WEB_PORT=8082
-WEB_PERSONA_ISOLATION=true
+```json
+{
+  "web": {
+    "enable": true,
+    "port": 8082
+  },
+  "admin": {
+    "token": "your-secret-token"
+  }
+}
 ```
 
-### Authentication
+| 字段 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enable` | ✅ | `false` | 启用 Web 渠道 |
+| `host` | ❌ | `""` | 监听地址（空 = 所有接口） |
+| `port` | ❌ | `0` | 监听端口 |
+| `static_dir` | ❌ | 自动检测 | 前端静态文件目录 |
+| `persona_isolation` | ❌ | `false` | 启用后每个 Web 用户的 persona 互相隔离 |
+| `invite_only` | ❌ | `false` | 启用后禁止自主注册，只能由管理员创建账号 |
 
-Two modes:
+## Web UI 安装
 
-1. **Open** — Anyone can register and use the web interface.
-2. **Invite-only** — Admin creates accounts via `/runner` commands or REST API.
+Server 模式安装时，安装器会自动下载 Web UI 到 `~/.xbot/web/dist/`。
+
+如果需要手动安装：
 
 ```bash
-WEB_INVITE_ONLY=true
+# 下载对应版本的 web 压缩包并解压到 ~/.xbot/web/dist/
 ```
 
-### Feishu SSO
+## 访问
 
-Users can link their account with Feishu OAuth for seamless login:
+启动 Server 后，在浏览器中打开 `http://your-server:8082`。
 
-```bash
-OAUTH_ENABLE=true
-OAUTH_HOST=127.0.0.1
-OAUTH_PORT=8081
-```
+## 认证方式
 
-## Features
+| 方式 | 说明 |
+|------|------|
+| 用户名/密码 | 注册后登录，Session Cookie 有效期 30 天 |
+| CLI Token | WebSocket 连接时使用 admin token |
+| 飞书登录 | 通过飞书账号一键登录/关联 |
 
-### Real-time Chat
+## Invite-Only 模式
 
-- WebSocket-based streaming responses
-- Markdown rendering
-- Code syntax highlighting
-- Message history
+当 `invite_only: true` 时：
 
-### File Upload
+- 新用户无法自主注册（返回 403）
+- 管理员可通过飞书渠道的管理命令或直接操作数据库创建账号
+- 适合内部团队使用
 
-- Max file size: 10MB
-- Upload via REST API or drag-and-drop in the UI
+## Persona Isolation
 
-### REST API
+当 `persona_isolation: true` 时：
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/auth/register` | POST | Register new user |
-| `/api/auth/login` | POST | Login |
-| `/api/auth/feishu-link` | POST | Link account to Feishu |
-| `/api/history` | GET | Get message history |
-| `/api/history` | DELETE | Clear history |
-| `/api/settings` | GET/PUT | User settings |
-| `/api/llm-config` | GET/POST/DELETE | LLM configuration |
-| `/api/llm-config/model` | POST | Switch model |
-| `/api/llm-max-context` | GET/POST | Max context tokens |
-| `/api/files/upload` | POST | Upload file |
-| `/api/search` | GET | Global search |
-| `/api/runner/token` | GET/POST/DELETE | Runner token management |
-| `/api/runners` | GET/POST | List/create runners |
-| `/api/market/*` | * | Marketplace (browse/install/publish) |
-
-### Persona Isolation
-
-When `WEB_PERSONA_ISOLATION=true`, each web user gets an isolated agent persona — their core memory, settings, and conversation history are separate from other users.
-
-### Marketplace
-
-Users can browse, install, publish, and uninstall skills and agents through the marketplace API.
-
-## Frontend
-
-The web frontend is built with:
-
-- **React 19** + **Vite** + **TailwindCSS 4**
-- Located in `web/` directory
-- Served as static files via `WEB_STATIC_DIR`
-
-## Security Notes
-
-- Web users (`web-*` IDs) are blocked from server-side sandbox access by default
-- They must connect their own remote runner for tool execution
-- Override with `WEB_USER_SERVER_RUNNER=true` (not recommended for production)
+- 每个 Web 用户的系统人格（persona）互相隔离
+- 用户 A 设置的 Agent 行为不影响用户 B
+- 适合多租户场景

@@ -21,6 +21,10 @@ func TestCLISettingScope_KnownKeys(t *testing.T) {
 		"theme":               "user",
 		"language":            "user",
 		"runner_server":       "user",
+		"llm_provider":        "subscription",
+		"llm_api_key":         "subscription",
+		"llm_base_url":        "subscription",
+		"llm_model":           "subscription",
 		"max_output_tokens":   "subscription",
 		"thinking_mode":       "subscription",
 		"default_user":        "global",
@@ -55,7 +59,7 @@ func TestCLISettingScope_SettingsSchemaKeysAreClassified(t *testing.T) {
 }
 
 func TestIsSubscriptionScopedSettingKey(t *testing.T) {
-	for _, key := range []string{"max_output_tokens", "thinking_mode"} {
+	for _, key := range []string{"llm_provider", "llm_api_key", "llm_base_url", "llm_model", "max_output_tokens", "thinking_mode"} {
 		if !isSubscriptionScopedSettingKey(key) {
 			t.Fatalf("expected %q to be subscription-scoped", key)
 		}

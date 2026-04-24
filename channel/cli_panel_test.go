@@ -199,7 +199,8 @@ func TestPanelBoxLeftAlign(t *testing.T) {
 }
 
 // TestSubscriptionGenerationGuard tests that stale per-subscription values
-// (max_output_tokens, thinking_mode) are NEVER written back after a subscription switch.
+// (provider, api_key, base_url, model, max_output_tokens, thinking_mode)
+// are NEVER written back after a subscription switch.
 // This is the structural guarantee against the subscription overwrite bug.
 func TestSubscriptionGenerationGuard(t *testing.T) {
 	model := newCLIModel()
@@ -210,6 +211,10 @@ func TestSubscriptionGenerationGuard(t *testing.T) {
 
 	// Simulate: user edits some values
 	values := map[string]string{
+		"llm_provider":      "openai",
+		"llm_api_key":       "sk-old-key",
+		"llm_base_url":      "https://old.example.com",
+		"llm_model":         "old-model",
 		"max_output_tokens": "8192",
 		"thinking_mode":     "auto",
 		"vanguard_model":    "claude-opus-4",
@@ -222,13 +227,15 @@ func TestSubscriptionGenerationGuard(t *testing.T) {
 	// Simulate: the onSubmit callback runs (this is what the guard checks)
 	// After switch, stale subscription-scoped fields should be stripped
 	if model.panelSubGeneration != model.subGeneration {
-		for _, k := range []string{"max_output_tokens", "thinking_mode"} {
-			delete(values, k)
+		for k := range values {
+			if isSubscriptionScopedSettingKey(k) {
+				delete(values, k)
+			}
 		}
 	}
 
 	// Verify: per-subscription fields are GONE
-	for _, k := range []string{"max_output_tokens", "thinking_mode"} {
+	for _, k := range []string{"llm_provider", "llm_api_key", "llm_base_url", "llm_model", "max_output_tokens", "thinking_mode"} {
 		if _, exists := values[k]; exists {
 			t.Errorf("BUG: stale subscription field %q should have been deleted after subscription switch", k)
 		}
@@ -251,19 +258,25 @@ func TestSubscriptionGenerationGuardNoSwitch(t *testing.T) {
 	model.panelSubGeneration = 5 // same generation = no switch
 
 	values := map[string]string{
+		"llm_provider":      "openai",
+		"llm_api_key":       "sk-test-key",
+		"llm_base_url":      "https://api.example.com",
+		"llm_model":         "gpt-4",
 		"max_output_tokens": "8192",
 		"thinking_mode":     "auto",
 	}
 
 	// Guard should NOT strip anything
 	if model.panelSubGeneration != model.subGeneration {
-		for _, k := range []string{"max_output_tokens", "thinking_mode"} {
-			delete(values, k)
+		for k := range values {
+			if isSubscriptionScopedSettingKey(k) {
+				delete(values, k)
+			}
 		}
 	}
 
 	// All fields should still be present
-	for _, k := range []string{"max_output_tokens", "thinking_mode"} {
+	for _, k := range []string{"llm_provider", "llm_api_key", "llm_base_url", "llm_model", "max_output_tokens", "thinking_mode"} {
 		if _, exists := values[k]; !exists {
 			t.Errorf("subscription field %q should NOT be deleted when subscription hasn't changed", k)
 		}

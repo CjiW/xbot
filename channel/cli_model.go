@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/charmbracelet/glamour"
 	"time"
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/clipanic"
 	"xbot/storage/sqlite"
@@ -450,7 +451,7 @@ type cliModel struct {
 	rewindItems    []rewindItem          // candidate user messages for rewind selection
 	rewindCursor   int                   // selected index in rewindItems
 	rewindResult   *tools.RewindResult   // result of the last rewind operation (for display)
-	checkpointHook *tools.CheckpointHook // file checkpoint hook for rewind file rollback (nil = no file tracking)
+	checkpointState *hooks.CheckpointState // file checkpoint state for rewind file rollback (nil = no file tracking)
 
 	// --- §10 TODO 进度条 ---
 	todos            []CLITodoItem // 从 progress 事件同步的 TODO 列表

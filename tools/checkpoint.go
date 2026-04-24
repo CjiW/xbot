@@ -1,16 +1,12 @@
 package tools
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
-
-	"strings"
 
 	log "xbot/logger"
 )
@@ -281,170 +277,6 @@ func (s *CheckpointStore) CountChanges(turnIdx int) int {
 		}
 	}
 	return len(seen)
-}
-
-// CheckpointHook is a ToolHook that snapshots files before FileCreate/FileReplace operations.
-type CheckpointHook struct {
-	mu      sync.Mutex
-	store   *CheckpointStore
-	turnIdx int
-	// pending stores snapshots that haven't been confirmed yet (pre-tool, waiting for post-tool)
-	pending map[string]FileSnapshot // keyed by file path
-}
-
-// NewCheckpointHook creates a new checkpoint hook with the given store.
-func NewCheckpointHook(store *CheckpointStore) *CheckpointHook {
-	return &CheckpointHook{
-		store:   store,
-		pending: make(map[string]FileSnapshot),
-	}
-}
-
-func (h *CheckpointHook) Name() string { return "checkpoint" }
-
-// PreToolUse snapshots the file before a FileCreate/FileReplace operation.
-func (h *CheckpointHook) PreToolUse(ctx context.Context, toolName string, args string) error {
-	if toolName != "FileCreate" && toolName != "FileReplace" {
-		return nil
-	}
-
-	filePath := parseFilePath(toolName, args)
-	if filePath == "" {
-		log.WithField("tool", toolName).Warn("checkpoint hook: empty file path from args")
-		return nil
-	}
-
-	// Resolve to absolute path using working directory from context
-	if !filepath.IsAbs(filePath) {
-		wd := WorkingDirFromContext(ctx)
-		if wd == "" {
-			wd, _ = os.Getwd()
-		}
-		if wd != "" {
-			filePath = filepath.Join(wd, filePath)
-		}
-	}
-	filePath = filepath.Clean(filePath)
-
-	// Read current file content (if it exists)
-	var content []byte
-	existed := false
-	if info, err := os.Stat(filePath); err == nil {
-		if info.Size() > maxCheckpointFileSize {
-			return nil // skip large files
-		}
-		content, err = os.ReadFile(filePath)
-		if err != nil {
-			return nil // can't read, skip
-		}
-		existed = true
-	}
-
-	h.mu.Lock()
-	h.pending[filePath] = FileSnapshot{
-		TurnIdx:    h.turnIdx,
-		ToolName:   toolName,
-		FilePath:   filePath,
-		Existed:    existed,
-		ContentB64: base64.StdEncoding.EncodeToString(content),
-	}
-	h.mu.Unlock()
-
-	return nil
-}
-
-// PostToolUse confirms the snapshot if the tool succeeded, or discards it on failure.
-func (h *CheckpointHook) PostToolUse(ctx context.Context, toolName string, args string, _ *ToolResult, err error, _ time.Duration) {
-	if toolName != "FileCreate" && toolName != "FileReplace" {
-		return
-	}
-
-	// Parse the file path from args to look up the correct pending entry
-	filePath := parseFilePath(toolName, args)
-	if filePath != "" {
-		if !filepath.IsAbs(filePath) {
-			wd := WorkingDirFromContext(ctx)
-			if wd == "" {
-				wd, _ = os.Getwd()
-			}
-			if wd != "" {
-				filePath = filepath.Join(wd, filePath)
-			}
-		}
-		filePath = filepath.Clean(filePath)
-	}
-
-	h.mu.Lock()
-	snap, found := h.pending[filePath]
-	if found {
-		delete(h.pending, filePath)
-	}
-	h.mu.Unlock()
-
-	if !found {
-		return
-	}
-
-	if err != nil {
-		// Tool failed — discard the snapshot
-		return
-	}
-
-	// Tool succeeded — write snapshot to store
-	if writeErr := h.store.Write(snap); writeErr != nil {
-		log.WithError(writeErr).Warn("checkpoint hook: failed to write snapshot")
-	} else {
-		log.WithFields(log.Fields{"turn": snap.TurnIdx, "tool": toolName, "file": snap.FilePath, "existed": snap.Existed}).Debug("checkpoint hook: snapshot saved")
-	}
-}
-
-// SetTurnIdx sets the current turn index. Should be called before each agent turn
-// (i.e., before each user message is processed by the agent).
-func (h *CheckpointHook) SetTurnIdx(idx int) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.turnIdx = idx
-}
-
-// TurnIdx returns the current turn index.
-func (h *CheckpointHook) TurnIdx() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.turnIdx
-}
-
-// Store returns the underlying CheckpointStore.
-func (h *CheckpointHook) Store() *CheckpointStore {
-	return h.store
-}
-
-// parseFilePath extracts the file path from tool arguments JSON.
-// It handles Windows backslash paths that may not be properly JSON-escaped
-// (e.g. from test code that concatenates filepath.Join output into a JSON string).
-func parseFilePath(toolName, args string) string {
-	if args == "" {
-		return ""
-	}
-	var params struct {
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		// Fallback: try to extract "path" value manually for malformed JSON
-		// (e.g. Windows backslash paths not properly escaped in test code).
-		// This handles: {"path": "C:\Users\foo\bar.go", ...}
-		if idx := strings.Index(args, `"path"`); idx >= 0 {
-			rest := args[idx+len(`"path"`):]
-			rest = strings.TrimLeft(rest, ": \t\n")
-			if len(rest) > 0 && rest[0] == '"' {
-				// Find closing quote (raw, not JSON-unescaped)
-				if end := strings.Index(rest[1:], `"`); end >= 0 {
-					return rest[1 : end+1]
-				}
-			}
-		}
-		return ""
-	}
-	return params.Path
 }
 
 // splitJSONLLines splits byte data into JSONL lines.

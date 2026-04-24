@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"xbot/agent"
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/clipanic"
@@ -1265,20 +1266,17 @@ func main() {
 			// Inject BgTaskManager for background task display
 			bgSessionKey := "cli:" + cliCfg.ChatID
 			cliCh.SetBgTaskManager(app.backend.BgTaskManager(), bgSessionKey)
-			// Inject ApprovalHook for permission control approval dialog
-			if hook := app.backend.ToolHookChain().Get("approval"); hook != nil {
-				if ah, ok := hook.(*tools.ApprovalHook); ok {
-					cliCh.SetApprovalHook(ah)
-				}
+			// Inject ApprovalState for permission control approval dialog
+			if state := app.backend.ApprovalState(); state != nil {
+				cliCh.SetApprovalState(state)
 			}
-			// Inject CheckpointHook for Ctrl+K rewind file rollback
+			// Inject CheckpointState for Ctrl+K rewind file rollback
 			checkpointDir := filepath.Join(os.Getenv("HOME"), ".xbot", "checkpoints", "cli-default")
 			if cpStore, err := tools.NewCheckpointStore(checkpointDir); err == nil {
-				cpHook := tools.NewCheckpointHook(cpStore)
-				if err := app.backend.ToolHookChain().Use(cpHook); err != nil {
-					log.WithError(err).Warn("Failed to register checkpoint hook")
-				} else {
-					cliCh.SetCheckpointHook(cpHook)
+				if mgr := app.backend.HookManager(); mgr != nil {
+					cpState := hooks.NewCheckpointState(cpStore)
+					mgr.RegisterBuiltin(hooks.CheckpointCallback(cpState))
+					cliCh.SetCheckpointState(cpState)
 					defer cpStore.Cleanup()
 				}
 			} else {

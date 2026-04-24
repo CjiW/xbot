@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xbot/agent"
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/clipanic"
@@ -430,7 +431,8 @@ func (b *fakeAgentBackend) LLMFactory() *agent.LLMFactory                       
 func (b *fakeAgentBackend) SettingsService() *agent.SettingsService                      { return nil }
 func (b *fakeAgentBackend) MultiSession() *session.MultiTenantSession                    { return nil }
 func (b *fakeAgentBackend) BgTaskManager() *tools.BackgroundTaskManager                  { return nil }
-func (b *fakeAgentBackend) ToolHookChain() *tools.HookChain                              { return nil }
+func (b *fakeAgentBackend) HookManager() *hooks.Manager                          { return nil }
+func (b *fakeAgentBackend) ApprovalState() *hooks.ApprovalState                  { return nil }
 func (b *fakeAgentBackend) SetDirectSend(func(bus.OutboundMessage) (string, error))      {}
 func (b *fakeAgentBackend) SetChannelFinder(func(string) (channel.Channel, bool))        {}
 func (b *fakeAgentBackend) SetChannelPromptProviders(...agent.ChannelPromptProvider)     {}

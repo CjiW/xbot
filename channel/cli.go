@@ -22,6 +22,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/google/uuid"
 	"xbot/bus"
+	"xbot/agent/hooks"
 	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
@@ -93,8 +94,8 @@ func (c *CLIChannel) Start() error {
 	if c.pendingResetTokenStateFn != nil {
 		c.model.resetTokenStateFn = c.pendingResetTokenStateFn
 	}
-	if c.pendingCheckpointHook != nil {
-		c.model.checkpointHook = c.pendingCheckpointHook
+	if c.pendingCheckpointState != nil {
+		c.model.checkpointState = c.pendingCheckpointState
 	}
 	if c.pendingSendInboundFn != nil {
 		c.model.sendInboundFn = c.pendingSendInboundFn
@@ -187,9 +188,9 @@ func (c *CLIChannel) Start() error {
 	c.program = tea.NewProgram(c.model, programOpts...)
 	c.programMu.Unlock()
 
-	// Wire CLIApprovalHandler into the ApprovalHook now that the program exists
-	if c.approvalHook != nil {
-		c.approvalHook.SetHandler(NewCLIApprovalHandler(c.program))
+	// Wire CLIApprovalHandler into the ApprovalState now that the program exists
+	if c.approvalState != nil {
+		c.approvalState.SetHandler(NewCLIApprovalHandler(c.program))
 	}
 
 	// Ctrl+Z 紧急退出：双保险
@@ -375,10 +376,10 @@ func (c *CLIChannel) SendToast(text, icon string) {
 	}
 }
 
-// SetApprovalHook stores the ApprovalHook reference so that Start() can wire
+// SetApprovalState stores the ApprovalState reference so that Start() can wire
 // the CLIApprovalHandler after the tea.Program is created.
-func (c *CLIChannel) SetApprovalHook(hook *tools.ApprovalHook) {
-	c.approvalHook = hook
+func (c *CLIChannel) SetApprovalState(state *hooks.ApprovalState) {
+c.approvalState = state
 }
 
 // SetSendInboundFn overrides the default sendInbound behavior.
@@ -541,15 +542,15 @@ func (c *CLIChannel) SetResetTokenStateFn(fn func()) {
 	c.pendingResetTokenStateFn = fn
 }
 
-// SetCheckpointHook sets the file checkpoint hook for /rewind file rollback.
-// If the model hasn't been created yet, the hook is cached and applied later.
-func (c *CLIChannel) SetCheckpointHook(hook *tools.CheckpointHook) {
-	c.programMu.Lock()
-	defer c.programMu.Unlock()
-	if c.model != nil {
-		c.model.checkpointHook = hook
-	}
-	c.pendingCheckpointHook = hook
+// SetCheckpointState sets the file checkpoint state for /rewind file rollback.
+// If the model hasn't been created yet, the state is cached and applied later.
+func (c *CLIChannel) SetCheckpointState(state *hooks.CheckpointState) {
+c.programMu.Lock()
+defer c.programMu.Unlock()
+if c.model != nil {
+c.model.checkpointState = state
+}
+c.pendingCheckpointState = state
 }
 
 // InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。

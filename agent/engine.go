@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/llm"
 	"xbot/memory"
@@ -138,8 +139,8 @@ type RunConfig struct {
 	// 主 Agent 注入，SubAgent 不注入。
 	InteractiveCallbacks *InteractiveCallbacks
 
-	// HookChain tool execution hook chain (nil = no hooks).
-	HookChain *tools.HookChain
+	// HookManager tool execution hook manager (nil = no hooks).
+	HookManager *hooks.Manager
 
 	// SettingsSvc provides access to user settings (nil = settings not available).
 	SettingsSvc *SettingsService
@@ -380,6 +381,36 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	// Wrap context with LLM retry notification
 	retryNotifyCtx := s.setupRetryNotify(ctx)
 
+	// Emit AgentStop event on exit (notification, non-blocking)
+	if s.cfg.HookManager != nil {
+		defer func() {
+			s.cfg.HookManager.Emit(ctx, &hooks.AgentStopEvent{
+				BasePayload: hooks.BasePayload{
+					SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
+					SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
+				},
+			})
+		}()
+	}
+
+	// Emit UserPromptSubmit event (notification, non-blocking)
+	if s.cfg.HookManager != nil {
+		prompt := ""
+		for i := len(s.messages) - 1; i >= 0; i-- {
+			if s.messages[i].Role == "user" {
+				prompt = s.messages[i].Content
+				break
+			}
+		}
+		s.cfg.HookManager.Emit(ctx, &hooks.UserPromptSubmitEvent{
+			BasePayload: hooks.BasePayload{
+				SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
+				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
+			},
+			Prompt: prompt,
+		})
+	}
+
 	// --- Main loop ---
 	for i := 0; i < s.maxIter; i++ {
 		// Check for cancellation before starting each iteration
@@ -435,6 +466,32 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// Always process tool results (preserves engine messages for session continuity)
 		s.processToolResults(ctx, response, results)
 
+		// Emit PostToolBatch event (notification, non-blocking)
+		if s.cfg.HookManager != nil && len(response.ToolCalls) > 0 {
+			batchResults := make([]hooks.ToolBatchResult, len(response.ToolCalls))
+			for idx, tc := range response.ToolCalls {
+				r := results[idx]
+				batchResults[idx] = hooks.ToolBatchResult{
+				ToolName: tc.Name,
+				Success:  r.err == nil && (r.result == nil || !r.result.IsError),
+				Elapsed:  r.elapsed,
+				}
+				if r.err != nil {
+				batchResults[idx].Error = r.err.Error()
+				} else if r.result != nil && r.result.IsError {
+				batchResults[idx].Error = r.result.Summary
+				}
+			}
+			s.cfg.HookManager.Emit(ctx, &hooks.PostToolBatchEvent{
+				BasePayload: hooks.BasePayload{
+				SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
+				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
+				},
+				ToolCount: len(response.ToolCalls),
+				Results:   batchResults,
+			})
+		}
+
 		// If ctx was cancelled during tool execution, exit after preserving results
 		if ctx.Err() != nil {
 			// Strip trailing unpaired tool_calls so they don't get persisted
@@ -457,30 +514,47 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	return s.buildMaxIterOutput()
 }
 
-// executeWithHooks wraps tool execution with pre/post hook calls.
+// executeWithHooks wraps tool execution with pre/post hook calls via hooks.Manager.
 // Both defaultToolExecutor (SubAgents) and buildToolExecutor (main Agent)
 // MUST use this function to ensure hooks are called identically.
 //
 // The function:
-//  1. Runs pre-tool hooks with WorkingDir injected into context
+//  1. Runs pre-tool hooks via Manager.Emit (PreToolUseEvent)
 //  2. Executes the tool
-//  3. Runs post-tool hooks (always, even on error)
+//  3. Runs post-tool hooks via Manager.Emit (PostToolUseEvent or PostToolUseFailureEvent)
 //
 // toolExecCtx is the base context (with perm users etc. injected).
 // toolCtx is the ToolContext (with WorkingDir resolved).
-// workingDir is toolCtx.WorkingDir, extracted for convenience.
 func executeWithHooks(
-	hookChain *tools.HookChain,
+	hookMgr *hooks.Manager,
 	toolExecCtx context.Context,
 	toolCtx *tools.ToolContext,
 	toolName, toolArgs string,
 	tool tools.Tool,
 ) (*tools.ToolResult, error) {
-	// Pre-tool hooks: inject WorkingDir so hooks can resolve paths
-	if hookChain != nil {
+	// Parse toolArgs to map for event payload
+	var toolInput map[string]any
+	json.Unmarshal([]byte(toolArgs), &toolInput)
+
+	// Pre-tool hooks via Manager.Emit
+	if hookMgr != nil {
 		hookCtx := tools.WithWorkingDir(toolExecCtx, toolCtx.WorkingDir)
-		if err := hookChain.RunPre(hookCtx, toolName, toolArgs); err != nil {
-			return nil, fmt.Errorf("pre-tool hook blocked %q: %w", toolName, err)
+		preEvent := &hooks.PreToolUseEvent{
+			ToolName_:  toolName,
+			ToolInput_: toolInput,
+		}
+		decision, err := hookMgr.Emit(hookCtx, preEvent)
+		if err != nil {
+			return nil, fmt.Errorf("pre-tool hook error for %q: %w", toolName, err)
+		}
+		if decision.Action == hooks.Deny {
+			return nil, fmt.Errorf("pre-tool hook blocked %q: %s", toolName, decision.Reason)
+		}
+		// If decision has UpdatedInput, re-serialize toolArgs
+		if decision.UpdatedInput != nil {
+			if updated, err := json.Marshal(decision.UpdatedInput); err == nil {
+				toolArgs = string(updated)
+			}
 		}
 	}
 
@@ -488,9 +562,23 @@ func executeWithHooks(
 	result, err := tool.Execute(toolCtx, toolArgs)
 	elapsed := time.Since(start)
 
-	// Post-tool hooks (always, even on error)
-	if hookChain != nil {
-		hookChain.RunPost(toolExecCtx, toolName, toolArgs, result, err, elapsed)
+	// Post-tool hooks via Manager.Emit (always, even on error)
+	if hookMgr != nil {
+		var postEvent hooks.Event
+		if err != nil {
+			postEvent = &hooks.PostToolUseFailureEvent{
+				ToolName_:  toolName,
+				ToolInput_: toolInput,
+				ToolError:  err.Error(),
+			}
+		} else {
+			postEvent = &hooks.PostToolUseEvent{
+				ToolName_:     toolName,
+				ToolInput_:    toolInput,
+				ToolElapsedMs: elapsed.Milliseconds(),
+			}
+		}
+		hookMgr.Emit(toolExecCtx, postEvent)
 	}
 
 	return result, err
@@ -514,7 +602,7 @@ func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCa
 		}
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
-		return executeWithHooks(cfg.HookChain, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
+		return executeWithHooks(cfg.HookManager, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
 	}
 }
 

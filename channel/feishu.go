@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/internal/ctxkeys"
 	log "xbot/logger"
@@ -167,7 +168,7 @@ type FeishuChannel struct {
 	settingsCallbacks SettingsCallbacks
 
 	// Permission control
-	approvalHook *tools.ApprovalHook
+	approvalState *hooks.ApprovalState
 	approvalsMu  sync.Mutex
 	approvals    map[string]*feishuPendingApproval
 
@@ -224,9 +225,9 @@ func (f *FeishuChannel) SetCardBuilder(builder *tools.CardBuilder) {
 	f.cardBuilder = builder
 }
 
-// SetApprovalHook stores the ApprovalHook reference so Start() can wire a Feishu approval handler.
-func (f *FeishuChannel) SetApprovalHook(hook *tools.ApprovalHook) {
-	f.approvalHook = hook
+// SetApprovalState stores the ApprovalState reference so Start() can wire a Feishu approval handler.
+func (f *FeishuChannel) SetApprovalState(state *hooks.ApprovalState) {
+	f.approvalState = state
 }
 
 // SetSettingsCallbacks injects settings card callbacks from Agent.
@@ -262,8 +263,8 @@ func (f *FeishuChannel) Start() error {
 		log.WithError(err).Warn("Feishu: failed to initialize bot open_id from bot/v3/info")
 	}
 
-	if f.approvalHook != nil {
-		f.approvalHook.SetHandler(NewFeishuApprovalHandler(f))
+	if f.approvalState != nil {
+		f.approvalState.SetHandler(NewFeishuApprovalHandler(f))
 	}
 
 	// 创建事件处理器

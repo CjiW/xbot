@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -216,73 +215,6 @@ func TestCheckpointStore_Cleanup(t *testing.T) {
 // encodeB64 is a test helper for base64 encoding file content.
 func encodeB64(s string) string {
 	return base64.StdEncoding.EncodeToString([]byte(s))
-}
-
-func TestCheckpointHook_PrePost(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewCheckpointStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	hook := NewCheckpointHook(store)
-	hook.SetTurnIdx(1)
-
-	testDir := t.TempDir()
-	testFile := filepath.Join(testDir, "test.go")
-	os.WriteFile(testFile, []byte("before"), 0644)
-
-	// Pre: snapshot before edit
-	args := `{"path": "` + testFile + `", "old_string": "before", "new_string": "after"}`
-	if err := hook.PreToolUse(context.TODO(), "FileReplace", args); err != nil {
-		t.Fatalf("PreToolUse: %v", err)
-	}
-
-	// Simulate the edit
-	os.WriteFile(testFile, []byte("after"), 0644)
-
-	// Post: confirm success
-	hook.PostToolUse(context.TODO(), "FileReplace", args, nil, nil, 0)
-
-	// Verify snapshot was recorded
-	snaps, _ := store.ReadAll()
-	if len(snaps) != 1 {
-		t.Fatalf("expected 1 snapshot, got %d", len(snaps))
-	}
-	if snaps[0].FilePath != testFile {
-		t.Errorf("path = %q, want %q", snaps[0].FilePath, testFile)
-	}
-	if !snaps[0].Existed {
-		t.Error("file should have existed")
-	}
-}
-
-func TestCheckpointHook_PostError(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewCheckpointStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	hook := NewCheckpointHook(store)
-	hook.SetTurnIdx(1)
-
-	testDir := t.TempDir()
-	testFile := filepath.Join(testDir, "test.go")
-	os.WriteFile(testFile, []byte("before"), 0644)
-
-	args := `{"path": "` + testFile + `", "old_string": "x", "new_string": "y"}`
-	hook.PreToolUse(context.TODO(), "FileReplace", args)
-
-	// Post with error — should discard snapshot
-	hook.PostToolUse(context.TODO(), "FileReplace", args, nil, os.ErrNotExist, 0)
-
-	snaps, _ := store.ReadAll()
-	if len(snaps) != 0 {
-		t.Errorf("expected 0 snapshots on error, got %d", len(snaps))
-	}
 }
 
 // TestCheckpointStore_RewindMultiCycle tests the scenario where a user

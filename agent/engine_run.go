@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/clipanic"
 	"xbot/llm"
@@ -496,6 +497,17 @@ func (s *runState) handleLLMError(ctx context.Context, err error, partialResp *l
 	if ctx.Err() == nil && !llm.IsInputTooLongError(err) {
 		GlobalMetrics.TotalLLMErrors.Add(1)
 	}
+	// Emit AgentError event (notification, non-blocking)
+	if s.cfg.HookManager != nil {
+		s.cfg.HookManager.Emit(ctx, &hooks.AgentErrorEvent{
+			BasePayload: hooks.BasePayload{
+				SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
+				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
+			},
+			ErrorType:    "llm_error",
+			ErrorMessage: err.Error(),
+		})
+	}
 	if ctx.Err() != nil {
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:   s.cfg.Channel,
@@ -883,6 +895,19 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 
 	log.Ctx(ctx).Info("Auto context compaction triggered")
 
+	// Emit PreCompact event (notification, non-blocking)
+	if s.cfg.HookManager != nil {
+		s.cfg.HookManager.Emit(ctx, &hooks.PreCompactEvent{
+			BasePayload: hooks.BasePayload{
+				SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
+				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
+			},
+			Trigger:               "token_limit",
+			MessageCount:          len(s.messages),
+			EstimatedTokensBefore: int64(totalTokens),
+		})
+	}
+
 	if s.cfg.MemoryToolDefs != nil && s.cfg.MemoryToolExec != nil {
 		cm.SetMemoryTools(s.cfg.MemoryToolDefs, s.cfg.MemoryToolExec)
 	}
@@ -907,6 +932,19 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	s.lastCompletionTokens = 0
 	s.lastMsgCountAtLLMCall = len(s.messages)
 	s.lastCompressIter = s.compressAttempts
+
+	// Emit PostCompact event (notification, non-blocking)
+	if s.cfg.HookManager != nil {
+		s.cfg.HookManager.Emit(ctx, &hooks.PostCompactEvent{
+			BasePayload: hooks.BasePayload{
+				SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
+				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
+			},
+			Trigger:               "token_limit",
+			EstimatedTokensAfter: int64(newTokenCount),
+		})
+	}
+
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseThinking
 		s.structuredProgress.HistoryCompacted = true

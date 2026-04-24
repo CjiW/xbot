@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/clipanic"
@@ -269,8 +270,14 @@ type Agent struct {
 	// unregisterAgentChannel removes an AgentChannel from the Dispatcher.
 	unregisterAgentChannel func(name string)
 
-	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
-	hookChain *tools.HookChain
+	// hookManager is the shared tool execution hook manager for this Agent and all SubAgents.
+	hookManager *hooks.Manager
+
+	// timingData collects per-tool execution timing statistics.
+	timingData *hooks.TimingData
+
+	// approvalState manages approval handling for privileged operations.
+	approvalState *hooks.ApprovalState
 
 	// OffloadStore manages large tool result offload to disk
 	offloadStore *OffloadStore
@@ -831,16 +838,30 @@ func New(cfg Config) (*Agent, error) {
 		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		agentsDir: filepath.Join(cfg.WorkDir, ".xbot", "agents"),
 		xbotHome:  cfg.XbotHome,
-		hookChain: tools.NewHookChain(
-			tools.NewLoggingHook(),
-			tools.NewTimingHook(),
-			tools.NewApprovalHook(nil), // handler set later by channel when available
-		),
+		// timingData and approvalState are created before hookManager so they
+		// can be shared: the same instances are registered as builtins and
+		// exposed via accessor methods.
+		timingData:    hooks.NewTimingData(),
+		approvalState: hooks.NewApprovalState(nil), // handler set later by channel when available
+		hookManager: func() *hooks.Manager {
+			mgr, err := hooks.NewManager(cfg.XbotHome, cfg.WorkDir)
+			if err != nil {
+				log.WithError(err).Warn("Failed to load hooks config, using empty manager")
+				mgr, _ = hooks.NewManager(cfg.XbotHome, cfg.WorkDir)
+			}
+			return mgr
+		}(),
 		bgTaskMgr: tools.NewBackgroundTaskManager(),
 	}
 
 	// 5. 初始化各类服务（修改 agent 指针）
 	initServices(agent, cfg, multiSession, registry)
+
+	// 5b. Register builtin hooks on the shared hookManager.
+	// Uses the same timingData/approvalState instances stored on the Agent.
+	agent.hookManager.RegisterBuiltin(hooks.LoggingCallback())
+	agent.hookManager.RegisterBuiltin(hooks.TimingCallback(agent.timingData))
+	agent.hookManager.RegisterBuiltin(hooks.ApprovalCallback(agent.approvalState))
 
 	// 6. 启动 bg task 通知路由 goroutine
 	go agent.bgNotifyLoop()
@@ -1022,11 +1043,17 @@ func (a *Agent) SetChannelPromptProviders(providers ...ChannelPromptProvider) {
 	a.pipeline.Use(NewChannelPromptMiddleware(providers...))
 }
 
-// ToolHookChain returns the Agent's shared hook chain for tool execution.
-// Callers can use this to add/remove hooks at runtime.
-func (a *Agent) ToolHookChain() *tools.HookChain {
-	return a.hookChain
+// HookManager returns the Agent's shared hook manager for tool execution.
+// Callers can use this to register hooks, emit events, etc.
+func (a *Agent) HookManager() *hooks.Manager {
+	return a.hookManager
 }
+
+// TimingData returns the shared timing statistics collector.
+func (a *Agent) TimingData() *hooks.TimingData { return a.timingData }
+
+// ApprovalState returns the shared approval state for privileged operations.
+func (a *Agent) ApprovalState() *hooks.ApprovalState { return a.approvalState }
 
 // GetCardBuilder returns the CardBuilder for card callback handling.
 func (a *Agent) GetCardBuilder() *tools.CardBuilder {
@@ -1768,6 +1795,37 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		}
 		return mine
 	}
+
+	// Emit SessionStart event (notification, non-blocking)
+	if a.hookManager != nil {
+		memoryProvider := ""
+		if cfg.Memory != nil {
+			memoryProvider = fmt.Sprintf("%T", cfg.Memory)
+		}
+		a.hookManager.Emit(ctx, &hooks.SessionStartEvent{
+			BasePayload: hooks.BasePayload{
+				SessionID: msg.ChatID, Channel: msg.Channel,
+				SenderID: msg.SenderID, ChatID: msg.ChatID,
+			},
+			Source:         msg.Channel,
+			Model:          cfg.Model,
+			MemoryProvider: memoryProvider,
+		})
+	}
+
+	// Emit SessionEnd event on processMessage exit (notification, non-blocking)
+	if a.hookManager != nil {
+		defer func() {
+			a.hookManager.Emit(ctx, &hooks.SessionEndEvent{
+				BasePayload: hooks.BasePayload{
+					SessionID: msg.ChatID, Channel: msg.Channel,
+					SenderID: msg.SenderID, ChatID: msg.ChatID,
+				},
+				Source: msg.Channel,
+			})
+		}()
+	}
+
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)
 	// Drain any bg notifications that arrived after Run's last iteration.

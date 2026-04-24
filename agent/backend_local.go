@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/config"
@@ -144,8 +145,12 @@ func (b *LocalBackend) BgTaskManager() *tools.BackgroundTaskManager {
 	return b.agent.BgTaskManager()
 }
 
-func (b *LocalBackend) ToolHookChain() *tools.HookChain {
-	return b.agent.ToolHookChain()
+func (b *LocalBackend) HookManager() *hooks.Manager {
+	return b.agent.HookManager()
+}
+
+func (b *LocalBackend) ApprovalState() *hooks.ApprovalState {
+	return b.agent.ApprovalState()
 }
 
 func (b *LocalBackend) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {

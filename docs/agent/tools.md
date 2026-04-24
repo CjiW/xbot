@@ -5,8 +5,7 @@
 | File | Purpose |
 |------|---------|
 | `interface.go` | Tool interface, SubAgentManager, SessionMCPManagerProvider |
-| `hook.go` | ToolHook interface, HookChain (Pre/Post hooks) |
-| `hook_builtin.go` | LoggingHook, TimingHook |
+| `hook.go` | (removed — replaced by agent/hooks/) |
 | `approval.go` | ApprovalHook (permission control) |
 | `sandbox.go` | Sandbox interface (Run, Sync, Resolve) |
 | `sandbox_router.go` | Selects sandbox type (none/docker/remote) |
@@ -42,15 +41,37 @@
 Items: &llm.ToolParamItems{Type: "string"}
 ```
 
-## Hook Chain
+## Hooks System
 
-Three built-in hooks: LoggingHook, TimingHook, ApprovalHook.
-Fourth hook: CheckpointHook (file snapshot for Ctrl+K rewind, CLI-only).
-Chain is shared across main Agent and all SubAgents (same instance pointer).
-Max 20 hooks (`MaxHookChainLen` in `hook.go`).
+The old `ToolHook`/`HookChain` (`tools/hook.go`, `tools/hook_builtin.go`) has been replaced by the new `agent/hooks/` package. See `docs/agent/hooks.md` for full details.
 
-PreToolUse: does NOT short-circuit on error (records first error, continues all).
-PostToolUse: guarantees all hooks run even if one panics (recover).
+### Key Changes
+- `tools/hook.go`, `tools/hook_builtin.go` — **deleted** (replaced by `agent/hooks/`)
+- `tools/approval.go` — `ApprovalHook` removed, `ApprovalRequest`/`ApprovalResult`/`ApprovalHandler` types preserved
+- `tools/checkpoint.go` — `CheckpointHook` removed, `CheckpointStore` preserved
+- Old `HookChain` field in `engine.go`/`agent.go` → replaced by `hooks.Manager`
+
+### agent/hooks/ Package
+
+| File | Purpose |
+|------|---------|
+| `manager.go` | Manager — Emit, Decision aggregation, config reload, concurrency-safe |
+| `event.go` | Event interface + 17 concrete event types + BasePayload |
+| `types.go` | Action/Decision/Result/HookDef/CallbackHook/Executor interfaces |
+| `matcher.go` | Exact/multi-select/regex/if-condition matching |
+| `config.go` | hooks.json three-layer config loading (user/project/local) |
+| `executor_command.go` | Shell command executor (stdin JSON, exit code semantics) |
+| `executor_http.go` | HTTP POST executor (with SSRF protection) |
+| `executor_mcp.go` | MCP tool executor (variable interpolation) |
+| `builtin.go` | Logging/Timing/Approval/Checkpoint as callback hooks |
+
+### 17 Lifecycle Events
+SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure,
+PostToolBatch, PermissionRequest, PermissionDenied, SubAgentStart, SubAgentStop,
+AgentStop, AgentError, PreCompact, PostCompact, CronFired, WebhookReceived
+
+### Decision Priority (multi-handler conflict)
+`deny > defer > ask > allow`
 
 ## Sandbox Types
 

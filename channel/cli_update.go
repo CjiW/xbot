@@ -45,6 +45,10 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 			} else {
 				m.subGeneration++ // subscription actually changed
 				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
+				// Refresh values cache so GetCurrentValues() reflects the new subscription.
+				if m.channel != nil && m.channel.config.RefreshValuesCache != nil {
+					m.channel.config.RefreshValuesCache()
+				}
 			}
 			// Update cached model name directly from the switch result
 			// (same pattern as model-switch case — avoids stale config/RPC reads)

@@ -889,6 +889,9 @@ func main() {
 			}
 			return nil
 		},
+		RefreshValuesCache: func() {
+			app.refreshRemoteValuesCache()
+		},
 		UsageQuery: func(senderID string, days int) (*sqlite.UserTokenUsage, []sqlite.DailyTokenUsage, error) {
 			if app.backend == nil {
 				return nil, nil, fmt.Errorf("agent not initialized")

@@ -140,9 +140,13 @@ func (m *cliModel) mergeCLISettingsValues() map[string]string {
 			values[k] = v
 		}
 	}
-	// Subscription-scoped settings (max_output_tokens, thinking_mode) from active subscription.
+	// Subscription-scoped settings from active subscription.
 	if m.channel.subscriptionMgr != nil {
 		if sub, err := m.channel.subscriptionMgr.GetDefault(m.senderID); err == nil && sub != nil {
+			values["llm_provider"] = sub.Provider
+			values["llm_api_key"] = sub.APIKey
+			values["llm_base_url"] = sub.BaseURL
+			values["llm_model"] = sub.Model
 			values["max_output_tokens"] = strconv.Itoa(sub.MaxOutputTokens)
 			values["thinking_mode"] = sub.ThinkingMode
 		}

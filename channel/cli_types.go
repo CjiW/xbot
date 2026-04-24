@@ -542,6 +542,7 @@ type CLIChannelConfig struct {
 	ClearMemory          func(targetType string) error                                                                                  // 清空记忆（danger zone）
 	GetMemoryStats       func() map[string]string                                                                                       // 获取记忆统计（danger zone）
 	SwitchLLM            func(provider, baseURL, apiKey, model string) error                                                            // 切换活跃 LLM（config + factory + save）
+	RefreshValuesCache   func()                                                                                                         // 刷新 GetCurrentValues 缓存（sub 切换后调用）
 	UsageQuery           func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error) // 查询 token 用量
 	AgentCount           func() int                                                                                                     // 获取活跃的 interactive agent 数量
 	AgentList            func() []AgentPanelEntry                                                                                       // 列出活跃 interactive agents（用于 panel 展示）

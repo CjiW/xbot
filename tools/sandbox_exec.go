@@ -69,7 +69,7 @@ func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
 
 	spec := ExecSpec{
 		Command: shell,
-		Args:    loginShellArgs(shell, shellCmd),
+		Args:    LoginShellArgs(shell, shellCmd),
 		Shell:   false,
 		Timeout: 30 * time.Second,
 		UserID:  userID,
@@ -147,7 +147,7 @@ func RunInSandboxRawWithShell(ctx *ToolContext, shellCmd string) (string, error)
 
 	spec := ExecSpec{
 		Command: shell,
-		Args:    []string{shell, "-l", "-c", shellCmd},
+		Args:    LoginShellArgs(shell, shellCmd),
 		Shell:   false,
 		Timeout: 30 * time.Second,
 		UserID:  userID,

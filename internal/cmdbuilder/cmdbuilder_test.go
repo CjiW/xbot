@@ -146,3 +146,22 @@ func TestMkdirAllAsUser_NoRunAs(t *testing.T) {
 		t.Error("expected directory")
 	}
 }
+
+func TestDefaultShell(t *testing.T) {
+	switch runtime.GOOS {
+	case "windows":
+		if defaultShell != "powershell.exe" {
+			t.Errorf("defaultShell = %q, want %q", defaultShell, "powershell.exe")
+		}
+		if defaultShellFlag != "-Command" {
+			t.Errorf("defaultShellFlag = %q, want %q", defaultShellFlag, "-Command")
+		}
+	default:
+		if defaultShell != "/bin/sh" {
+			t.Errorf("defaultShell = %q, want %q", defaultShell, "/bin/sh")
+		}
+		if defaultShellFlag != "-c" {
+			t.Errorf("defaultShellFlag = %q, want %q", defaultShellFlag, "-c")
+		}
+	}
+}

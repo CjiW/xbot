@@ -171,7 +171,7 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 
 	spec := tools.ExecSpec{
 		Command: shell,
-		Args:    []string{shell, "-l", "-c", command},
+		Args:    tools.LoginShellArgs(shell, command),
 		Shell:   false,
 		Dir:     dir,
 		Timeout: bangDefaultTimeout,

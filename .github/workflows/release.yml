@@ -8,18 +8,16 @@ on:
 permissions:
   contents: write
 
+env:
+  VERSION: ${{ github.ref_name }}
+  COMMIT: ${{ github.sha }}
+
 jobs:
-  release:
-    name: Build & Release
+  frontend:
+    name: Frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
 
       - uses: actions/setup-node@v4
         with:
@@ -27,44 +25,149 @@ jobs:
           cache: "yarn"
           cache-dependency-path: web/yarn.lock
 
-      - name: Build frontend
+      - name: Build
         working-directory: web
         run: yarn install --frozen-lockfile && yarn build
 
-      - name: Package frontend dist
+      - name: Package
+        run: mkdir -p dist && tar czf dist/xbot-web-dist.tar.gz -C web/dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/xbot-web-dist.tar.gz
+
+  build-linux-amd64:
+    name: Build linux/amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
         run: |
           mkdir -p dist
-          cd web
-          tar czf ../dist/xbot-web-dist.tar.gz -C dist .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/xbot-cli ./cmd/xbot-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbot-cli-linux-amd64
+          path: dist/xbot-cli
 
-      - name: Build CLI binaries
+  build-linux-arm64:
+    name: Build linux/arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
         run: |
-          VERSION=${GITHUB_REF_NAME}
-          COMMIT=$(git rev-parse --short HEAD)
-          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          LDFLAGS="-X xbot/version.Version=$VERSION -X xbot/version.Commit=$COMMIT -X xbot/version.BuildTime=$BUILD_TIME"
-
           mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -ldflags "-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/xbot-cli ./cmd/xbot-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbot-cli-linux-arm64
+          path: dist/xbot-cli
 
-          # Matrix: OS x ARCH
-          for os in linux darwin windows; do
-            for arch in amd64 arm64; do
-              ext=""
-              if [ "$os" = "windows" ]; then
-                ext=".exe"
-              fi
-              echo "Building $os/$arch..."
-              CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build \
-                -ldflags "$LDFLAGS" \
-                -o "dist/xbot-cli-${os}-${arch}${ext}" \
-                ./cmd/xbot-cli
-            done
-          done
+  build-darwin-amd64:
+    name: Build darwin/amd64
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+            -ldflags "-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/xbot-cli ./cmd/xbot-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbot-cli-darwin-amd64
+          path: dist/xbot-cli
 
-          # Create checksums
-          cd dist
-          sha256sum * > ../checksums.txt
-          cd ..
+  build-darwin-arm64:
+    name: Build darwin/arm64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+            -ldflags "-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/xbot-cli ./cmd/xbot-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbot-cli-darwin-arm64
+          path: dist/xbot-cli
+
+  build-windows-amd64:
+    name: Build windows/amd64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
+            -ldflags "-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/xbot-cli.exe ./cmd/xbot-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbot-cli-windows-amd64
+          path: dist/xbot-cli.exe
+
+  build-windows-arm64:
+    name: Build windows/arm64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build \
+            -ldflags "-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/xbot-cli.exe ./cmd/xbot-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbot-cli-windows-arm64
+          path: dist/xbot-cli.exe
+
+  release:
+    name: Release
+    needs: [frontend, build-linux-amd64, build-linux-arm64, build-darwin-amd64, build-darwin-arm64, build-windows-amd64, build-windows-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum * > ../checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

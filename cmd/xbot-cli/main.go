@@ -795,14 +795,20 @@ func main() {
 			if app.backend == nil {
 				return
 			}
+			_, llmChanged := values["llm_provider"]
+			_, keyChanged := values["llm_api_key"]
+			_, modelChanged := values["llm_model"]
+			_, urlChanged := values["llm_base_url"]
 			_, vanguardChanged := values["vanguard_model"]
 			_, balanceChanged := values["balance_model"]
 			_, swiftChanged := values["swift_model"]
 			_, maxOutputChanged := values["max_output_tokens"]
 			_, thinkingChanged := values["thinking_mode"]
 
+			llmFieldChanged := llmChanged || keyChanged || modelChanged || urlChanged || maxOutputChanged || thinkingChanged
+
 			// ── Subscription-scoped fields: update via subscription manager ──
-			if maxOutputChanged || thinkingChanged {
+			if llmFieldChanged {
 				if err := updateActiveSubscription(app.backend, app.cfg, values); err != nil {
 					log.Warnf("Failed to update active subscription: %v", err)
 				}

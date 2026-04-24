@@ -125,13 +125,14 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if maxCtxStr == "" {
 			return nil, fmt.Errorf("missing max_context")
 		}
-		maxCtx, err := strconv.Atoi(maxCtxStr)
+		maxCtxK, err := strconv.Atoi(maxCtxStr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid max_context: %v", err)
 		}
-		if maxCtx < 1000 || maxCtx > 2000000 {
-			return nil, fmt.Errorf("max_context must be between 1000 and 2000000, got %d", maxCtx)
+		if maxCtxK < 0 {
+			return nil, fmt.Errorf("max_context must be >= 0")
 		}
+		maxCtx := maxCtxK * 1000
 		if f.settingsCallbacks.LLMSetMaxContext != nil {
 			if err := f.settingsCallbacks.LLMSetMaxContext(senderID, maxCtx); err != nil {
 				return nil, fmt.Errorf("设置 max_context 失败: %v", err)
@@ -147,13 +148,14 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if maxOutStr == "" {
 			return nil, fmt.Errorf("missing max_output_tokens")
 		}
-		maxOut, err := strconv.Atoi(maxOutStr)
+		maxOutK, err := strconv.Atoi(maxOutStr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid max_output_tokens: %v", err)
 		}
-		if maxOut < 0 || maxOut > 2000000 {
-			return nil, fmt.Errorf("max_output_tokens must be between 0 and 2000000, got %d", maxOut)
+		if maxOutK < 0 {
+			return nil, fmt.Errorf("max_output_tokens must be >= 0")
 		}
+		maxOut := maxOutK * 1000
 		if f.settingsCallbacks.LLMSetMaxOutputTokens != nil {
 			if err := f.settingsCallbacks.LLMSetMaxOutputTokens(senderID, maxOut); err != nil {
 				return nil, fmt.Errorf("设置 max_output_tokens 失败: %v", err)
@@ -1122,27 +1124,27 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		))
 	}
 
-	// Max context setting
+	// Max context setting (unit: k, stored as k*1000)
 	currentMaxContext := 0
 	maxContextDisplay := "默认"
 	if f.settingsCallbacks.LLMGetMaxContext != nil {
 		currentMaxContext = f.settingsCallbacks.LLMGetMaxContext(senderID)
 	}
 	if currentMaxContext > 0 {
-		maxContextDisplay = fmt.Sprintf("%d", currentMaxContext)
+		maxContextDisplay = fmt.Sprintf("%dk", currentMaxContext/1000)
 	}
 
 	maxContextInitial := "0"
 	if currentMaxContext > 0 {
-		maxContextInitial = fmt.Sprintf("%d", currentMaxContext)
+		maxContextInitial = fmt.Sprintf("%d", currentMaxContext/1000)
 	}
 	elements = append(elements, buildSettingRow(
-		"最大上下文",
+		"最大上下文 (k)",
 		maxContextDisplay,
 		map[string]any{
 			"tag":           "input",
 			"name":          "settings_max_context_input",
-			"placeholder":   map[string]any{"tag": "plain_text", "content": "输入上下文长度 (1000-2000000)"},
+			"placeholder":   map[string]any{"tag": "plain_text", "content": "如 128 = 128k"},
 			"initial_value": maxContextInitial,
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
@@ -1152,27 +1154,27 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		},
 	))
 
-	// Max output tokens setting
+	// Max output tokens setting (unit: k, stored as k*1000)
 	currentMaxOutputTokens := 0
 	maxOutputDisplay := "默认"
 	if f.settingsCallbacks.LLMGetMaxOutputTokens != nil {
 		currentMaxOutputTokens = f.settingsCallbacks.LLMGetMaxOutputTokens(senderID)
 	}
 	if currentMaxOutputTokens > 0 {
-		maxOutputDisplay = fmt.Sprintf("%d", currentMaxOutputTokens)
+		maxOutputDisplay = fmt.Sprintf("%dk", currentMaxOutputTokens/1000)
 	}
 
 	maxOutputInitial := "0"
 	if currentMaxOutputTokens > 0 {
-		maxOutputInitial = fmt.Sprintf("%d", currentMaxOutputTokens)
+		maxOutputInitial = fmt.Sprintf("%d", currentMaxOutputTokens/1000)
 	}
 	elements = append(elements, buildSettingRow(
-		"最大输出 Token",
+		"最大输出 Token (k)",
 		maxOutputDisplay,
 		map[string]any{
 			"tag":           "input",
 			"name":          "settings_max_output_tokens_input",
-			"placeholder":   map[string]any{"tag": "plain_text", "content": "输入最大输出 Token (0-2000000)"},
+			"placeholder":   map[string]any{"tag": "plain_text", "content": "如 16 = 16k"},
 			"initial_value": maxOutputInitial,
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{

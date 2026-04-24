@@ -173,6 +173,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 	case "get_context_mode":
 		return json.Marshal(backend.GetContextMode())
 	case "set_context_mode":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
 		var p struct {
 			Mode string `json:"mode"`
 		}
@@ -188,6 +191,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
+		}
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
+			return nil, fmt.Errorf("access denied")
 		}
 		return nil, backend.SetCWD(p.Channel, p.ChatID, p.Dir)
 	case "get_settings":
@@ -250,6 +256,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 
 	// --- Max iterations / concurrency / context tokens ---
 	case "set_max_iterations":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
 		var p struct {
 			N int `json:"n"`
 		}
@@ -259,6 +268,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		backend.SetMaxIterations(p.N)
 		return nil, nil
 	case "set_max_concurrency":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
 		var p struct {
 			N int `json:"n"`
 		}
@@ -268,6 +280,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		backend.SetMaxConcurrency(p.N)
 		return nil, nil
 	case "set_max_context_tokens":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
 		var p struct {
 			N int `json:"n"`
 		}
@@ -357,6 +372,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		return nil, backend.SetLLMConcurrency(bizID, p.Personal)
 	case "set_default_thinking_mode":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
 		var p struct {
 			Mode string `json:"mode"`
 		}
@@ -581,6 +599,18 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
+		// Security: verify the caller owns this session (or is admin).
+		// full_key format: "channel:chatID/roleName[:instance]"
+		// Extract chatID (before '/') and verify it belongs to the caller.
+		{
+			keyParts := strings.SplitN(p.FullKey, ":", 2)
+			if len(keyParts) >= 2 {
+				chatIDPart := strings.SplitN(keyParts[1], "/", 2)[0]
+				if !isAdmin(senderID) && chatIDPart != bizID {
+					return nil, fmt.Errorf("access denied")
+				}
+			}
+		}
 		dump, _ := backend.GetAgentSessionDumpByFullKey(p.FullKey)
 		if dump == nil {
 			dump = &agent.AgentSessionDump{}
@@ -649,6 +679,19 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		if backend.BgTaskManager() == nil {
 			return nil, fmt.Errorf("background tasks not available")
 		}
+		// Security: verify the task belongs to the caller's session (or is admin).
+		if !isAdmin(senderID) {
+			if task, err := backend.BgTaskManager().Status(p.TaskID); err == nil {
+				sk := task.SessionKey()
+				skParts := strings.SplitN(sk, ":", 2)
+				if len(skParts) >= 2 {
+					skOwner := strings.SplitN(skParts[1], "/", 2)[0]
+					if skOwner != bizID {
+						return nil, fmt.Errorf("access denied")
+					}
+				}
+			}
+		}
 		return nil, backend.BgTaskManager().Kill(p.TaskID)
 	case "cleanup_completed_bg_tasks":
 		var p struct {
@@ -675,6 +718,16 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		tenants, err := tenantSvc.ListTenants()
 		if err != nil {
 			return nil, err
+		}
+		// Security: non-admin users only see their own sessions.
+		if !isAdmin(senderID) {
+			var userTenants []sqlite.TenantInfo
+			for _, t := range tenants {
+				if t.ChatID == bizID {
+					userTenants = append(userTenants, t)
+				}
+			}
+			tenants = userTenants
 		}
 		// Filter: skip agent tenants — they are internal bookkeeping for
 		// interactive SubAgent persistence and listed separately via
@@ -1024,6 +1077,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		return nil, nil
 
 	case "reset_token_state":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
 		backend.ResetTokenState()
 		return nil, nil
 

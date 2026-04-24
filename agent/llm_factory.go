@@ -288,9 +288,21 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 }
 
 // SwitchModel switches a user's active model without changing the subscription/LLM client.
-// Persists to DB subscription via the RPC handler. This method only updates in-memory cache.
+// Persists to DB subscription via the RPC handler. This method updates in-memory cache
+// and clears per-chat caches so GetLLMForChat returns the new model.
 func (f *LLMFactory) SwitchModel(senderID, model string) {
 	f.mu.Lock()
+	// Clear per-chat caches so GetLLMForChat falls back to user-level cache
+	prefix := senderID + ":"
+	for k := range f.clients {
+		if strings.HasPrefix(k, prefix) {
+			delete(f.clients, k)
+			delete(f.models, k)
+			delete(f.maxContexts, k)
+			delete(f.maxOutputTokens, k)
+			delete(f.thinkingModes, k)
+		}
+	}
 	f.models[senderID] = model
 	f.mu.Unlock()
 }
@@ -429,14 +441,21 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 	return client, model
 }
 
-// Invalidate 使用户的 LLM 客户端缓存失效（配置更新后调用）
+// Invalidate 使用户的 LLM 客户端缓存失效（配置更新后调用）。
+// 同时清除 user-level key（senderID）和所有 per-chat key（senderID:chatID），
+// 确保 GetLLMForChat 不会返回过期的 per-chat 缓存。
 func (f *LLMFactory) Invalidate(senderID string) {
 	f.mu.Lock()
-	delete(f.clients, senderID)
-	delete(f.models, senderID)
-	delete(f.maxContexts, senderID)
-	delete(f.maxOutputTokens, senderID)
-	delete(f.thinkingModes, senderID)
+	prefix := senderID + ":"
+	for k := range f.clients {
+		if k == senderID || strings.HasPrefix(k, prefix) {
+			delete(f.clients, k)
+			delete(f.models, k)
+			delete(f.maxContexts, k)
+			delete(f.maxOutputTokens, k)
+			delete(f.thinkingModes, k)
+		}
+	}
 	f.mu.Unlock()
 }
 

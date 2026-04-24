@@ -602,12 +602,14 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 					return nil, true // retry loop iteration
 				}
 			}
-			return s.buildOutput(&bus.OutboundMessage{
+			out := s.buildOutput(&bus.OutboundMessage{
 				Channel:   s.cfg.Channel,
 				ChatID:    s.cfg.ChatID,
 				Content:   "⚠️ Context window exceeded. Use /new to start a new conversation.",
 				ToolsUsed: s.toolsUsed,
-			}), false
+			})
+			out.ReasoningContent = response.ReasoningContent
+			return out, false
 		}
 
 		// length: output truncated due to max_tokens limit
@@ -636,13 +638,15 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 			s.structuredProgress.ThinkingContent = cleanContent
 		}
 
-		return s.buildOutput(&bus.OutboundMessage{
+		out := s.buildOutput(&bus.OutboundMessage{
 			Channel:     s.cfg.Channel,
 			ChatID:      s.cfg.ChatID,
 			Content:     output,
 			ToolsUsed:   s.toolsUsed,
 			WaitingUser: s.waitingUser,
-		}), false
+		})
+		out.ReasoningContent = response.ReasoningContent
+		return out, false
 	}
 	return nil, false
 }

@@ -280,6 +280,10 @@ type RunOutput struct {
 	LastPromptTokens int64
 	// LastCompletionTokens is the completion_tokens from the last LLM API call.
 	LastCompletionTokens int64
+	// ReasoningContent is the final response's reasoning_content (thinking).
+	// Required for DeepSeek thinking mode — must be persisted so it can be
+	// passed back to the API in subsequent turns.
+	ReasoningContent string
 }
 
 // IterationSnapshot captures the tool summary of a completed iteration.

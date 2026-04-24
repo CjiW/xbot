@@ -645,6 +645,10 @@ func (a *Agent) SpawnInteractiveSession(
 	if out.Content != "" {
 		ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
 	}
+	// Carry ReasoningContent to the in-memory message for subsequent turns
+	if out.ReasoningContent != "" && len(ia.messages) > 0 {
+		ia.messages[len(ia.messages)-1].ReasoningContent = out.ReasoningContent
+	}
 	a.interactiveSubAgents.Store(key, ia)
 
 	// Persist final assistant message with iteration history as Detail,
@@ -653,6 +657,7 @@ func (a *Agent) SpawnInteractiveSession(
 	// WITHOUT Detail — this adds the one with full iteration history.
 	if agentTenantSession != nil && out.Content != "" {
 		assistantMsg := llm.NewAssistantMessage(out.Content)
+		assistantMsg.ReasoningContent = out.ReasoningContent
 		if len(out.IterationHistory) > 0 {
 			if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
 				assistantMsg.Detail = string(jsonBytes)
@@ -818,6 +823,10 @@ func (a *Agent) SendToInteractiveSession(
 	if out.Content != "" {
 		ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
 	}
+	// Carry ReasoningContent to the in-memory message for subsequent turns
+	if out.ReasoningContent != "" && len(ia.messages) > 0 {
+		ia.messages[len(ia.messages)-1].ReasoningContent = out.ReasoningContent
+	}
 	// Save iteration history for inspect
 	if len(out.IterationHistory) > 0 {
 		ia.iterationHistory = append(ia.iterationHistory, out.IterationHistory...)
@@ -828,6 +837,7 @@ func (a *Agent) SendToInteractiveSession(
 	// same as the main agent does in handleInboundMessage (agent.go:1884).
 	if cfg.Session != nil && out.Content != "" {
 		assistantMsg := llm.NewAssistantMessage(out.Content)
+		assistantMsg.ReasoningContent = out.ReasoningContent
 		if len(out.IterationHistory) > 0 {
 			if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
 				assistantMsg.Detail = string(jsonBytes)

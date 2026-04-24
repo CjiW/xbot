@@ -551,7 +551,7 @@ func modelMaxOutputTokens(model string) int {
 	return 0
 }
 
-func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) openai.ChatCompletionNewParams {
+func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string, stream bool) openai.ChatCompletionNewParams {
 	openaiMessages := toOpenAIMessages(messages, thinkingMode)
 
 	p := openai.ChatCompletionNewParams{
@@ -587,9 +587,12 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	if len(tools) > 0 {
 		p.Tools = toOpenAITools(tools)
 	}
-	// Match opencode's stream_options: {include_usage: true}
-	p.StreamOptions = openai.ChatCompletionStreamOptionsParam{
-		IncludeUsage: param.Opt[bool]{Value: true},
+	// Only set StreamOptions for streaming requests — some providers
+	// (e.g. DeepSeek) reject stream_options when stream=false.
+	if stream {
+		p.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: param.Opt[bool]{Value: true},
+		}
 	}
 	return p
 }
@@ -696,7 +699,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	}).Info("[LLM] Starting non-stream request")
 
 	startTime := time.Now()
-	params := o.buildParams(model, messages, tools, thinkingMode)
+	params := o.buildParams(model, messages, tools, thinkingMode, false)
 
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
@@ -715,7 +718,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 				o.maxTokensUpgrade.Delete(model)
 				log.Ctx(ctx).WithField("model", model).Info("[LLM] Model requires legacy max_tokens, retrying")
 			}
-			params = o.buildParams(model, messages, tools, thinkingMode)
+			params = o.buildParams(model, messages, tools, thinkingMode, false)
 			completion, err = o.client.Chat.Completions.New(ctx, params, opts...)
 		}
 	}
@@ -847,7 +850,7 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 }
 
 func (o *OpenAILLM) newStreamingWithRetry(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string, opts []option.RequestOption) (*ssestream.Stream[openai.ChatCompletionChunk], error) {
-	params := o.buildParams(model, messages, tools, thinkingMode)
+	params := o.buildParams(model, messages, tools, thinkingMode, true)
 	stream := o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
 	if err := stream.Err(); err != nil {
 		if verdict := isMaxTokensParamError(err); verdict != "" {
@@ -859,7 +862,7 @@ func (o *OpenAILLM) newStreamingWithRetry(ctx context.Context, model string, mes
 				log.Ctx(ctx).WithField("model", model).Info("[LLM] Stream: model requires legacy max_tokens, retrying")
 			}
 			stream.Close()
-			params = o.buildParams(model, messages, tools, thinkingMode)
+			params = o.buildParams(model, messages, tools, thinkingMode, true)
 			stream = o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
 			if retryErr := stream.Err(); retryErr != nil {
 				stream.Close()

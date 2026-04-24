@@ -80,6 +80,12 @@ type ToolContext struct {
 	// UnregisterAgentChannel removes an AgentChannel from the Dispatcher.
 	// Called on unload/cleanup.
 	UnregisterAgentChannel func(name string)
+
+	// GroupID is set when this agent is a member of a virtual group (via CreateChat group).
+	// It constrains SendMessage: agents can only message other members of the same group.
+	GroupID string
+	// GroupMembers lists all agent addresses in this agent's group (for system prompt injection).
+	GroupMembers []string
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖

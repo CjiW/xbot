@@ -33,6 +33,7 @@ type bgParentKey struct{}
 type interactiveAgent struct {
 	roleName         string              // 角色名
 	instance         string              // instance ID
+	groupID          string              // 所属群聊 ID（如 "group:g1"，空=不属于群聊）
 	messages         []llm.ChatMessage   // 累积的对话历史（不含 system prompt）
 	iterationHistory []IterationSnapshot // 最近迭代快照，供 inspect/tail 使用
 	mu               sync.Mutex          // 保护会话状态并发访问
@@ -244,6 +245,15 @@ func (a *Agent) wireSubAgentCLIProgress(key, originChatID string, cfg *RunConfig
 // interactiveSubAgents entry, progress snapshot/iteration history, and tenant session (DB).
 // This ensures the next SubAgent with the same role/instance starts with a clean slate.
 func (a *Agent) destroyInteractiveSession(key string) {
+	// Auto-cleanup group membership: remove this agent from its group,
+	// delete the group if no members remain.
+	if val, ok := a.interactiveSubAgents.Load(key); ok {
+		if ia, ok := val.(*interactiveAgent); ok && ia != nil && ia.groupID != "" {
+			memberAddr := "agent:" + ia.roleName + "/" + ia.instance
+			tools.RemoveMember(ia.groupID, memberAddr)
+		}
+	}
+
 	a.interactiveSubAgents.Delete(key)
 
 	// Clean up progress snapshot and iteration history
@@ -293,6 +303,12 @@ func (a *Agent) SpawnInteractiveSession(
 
 	// 原子 check-and-store：如果 key 已存在，直接返回
 	placeholder := &interactiveAgent{roleName: roleName, instance: instance, lastUsed: time.Now(), background: background}
+	// Track group membership for auto-cleanup on unload
+	if msg.Metadata != nil {
+		if gid, ok := msg.Metadata["group_id"]; ok && gid != "" {
+			placeholder.groupID = gid
+		}
+	}
 	// Track parent session for cascade cleanup
 	if parentKey, ok := ctx.Value(bgParentKey{}).(string); ok {
 		placeholder.parentKey = parentKey
@@ -1166,6 +1182,18 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		if cwd, ok := msg.Metadata["parent_cwd"]; ok && cwd != "" {
 			tc.CurrentDir = cwd
 		}
+		// Restore group membership for cross-agent messaging
+		if gid, ok := msg.Metadata["group_id"]; ok && gid != "" {
+			tc.GroupID = gid
+			if gms, ok := msg.Metadata["group_members"]; ok && gms != "" {
+				tc.GroupMembers = strings.Split(gms, ",")
+			}
+		}
+	}
+	// Fallback: if parent never Cd'd, use workspaceRoot as initial CWD
+	// so SubAgent starts in the same directory as the parent agent.
+	if tc.CurrentDir == "" && workspaceRoot != "" {
+		tc.CurrentDir = workspaceRoot
 	}
 	return tc
 }

@@ -647,6 +647,11 @@ func (a *Agent) buildSubAgentRunConfig(
 ) RunConfig {
 	parentAgentID := parentCtx.AgentID
 
+	// Interactive SubAgent 默认拥有 send_message 能力（群聊/agent 间通信必需）
+	if interactive {
+		caps.SendMessage = true
+	}
+
 	if systemPrompt == "" {
 		systemPrompt = "You are a helpful assistant. Complete the given task using the available tools."
 	}
@@ -661,6 +666,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	// 以下工具永久可用，不受白名单限制：
 	//   - SubAgent（如果 caps.SpawnAgent=true）
 	//   - offload_recall、recall_masked（SubAgent 需要访问父 Agent 的 offload/mask 数据）
+	//   - SendMessage、CreateChat（interactive SubAgent 群聊/agent 间通信必需）
 	if len(allowedTools) > 0 {
 		allowed := make(map[string]bool, len(allowedTools))
 		for _, name := range allowedTools {
@@ -674,6 +680,10 @@ func (a *Agent) buildSubAgentRunConfig(
 			}
 			// offload_recall / recall_masked：SubAgent 始终可用
 			if toolName == "offload_recall" || toolName == "recall_masked" {
+				continue
+			}
+			// SendMessage / CreateChat：interactive SubAgent 始终可用（群聊通信）
+			if interactive && (toolName == "SendMessage" || toolName == "CreateChat") {
 				continue
 			}
 			if !allowed[toolName] {
@@ -720,6 +730,20 @@ func (a *Agent) buildSubAgentRunConfig(
 		sysPrompt += subagentExecutionModeOneShot
 	}
 	sysPrompt += "\n## 角色描述\n\n" + rolePrompt + "\n"
+
+	// 注入群组信息（当前 agent 是某个虚拟群组的成员）
+	if parentCtx.GroupID != "" && len(parentCtx.GroupMembers) > 0 {
+		sysPrompt += "\n## 群组协作\n\n"
+		sysPrompt += fmt.Sprintf("你是虚拟群组 **%s** 的成员。群组成员：\n", parentCtx.GroupID)
+		for _, m := range parentCtx.GroupMembers {
+			sysPrompt += fmt.Sprintf("- %s\n", m)
+		}
+		sysPrompt += "\n你可以使用 **SendMessage** 工具直接向群组中的其他成员发送消息：\n"
+		sysPrompt += "- `SendMessage(to=\"agent:角色/实例\", message=\"...\")` → 直接发送消息给该成员\n"
+		sysPrompt += "- `SendMessage(to=\"" + parentCtx.GroupID + "\", message=\"...\")` → 广播发给所有成员\n"
+		sysPrompt += "- `SendMessage(to=\"" + parentCtx.GroupID + "\", message=\"@agent:角色/实例 ...\")` → @提及特定成员\n"
+		sysPrompt += "\n**注意**：你只能向同组成员发消息，不能跨群组通信。群组通信是直接的——消息会进入对方的 session，他们能看到完整的上下文并自行判断如何回应。\n"
+	}
 
 	// 注入可用 agent 目录（只在 spawn_agent=true 时注入）
 	if caps.SpawnAgent {
@@ -831,6 +855,8 @@ func (a *Agent) buildSubAgentRunConfig(
 			}
 			return a.workDir
 		}(),
+		InitialGroupID:      parentCtx.GroupID,
+		InitialGroupMembers: parentCtx.GroupMembers,
 
 		MaxIterations: a.getMaxIterations(), // 继承主 Agent 配置
 		// SubAgent 不设独立超时，直接使用父 context 携带的 deadline

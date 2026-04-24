@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"xbot/llm"
@@ -137,22 +138,98 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 		return nil, fmt.Errorf("group requires at least 2 members, got %d", len(params.Members))
 	}
 
-	maxRounds := params.MaxRounds
-	if maxRounds <= 0 {
-		maxRounds = 10
-	}
-
 	// Generate unique group ID
 	groupID := fmt.Sprintf("g%d", groupCounter.Add(1))
 	groupName := "group:" + groupID
 
-	// Create group state directly (no external callback needed)
-	CreateGroupState(groupID, "moderator", params.Members, maxRounds)
+	// Set group context on the moderator's ToolContext so spawned agents inherit it
+	if ctx.Metadata == nil {
+		ctx.Metadata = make(map[string]string)
+	}
+	ctx.Metadata["group_id"] = groupName
+	ctx.Metadata["group_members"] = strings.Join(params.Members, ",")
+	ctx.GroupID = groupName
+	ctx.GroupMembers = params.Members
 
-	return NewResult(fmt.Sprintf(
-		"Created group chat: %s\nMembers: %v\nMax rounds: %d\n\n"+
+	// Pre-spawn all member agents so their AgentChannels are registered in Dispatcher.
+	im, _ := ctx.Manager.(InteractiveSubAgentManager)
+	var spawnWarnings []string
+	for _, memberAddr := range params.Members {
+		if len(memberAddr) < 7 || memberAddr[:6] != "agent:" {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] %s is not an agent address, skipping", memberAddr))
+			continue
+		}
+		if im == nil {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] interactive SubAgent not supported, %s not spawned", memberAddr))
+			continue
+		}
+		role, instance := parseAgentAddr(memberAddr[6:])
+		if role == "" {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] invalid agent address %q, skipping", memberAddr))
+			continue
+		}
+		roleDef, ok := loadRoleFromCtx(ctx, role)
+		if !ok {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] unknown role %q for %s", role, memberAddr))
+			continue
+		}
+		effectiveModel := roleDef.Model
+		task := "Ready. Waiting for group discussion."
+		_, err := im.SpawnInteractive(ctx, task, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, effectiveModel)
+		if err != nil {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] spawn %s: %v", memberAddr, err))
+			continue
+		}
+		if ctx.RegisterAgentChannel != nil {
+			sendFn := func(sendCtx context.Context, msg string) (string, error) {
+				// Replace ctx.Ctx with the AgentChannel's long-lived context.
+				// The original ctx.Ctx (from tool execution) is cancelled when
+				// the tool returns, but sendFn may be called much later via
+				// SendMessage → Dispatcher → AgentChannel.
+				oldCtx := ctx.Ctx
+				ctx.Ctx = sendCtx
+				defer func() { ctx.Ctx = oldCtx }()
+				return im.SendInteractive(ctx, msg, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, effectiveModel)
+			}
+			if regErr := ctx.RegisterAgentChannel(memberAddr, sendFn); regErr != nil {
+				spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] register %s: %v", memberAddr, regErr))
+			}
+		}
+	}
+
+	// Create group membership (virtual — no message store, agents use their own sessions)
+	CreateGroup(groupID, params.Members)
+
+	result := fmt.Sprintf(
+		"Created group chat: %s\nMembers: %v\n\n"+
 			"Usage:\n"+
-			"- SendMessage(to=\"%s\", message=\"...\") → add to discussion (no agent triggered)\n"+
-			"- SendMessage(to=\"%s\", message=\"@agent:role/instance ...\") → trigger specific agent",
-		groupName, params.Members, maxRounds, groupName, groupName)), nil
+			"- SendMessage(to=\"%s\", message=\"...\") → broadcast to all members\n"+
+			"- SendMessage(to=\"%s\", message=\"@agent:role/instance ...\") → trigger specific member",
+		groupName, params.Members, groupName, groupName)
+
+	if len(spawnWarnings) > 0 {
+		result += "\n\n" + fmt.Sprintf("Spawn warnings (%d):\n", len(spawnWarnings))
+		for _, w := range spawnWarnings {
+			result += "  " + w + "\n"
+		}
+	}
+
+	return NewResult(result), nil
+}
+
+// parseAgentAddr parses "role/instance" or "role" from an agent address suffix.
+func parseAgentAddr(addr string) (role, instance string) {
+	if idx := indexOfSlash(addr); idx >= 0 {
+		return addr[:idx], addr[idx+1:]
+	}
+	return addr, ""
+}
+
+func indexOfSlash(s string) int {
+	for i, c := range s {
+		if c == '/' {
+			return i
+		}
+	}
+	return -1
 }

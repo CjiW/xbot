@@ -21,8 +21,8 @@ func TestCLISettingScope_KnownKeys(t *testing.T) {
 		"theme":               "user",
 		"language":            "user",
 		"runner_server":       "user",
-		"llm_provider":        "subscription",
-		"llm_model":           "subscription",
+		"max_output_tokens":   "subscription",
+		"thinking_mode":       "subscription",
 		"default_user":        "global",
 		"privileged_user":     "global",
 		"subscription_manage": "action",
@@ -55,7 +55,7 @@ func TestCLISettingScope_SettingsSchemaKeysAreClassified(t *testing.T) {
 }
 
 func TestIsSubscriptionScopedSettingKey(t *testing.T) {
-	for _, key := range []string{"llm_provider", "llm_api_key", "llm_model", "llm_base_url"} {
+	for _, key := range []string{"max_output_tokens", "thinking_mode"} {
 		if !isSubscriptionScopedSettingKey(key) {
 			t.Fatalf("expected %q to be subscription-scoped", key)
 		}
@@ -71,17 +71,15 @@ func TestOpenSettingsFromQuickSwitch_PreservesNonSubscriptionEdits(t *testing.T)
 	model := newCLIModel()
 	model.channel = &CLIChannel{}
 	model.panelValuesBackup = map[string]string{
-		"theme":        "mono",
-		"language":     "en",
-		"llm_provider": "should-refresh",
+		"theme":    "mono",
+		"language": "en",
 	}
-	model.panelCursorBackup = 2
+	model.panelCursorBackup = 1
 	model.panelOnSubmitBackup = func(map[string]string) {}
 	model.channel.config.GetCurrentValues = func() map[string]string {
 		return map[string]string{
-			"theme":        "midnight",
-			"language":     "zh",
-			"llm_provider": "openai",
+			"theme":    "midnight",
+			"language": "zh",
 		}
 	}
 	model.openSettingsFromQuickSwitch()
@@ -93,9 +91,6 @@ func TestOpenSettingsFromQuickSwitch_PreservesNonSubscriptionEdits(t *testing.T)
 	}
 	if got := model.panelValues["language"]; got != "en" {
 		t.Fatalf("language = %q, want en", got)
-	}
-	if got := model.panelValues["llm_provider"]; got != "openai" {
-		t.Fatalf("llm_provider = %q, want openai", got)
 	}
 }
 
@@ -982,7 +977,8 @@ func TestCLISettingScopeClassification(t *testing.T) {
 	}{
 		{key: "theme", scope: "user"},
 		{key: "runner_token", scope: "user"},
-		{key: "llm_model", scope: "subscription"},
+		{key: "max_output_tokens", scope: "subscription"},
+		{key: "thinking_mode", scope: "subscription"},
 		{key: "enable_stream", scope: "global"},
 		{key: "subscription_manage", scope: "action"},
 	}
@@ -995,13 +991,13 @@ func TestCLISettingScopeClassification(t *testing.T) {
 
 func TestMergeCLISettingsValues_OverlaysUserScopedOnly(t *testing.T) {
 	cfgVals := map[string]string{
-		"theme":     "midnight",
-		"llm_model": "gpt-4.1",
+		"theme":             "midnight",
+		"max_output_tokens": "8192",
 	}
 	settingsSvc := &testSettingsService{getResult: map[string]string{
-		"theme":         "mono",
-		"llm_model":     "claude-3-7",
-		"runner_server": "https://runner.example",
+		"theme":             "mono",
+		"max_output_tokens": "4096",
+		"runner_server":     "https://runner.example",
 	}}
 	model := newCLIModel()
 	model.channelName = "cli"
@@ -1013,8 +1009,8 @@ func TestMergeCLISettingsValues_OverlaysUserScopedOnly(t *testing.T) {
 	if got := merged["theme"]; got != "mono" {
 		t.Fatalf("theme = %q, want mono", got)
 	}
-	if got := merged["llm_model"]; got != "gpt-4.1" {
-		t.Fatalf("llm_model = %q, want config value gpt-4.1", got)
+	if got := merged["max_output_tokens"]; got != "8192" {
+		t.Fatalf("max_output_tokens = %q, want config value 8192", got)
 	}
 	if got := merged["runner_server"]; got != "https://runner.example" {
 		t.Fatalf("runner_server = %q, want settings value", got)
@@ -1035,9 +1031,9 @@ func TestPersistCLISettingsValues_PersistsUserScopedAndAppliesAll(t *testing.T) 
 	}
 
 	input := map[string]string{
-		"theme":            "mono",
-		"runner_workspace": "/tmp/ws",
-		"llm_model":        "gpt-4.1",
+		"theme":             "mono",
+		"runner_workspace":  "/tmp/ws",
+		"max_output_tokens": "4096",
 	}
 	model.persistCLISettingsValues(input)
 
@@ -1052,7 +1048,7 @@ func TestPersistCLISettingsValues_PersistsUserScopedAndAppliesAll(t *testing.T) 
 			t.Fatalf("unexpected target: channel=%q sender=%q", call.channelName, call.senderID)
 		}
 	}
-	if applied["llm_model"] != "gpt-4.1" || applied["theme"] != "mono" || applied["runner_workspace"] != "/tmp/ws" {
+	if applied["max_output_tokens"] != "4096" || applied["theme"] != "mono" || applied["runner_workspace"] != "/tmp/ws" {
 		t.Fatalf("ApplySettings did not receive full input: %#v", applied)
 	}
 }

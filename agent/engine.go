@@ -54,19 +54,21 @@ type RunConfig struct {
 	FeishuUserID string // 非空表示通过飞书身份登录 web（用于 runner 路由）
 
 	// === 工作区 & 沙箱 ===
-	WorkingDir       string   // Agent 工作目录（宿主机）
-	WorkspaceRoot    string   // 用户可读写工作区根目录（宿主机路径）
-	ReadOnlyRoots    []string // 额外只读目录
-	SkillsDirs       []string // 全局 skill 目录列表
-	AgentsDir        string
-	MCPConfigPath    string        // 用户 MCP 配置路径
-	GlobalMCPConfig  string        // 全局 MCP 配置路径（只读）
-	DataDir          string        // 数据持久化目录
-	SandboxEnabled   bool          // 是否启用命令沙箱
-	PreferredSandbox string        // 沙箱类型（docker 优先）
-	Sandbox          tools.Sandbox // Sandbox 实例引用（V4 新增）
-	SandboxMode      string        // 实际沙箱模式："none", "docker", "remote"
-	InitialCWD       string        // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
+	WorkingDir          string   // Agent 工作目录（宿主机）
+	WorkspaceRoot       string   // 用户可读写工作区根目录（宿主机路径）
+	ReadOnlyRoots       []string // 额外只读目录
+	SkillsDirs          []string // 全局 skill 目录列表
+	AgentsDir           string
+	MCPConfigPath       string        // 用户 MCP 配置路径
+	GlobalMCPConfig     string        // 全局 MCP 配置路径（只读）
+	DataDir             string        // 数据持久化目录
+	SandboxEnabled      bool          // 是否启用命令沙箱
+	PreferredSandbox    string        // 沙箱类型（docker 优先）
+	Sandbox             tools.Sandbox // Sandbox 实例引用（V4 新增）
+	SandboxMode         string        // 实际沙箱模式："none", "docker", "remote"
+	InitialCWD          string        // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
+	InitialGroupID      string        // 群组 ID（SubAgent 继承，用于 SendMessage 跨群校验）
+	InitialGroupMembers []string      // 群组成员列表（用于 system prompt 注入）
 
 	// === 循环控制 ===
 	MaxIterations   int // 0 = 使用默认值 100
@@ -625,14 +627,30 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 		if bg, ok := parentCtx.Metadata["background"]; ok {
 			metadata["background"] = bg
 		}
+		if gid, ok := parentCtx.Metadata["group_id"]; ok {
+			metadata["group_id"] = gid
+		}
+		if gms, ok := parentCtx.Metadata["group_members"]; ok {
+			metadata["group_members"] = gms
+		}
+	}
+	// Also propagate group from ToolContext fields (set by SpawnInteractive for group agents)
+	if parentCtx.GroupID != "" {
+		metadata["group_id"] = parentCtx.GroupID
+		metadata["group_members"] = strings.Join(parentCtx.GroupMembers, ",")
 	}
 	// Propagate model override from SubAgent role definition
 	if model != "" {
 		metadata["model"] = model
 	}
-	// Propagate parent's CWD so SubAgent inherits working directory
-	if parentCtx.CurrentDir != "" {
-		metadata["parent_cwd"] = parentCtx.CurrentDir
+	// Propagate parent's CWD so SubAgent inherits working directory.
+	// If CurrentDir is empty (parent never Cd'd), fall back to WorkingDir.
+	parentCWD := parentCtx.CurrentDir
+	if parentCWD == "" {
+		parentCWD = parentCtx.WorkingDir
+	}
+	if parentCWD != "" {
+		metadata["parent_cwd"] = parentCWD
 	}
 
 	return bus.InboundMessage{
@@ -804,6 +822,10 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	// 注入 session cwd（PWD 工具优化）
 	if cfg.Session != nil {
 		tc.CurrentDir = cfg.Session.GetCurrentDir()
+		// Fallback: new session has empty CWD, use InitialCWD (inherited from parent).
+		if tc.CurrentDir == "" && cfg.InitialCWD != "" {
+			tc.CurrentDir = cfg.InitialCWD
+		}
 		tc.SetCurrentDir = func(dir string) {
 			cfg.Session.SetCurrentDir(dir)
 		}
@@ -824,6 +846,11 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		tc.SetCurrentDir = func(dir string) {
 			cfg.InitialCWD = dir
 		}
+	}
+	// Propagate group membership for cross-agent messaging
+	if cfg.InitialGroupID != "" {
+		tc.GroupID = cfg.InitialGroupID
+		tc.GroupMembers = cfg.InitialGroupMembers
 	}
 
 	return tc

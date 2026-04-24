@@ -390,26 +390,7 @@ func localeZH() *UILocale {
 
 		// --- J. Settings schema ---
 		SetupSchema: []SettingDefinition{
-			{
-				Key: "llm_provider", Label: "LLM 提供商", Description: "选择 LLM 服务提供商",
-				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
-				Options: []SettingOption{
-					{Label: "OpenAI (及兼容 API)", Value: "openai"},
-					{Label: "Anthropic (Claude)", Value: "anthropic"},
-				},
-			},
-			{
-				Key: "llm_api_key", Label: "API Key", Description: "LLM 服务的 API Key（必填）",
-				Type: SettingTypePassword, Category: "LLM",
-			},
-			{
-				Key: "llm_base_url", Label: "Base URL", Description: "LLM API 地址",
-				Type: SettingTypeText, Category: "LLM", DefaultValue: "https://api.openai.com/v1",
-			},
-			{
-				Key: "llm_model", Label: "模型名称", Description: "选择或输入 LLM 模型名称",
-				Type: SettingTypeText, Category: "LLM", DefaultValue: "gpt-4o",
-			},
+
 			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "网络搜索服务密钥（可选，留空则无法使用 WebSearch）",
 				Type: SettingTypePassword, Category: "LLM",
@@ -447,26 +428,7 @@ func localeZH() *UILocale {
 			},
 		},
 		SettingsSchema: []SettingDefinition{
-			{
-				Key: "llm_provider", Label: "LLM 提供商", Description: "选择 LLM 服务提供商",
-				Type: SettingTypeSelect, Category: "LLM",
-				Options: []SettingOption{
-					{Label: "OpenAI (及兼容 API)", Value: "openai"},
-					{Label: "Anthropic (Claude)", Value: "anthropic"},
-				},
-			},
-			{
-				Key: "llm_api_key", Label: "API Key", Description: "LLM 服务的 API Key",
-				Type: SettingTypePassword, Category: "LLM",
-			},
-			{
-				Key: "llm_model", Label: "LLM 模型", Description: "选择或输入 LLM 模型名称",
-				Type: SettingTypeCombo, Category: "LLM",
-			},
-			{
-				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
-				Type: SettingTypeText, Category: "LLM",
-			},
+
 			{
 				Key: "vanguard_model", Label: "Vanguard 模型", Description: "SubAgent 的高强度模型等级映射",
 				Type: SettingTypeCombo, Category: "LLM",
@@ -777,26 +739,7 @@ func localeEN() *UILocale {
 
 		// --- J. Settings schema ---
 		SetupSchema: []SettingDefinition{
-			{
-				Key: "llm_provider", Label: "LLM Provider", Description: "Select LLM service provider",
-				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
-				Options: []SettingOption{
-					{Label: "OpenAI (and compatible API)", Value: "openai"},
-					{Label: "Anthropic (Claude)", Value: "anthropic"},
-				},
-			},
-			{
-				Key: "llm_api_key", Label: "API Key", Description: "API key for LLM service (required)",
-				Type: SettingTypePassword, Category: "LLM",
-			},
-			{
-				Key: "llm_base_url", Label: "Base URL", Description: "LLM API endpoint",
-				Type: SettingTypeText, Category: "LLM", DefaultValue: "https://api.openai.com/v1",
-			},
-			{
-				Key: "llm_model", Label: "Model Name", Description: "Select or enter LLM model name",
-				Type: SettingTypeText, Category: "LLM", DefaultValue: "gpt-4o",
-			},
+
 			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web search service key (optional, leave empty to disable WebSearch)",
 				Type: SettingTypePassword, Category: "LLM",
@@ -834,26 +777,7 @@ func localeEN() *UILocale {
 			},
 		},
 		SettingsSchema: []SettingDefinition{
-			{
-				Key: "llm_provider", Label: "LLM Provider", Description: "Select LLM service provider",
-				Type: SettingTypeSelect, Category: "LLM",
-				Options: []SettingOption{
-					{Label: "OpenAI (and compatible API)", Value: "openai"},
-					{Label: "Anthropic (Claude)", Value: "anthropic"},
-				},
-			},
-			{
-				Key: "llm_api_key", Label: "API Key", Description: "LLM service API Key",
-				Type: SettingTypePassword, Category: "LLM",
-			},
-			{
-				Key: "llm_model", Label: "LLM Model", Description: "Select or enter LLM model name",
-				Type: SettingTypeCombo, Category: "LLM",
-			},
-			{
-				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API endpoint (modify for OpenAI-compatible third-party services)",
-				Type: SettingTypeText, Category: "LLM",
-			},
+
 			{
 				Key: "vanguard_model", Label: "Vanguard Model", Description: "SubAgent tier mapping for high-power tasks",
 				Type: SettingTypeCombo, Category: "LLM",
@@ -1164,26 +1088,7 @@ func localeJA() *UILocale {
 
 		// --- J. Settings schema ---
 		SetupSchema: []SettingDefinition{
-			{
-				Key: "llm_provider", Label: "LLM プロバイダー", Description: "LLM サービスプロバイダーを選択",
-				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
-				Options: []SettingOption{
-					{Label: "OpenAI (および互換API)", Value: "openai"},
-					{Label: "Anthropic (Claude)", Value: "anthropic"},
-				},
-			},
-			{
-				Key: "llm_api_key", Label: "API Key", Description: "LLM サービスの API Key（必須）",
-				Type: SettingTypePassword, Category: "LLM",
-			},
-			{
-				Key: "llm_base_url", Label: "Base URL", Description: "LLM API エンドポイント",
-				Type: SettingTypeText, Category: "LLM", DefaultValue: "https://api.openai.com/v1",
-			},
-			{
-				Key: "llm_model", Label: "モデル名", Description: "LLM モデル名を選択または入力",
-				Type: SettingTypeText, Category: "LLM", DefaultValue: "gpt-4o",
-			},
+
 			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web検索サービスキー（オプション、空の場合 WebSearch は無効）",
 				Type: SettingTypePassword, Category: "LLM",
@@ -1221,26 +1126,7 @@ func localeJA() *UILocale {
 			},
 		},
 		SettingsSchema: []SettingDefinition{
-			{
-				Key: "llm_provider", Label: "LLM プロバイダー", Description: "LLM サービスプロバイダーを選択",
-				Type: SettingTypeSelect, Category: "LLM",
-				Options: []SettingOption{
-					{Label: "OpenAI (および互換 API)", Value: "openai"},
-					{Label: "Anthropic (Claude)", Value: "anthropic"},
-				},
-			},
-			{
-				Key: "llm_api_key", Label: "API Key", Description: "LLM サービスの API Key",
-				Type: SettingTypePassword, Category: "LLM",
-			},
-			{
-				Key: "llm_model", Label: "LLM モデル", Description: "LLM モデル名を選択または入力",
-				Type: SettingTypeCombo, Category: "LLM",
-			},
-			{
-				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API エンドポイント（OpenAI 互換のサードパーティサービス用に変更可）",
-				Type: SettingTypeText, Category: "LLM",
-			},
+
 			{
 				Key: "vanguard_model", Label: "Vanguard モデル", Description: "SubAgent の高強度タスク向けモデル階層マッピング",
 				Type: SettingTypeCombo, Category: "LLM",

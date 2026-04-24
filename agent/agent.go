@@ -1728,6 +1728,21 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 			systemNotes = append(systemNotes, fmt.Sprintf("Active interactive agents: %s", strings.Join(agentParts, ", ")))
 		}
 
+		// Active group chats
+		groups := tools.ListGroups()
+		if len(groups) > 0 {
+			var groupParts []string
+			for _, g := range groups {
+				status := "open"
+				if g.Closed {
+					status = "closed"
+				}
+				members := strings.Join(g.Members, ",")
+				groupParts = append(groupParts, fmt.Sprintf("%s(%s, %d members: %s)", g.Name, status, len(g.Members), members))
+			}
+			systemNotes = append(systemNotes, fmt.Sprintf("Groups: %s", strings.Join(groupParts, "; ")))
+		}
+
 		if len(systemNotes) > 0 {
 			info := "\n[System] " + strings.Join(systemNotes, " | ")
 			// Append to a copy of the last user message to avoid mutating session data

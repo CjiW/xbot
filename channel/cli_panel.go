@@ -1038,6 +1038,8 @@ func (m *cliModel) viewSessionsDetail() string {
 			title = "👤 " + entry.Label
 		case "agent":
 			title = fmt.Sprintf("🤖 %s/%s", entry.Role, entry.Instance)
+		case "group":
+			title = "💬 " + entry.Label
 		}
 	}
 	help := s.PanelDesc.Render("Esc Back")

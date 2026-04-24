@@ -630,9 +630,14 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 	if model != "" {
 		metadata["model"] = model
 	}
-	// Propagate parent's CWD so SubAgent inherits working directory
-	if parentCtx.CurrentDir != "" {
-		metadata["parent_cwd"] = parentCtx.CurrentDir
+	// Propagate parent's CWD so SubAgent inherits working directory.
+	// If CurrentDir is empty (parent never Cd'd), fall back to WorkingDir.
+	parentCWD := parentCtx.CurrentDir
+	if parentCWD == "" {
+		parentCWD = parentCtx.WorkingDir
+	}
+	if parentCWD != "" {
+		metadata["parent_cwd"] = parentCWD
 	}
 
 	return bus.InboundMessage{

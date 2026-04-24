@@ -1167,6 +1167,11 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 			tc.CurrentDir = cwd
 		}
 	}
+	// Fallback: if parent never Cd'd, use workspaceRoot as initial CWD
+	// so SubAgent starts in the same directory as the parent agent.
+	if tc.CurrentDir == "" && workspaceRoot != "" {
+		tc.CurrentDir = workspaceRoot
+	}
 	return tc
 }
 

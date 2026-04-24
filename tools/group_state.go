@@ -122,3 +122,39 @@ func (g *GroupState) IsMember(addr string) bool {
 	}
 	return false
 }
+
+// GroupSummary is a lightweight snapshot of a group chat for listing.
+type GroupSummary struct {
+	ID        string
+	Name      string // e.g. "group:g1"
+	Members   []string
+	Round     int
+	MaxRounds int
+	Closed    bool
+	MsgCount  int
+}
+
+// ListGroupSummaries returns info about all active and closed group chats.
+func ListGroupSummaries() []GroupSummary {
+	var results []GroupSummary
+	groupStore.Range(func(key, value any) bool {
+		gs, ok := value.(*GroupState)
+		if !ok {
+			return true
+		}
+		gs.mu.Lock()
+		summary := GroupSummary{
+			ID:        gs.ID,
+			Name:      key.(string),
+			Members:   append([]string{}, gs.Members...),
+			Round:     gs.Round,
+			MaxRounds: gs.MaxRounds,
+			Closed:    gs.Closed,
+			MsgCount:  len(gs.Messages),
+		}
+		gs.mu.Unlock()
+		results = append(results, summary)
+		return true
+	})
+	return results
+}

@@ -146,13 +146,81 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 	groupID := fmt.Sprintf("g%d", groupCounter.Add(1))
 	groupName := "group:" + groupID
 
-	// Create group state directly (no external callback needed)
+	// Pre-spawn all member agents so their AgentChannels are registered in Dispatcher.
+	// Without this, @mentions in SendMessage would fail with "unknown channel".
+	im, _ := ctx.Manager.(InteractiveSubAgentManager)
+	var spawnWarnings []string
+	for _, memberAddr := range params.Members {
+		if len(memberAddr) < 7 || memberAddr[:6] != "agent:" {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] %s is not an agent address, skipping", memberAddr))
+			continue
+		}
+		if im == nil {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] interactive SubAgent not supported, %s not spawned", memberAddr))
+			continue
+		}
+		role, instance := parseAgentAddr(memberAddr[6:]) // strip "agent:" prefix
+		if role == "" {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] invalid agent address %q, skipping", memberAddr))
+			continue
+		}
+		roleDef, ok := loadRoleFromCtx(ctx, role)
+		if !ok {
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] unknown role %q for %s", role, memberAddr))
+			continue
+		}
+		effectiveModel := roleDef.Model
+		task := "Ready. Waiting for group discussion."
+		_, err := im.SpawnInteractive(ctx, task, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, effectiveModel)
+		if err != nil {
+			// Session may already exist (not an error for groups)
+			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] spawn %s: %v", memberAddr, err))
+			continue
+		}
+		// Register AgentChannel in Dispatcher
+		if ctx.RegisterAgentChannel != nil {
+			sendFn := func(sendCtx context.Context, msg string) (string, error) {
+				return im.SendInteractive(ctx, msg, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, effectiveModel)
+			}
+			if regErr := ctx.RegisterAgentChannel(memberAddr, sendFn); regErr != nil {
+				spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] register %s: %v", memberAddr, regErr))
+			}
+		}
+	}
+
+	// Create group state
 	CreateGroupState(groupID, "moderator", params.Members, maxRounds)
 
-	return NewResult(fmt.Sprintf(
+	result := fmt.Sprintf(
 		"Created group chat: %s\nMembers: %v\nMax rounds: %d\n\n"+
 			"Usage:\n"+
 			"- SendMessage(to=\"%s\", message=\"...\") → add to discussion (no agent triggered)\n"+
 			"- SendMessage(to=\"%s\", message=\"@agent:role/instance ...\") → trigger specific agent",
-		groupName, params.Members, maxRounds, groupName, groupName)), nil
+		groupName, params.Members, maxRounds, groupName, groupName)
+
+	if len(spawnWarnings) > 0 {
+		result += "\n\n" + fmt.Sprintf("Spawn warnings (%d):\n", len(spawnWarnings))
+		for _, w := range spawnWarnings {
+			result += "  " + w + "\n"
+		}
+	}
+
+	return NewResult(result), nil
+}
+
+// parseAgentAddr parses "role/instance" or "role" from an agent address suffix.
+func parseAgentAddr(addr string) (role, instance string) {
+	if idx := indexOfSlash(addr); idx >= 0 {
+		return addr[:idx], addr[idx+1:]
+	}
+	return addr, ""
+}
+
+func indexOfSlash(s string) int {
+	for i, c := range s {
+		if c == '/' {
+			return i
+		}
+	}
+	return -1
 }

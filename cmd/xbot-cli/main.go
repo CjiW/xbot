@@ -1067,6 +1067,21 @@ func main() {
 					})
 				}
 			}
+			// Append group chats
+			for _, g := range tools.ListGroupSummaries() {
+				status := ""
+				if g.Closed {
+					status = " [closed]"
+				} else {
+					status = fmt.Sprintf(" [round %d/%d]", g.Round, g.MaxRounds)
+				}
+				entries = append(entries, channel.SessionPanelEntry{
+					ID:          g.Name,
+					Type:        "group",
+					Label:       "💬 " + g.Name + status,
+					MessageHint: fmt.Sprintf("%d members, %d messages", len(g.Members), g.MsgCount),
+				})
+			}
 			return entries
 		},
 		ChannelConfigGetFn: func() (map[string]map[string]string, error) {

@@ -509,10 +509,13 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		// Empty chatID = list all for this channel (cross-session).
+		// Empty chatID = list all for this channel (cross-session, admin only).
 		// Non-admin with specific chatID must own it.
 		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
+		}
+		if !isAdmin(senderID) && p.ChatID == "" {
+			p.ChatID = bizID
 		}
 		return json.Marshal(backend.CountInteractiveSessions(p.Channel, p.ChatID))
 	case "list_interactive_sessions":
@@ -525,6 +528,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
+		}
+		// Non-admin with empty chatID: restrict to their own sessions only.
+		// Admin sees all (cross-session listing for CLI session panel).
+		if !isAdmin(senderID) && p.ChatID == "" {
+			p.ChatID = bizID
 		}
 		return json.Marshal(backend.ListInteractiveSessions(p.Channel, p.ChatID))
 	case "inspect_interactive_session":
@@ -730,6 +738,10 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 			return nil, err
 		}
 		// Security: non-admin users only see their own sessions.
+		// CLI users are always admin (isAdmin bypass), so this filter never
+		// fires for CLI — they see all tenants and their SubAgent sessions.
+		// SubAgent sessions are listed separately via ListInteractiveSessions,
+		// which also restricts non-admin to their own chatID.
 		if !isAdmin(senderID) {
 			var userTenants []sqlite.TenantInfo
 			for _, t := range tenants {

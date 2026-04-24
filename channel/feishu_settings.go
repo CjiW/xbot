@@ -120,9 +120,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_set_max_context":
 		maxCtxStr := parsed["max_context"]
 		if maxCtxStr == "" {
-			if opt, ok := actionData["selected_option"].(string); ok {
-				maxCtxStr = opt
-			}
+			maxCtxStr = formStr(actionData, "settings_max_context_input")
 		}
 		if maxCtxStr == "" {
 			return nil, fmt.Errorf("missing max_context")
@@ -144,9 +142,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_set_max_output_tokens":
 		maxOutStr := parsed["max_output_tokens"]
 		if maxOutStr == "" {
-			if opt, ok := actionData["selected_option"].(string); ok {
-				maxOutStr = opt
-			}
+			maxOutStr = formStr(actionData, "settings_max_output_tokens_input")
 		}
 		if maxOutStr == "" {
 			return nil, fmt.Errorf("missing max_output_tokens")
@@ -1093,6 +1089,12 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		models = models[:maxModels]
 	}
 
+	// Always render the model selector. When the API model list is empty
+	// (e.g. async loading not complete), include the current model so the
+	// dropdown is never blank.
+	if len(models) == 0 && currentModel != "" {
+		models = append(models, currentModel)
+	}
 	if len(models) > 0 {
 		var options []map[string]any
 		for _, m := range models {
@@ -1130,23 +1132,18 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		maxContextDisplay = fmt.Sprintf("%d", currentMaxContext)
 	}
 
-	maxContextOptions := []map[string]any{
-		{"text": map[string]any{"tag": "plain_text", "content": "默认"}, "value": "0"},
-		{"text": map[string]any{"tag": "plain_text", "content": "8,000"}, "value": "8000"},
-		{"text": map[string]any{"tag": "plain_text", "content": "32,000"}, "value": "32000"},
-		{"text": map[string]any{"tag": "plain_text", "content": "65,000"}, "value": "65000"},
-		{"text": map[string]any{"tag": "plain_text", "content": "100,000"}, "value": "100000"},
-		{"text": map[string]any{"tag": "plain_text", "content": "200,000"}, "value": "200000"},
+	maxContextInitial := "0"
+	if currentMaxContext > 0 {
+		maxContextInitial = fmt.Sprintf("%d", currentMaxContext)
 	}
 	elements = append(elements, buildSettingRow(
 		"最大上下文",
 		maxContextDisplay,
 		map[string]any{
-			"tag":            "select_static",
-			"name":           "settings_max_context_select",
-			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择上下文长度..."},
-			"initial_option": fmt.Sprintf("%d", currentMaxContext),
-			"options":        maxContextOptions,
+			"tag":           "input",
+			"name":          "settings_max_context_input",
+			"placeholder":   map[string]any{"tag": "plain_text", "content": "输入上下文长度 (1000-2000000)"},
+			"initial_value": maxContextInitial,
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_set_max_context",
@@ -1165,24 +1162,18 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		maxOutputDisplay = fmt.Sprintf("%d", currentMaxOutputTokens)
 	}
 
-	maxOutputOptions := []map[string]any{
-		{"text": map[string]any{"tag": "plain_text", "content": "默认（8192）"}, "value": "0"},
-		{"text": map[string]any{"tag": "plain_text", "content": "4,096"}, "value": "4096"},
-		{"text": map[string]any{"tag": "plain_text", "content": "8,192"}, "value": "8192"},
-		{"text": map[string]any{"tag": "plain_text", "content": "16,384"}, "value": "16384"},
-		{"text": map[string]any{"tag": "plain_text", "content": "32,768"}, "value": "32768"},
-		{"text": map[string]any{"tag": "plain_text", "content": "65,536"}, "value": "65536"},
-		{"text": map[string]any{"tag": "plain_text", "content": "131,072"}, "value": "131072"},
+	maxOutputInitial := "0"
+	if currentMaxOutputTokens > 0 {
+		maxOutputInitial = fmt.Sprintf("%d", currentMaxOutputTokens)
 	}
 	elements = append(elements, buildSettingRow(
 		"最大输出 Token",
 		maxOutputDisplay,
 		map[string]any{
-			"tag":            "select_static",
-			"name":           "settings_max_output_tokens_select",
-			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择最大输出..."},
-			"initial_option": fmt.Sprintf("%d", currentMaxOutputTokens),
-			"options":        maxOutputOptions,
+			"tag":           "input",
+			"name":          "settings_max_output_tokens_input",
+			"placeholder":   map[string]any{"tag": "plain_text", "content": "输入最大输出 Token (0-2000000)"},
+			"initial_value": maxOutputInitial,
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_set_max_output_tokens",
@@ -1286,34 +1277,45 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		if tierDisplay == "" {
 			tierDisplay = "未设置"
 		}
+		// Build options: always include the currently configured model so
+		// the dropdown is never empty. Then append all global models.
 		var tierOptions []map[string]any
-		if len(allModels) > 0 {
-			for _, m := range allModels {
+		seenTier := make(map[string]bool)
+		if currentTierModel != "" && !seenTier[currentTierModel] {
+			seenTier[currentTierModel] = true
+			tierOptions = append(tierOptions, map[string]any{
+				"text":  map[string]any{"tag": "plain_text", "content": currentTierModel},
+				"value": currentTierModel,
+			})
+		}
+		for _, m := range allModels {
+			if !seenTier[m] {
+				seenTier[m] = true
 				tierOptions = append(tierOptions, map[string]any{
 					"text":  map[string]any{"tag": "plain_text", "content": m},
 					"value": m,
 				})
 			}
 		}
-		if len(tierOptions) > 0 {
-			elements = append(elements, buildSettingRow(
-				tier.label,
-				tierDisplay,
-				map[string]any{
-					"tag":            "select_static",
-					"name":           "settings_tier_" + tier.key + "_select",
-					"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模型..."},
-					"initial_option": currentTierModel,
-					"options":        tierOptions,
-					"value": map[string]string{
-						"action_data": mustMapToJSON(map[string]string{
-							"action": "settings_set_model_tier",
-							"tier":   tier.key,
-						}),
-					},
+		// Always render — even with only one option (the current value).
+		// Previously the section was entirely hidden when allModels was empty.
+		elements = append(elements, buildSettingRow(
+			tier.label,
+			tierDisplay,
+			map[string]any{
+				"tag":            "select_static",
+				"name":           "settings_tier_" + tier.key + "_select",
+				"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模型..."},
+				"initial_option": currentTierModel,
+				"options":        tierOptions,
+				"value": map[string]string{
+					"action_data": mustMapToJSON(map[string]string{
+						"action": "settings_set_model_tier",
+						"tier":   tier.key,
+					}),
 				},
-			))
-		}
+			},
+		))
 	}
 
 	// --- Subscription management section ---
@@ -1341,10 +1343,9 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 				if sub.Active {
 					activeMark = "✅ "
 				}
+				// Keep label short — no newlines, no BaseURL.
+				// BaseURL renders as a separate markdown element below.
 				label := fmt.Sprintf("%s%s — %s (%s)", activeMark, sub.Name, sub.Provider, sub.Model)
-				if sub.BaseURL != "" {
-					label += "\n" + sub.BaseURL
-				}
 				var btns []map[string]any
 				if !sub.Active {
 					btns = append(btns, map[string]any{
@@ -1371,6 +1372,12 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 					},
 				})
 				elements = append(elements, buildItemRow(label, "", btns...))
+				if sub.BaseURL != "" {
+					elements = append(elements, map[string]any{
+						"tag":     "markdown",
+						"content": "　　" + sub.BaseURL,
+					})
+				}
 			}
 		}
 

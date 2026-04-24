@@ -276,3 +276,126 @@ func TestHasCustomLLMChecksSubscriptionSvc(t *testing.T) {
 		t.Fatal("expected HasCustomLLM to return true when default subscription exists")
 	}
 }
+
+// TestInvalidate_ClearsPerChatCache verifies that Invalidate(senderID) clears
+// both user-level and per-chat (senderID:chatID) cache entries.
+// This is the fix for: switching sub then changing model in settings was stuck
+// on the old model because Invalidate only cleared the user-level key.
+func TestInvalidate_ClearsPerChatCache(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+
+	senderID := "cli_user"
+	chatID := "/home/user/project"
+	subA := &sqlite.LLMSubscription{
+		Provider: "openai", BaseURL: "https://api-a.com/v1", APIKey: "sk-a",
+		Model: "gpt-4o", MaxOutputTokens: 8192,
+	}
+	subB := &sqlite.LLMSubscription{
+		Provider: "openai", BaseURL: "https://api-b.com/v1", APIKey: "sk-b",
+		Model: "deepseek-v3", MaxOutputTokens: 4096,
+	}
+
+	// Simulate: SwitchSubscription creates both user-level and per-chat caches
+	if err := f.SwitchSubscription(senderID, subA, chatID); err != nil {
+		t.Fatalf("SwitchSubscription subA: %v", err)
+	}
+
+	// Verify both caches exist
+	_, modelA, _, _ := f.GetLLMForChat(senderID, chatID)
+	if modelA != "gpt-4o" {
+		t.Fatalf("initial model = %q, want gpt-4o", modelA)
+	}
+
+	// Simulate: set_default_subscription calls Invalidate then SwitchSubscription
+	// (the actual server handler path for subscription switching)
+	f.Invalidate(senderID)
+	if err := f.SwitchSubscription(senderID, subB, chatID); err != nil {
+		t.Fatalf("SwitchSubscription subB: %v", err)
+	}
+
+	_, modelB, _, _ := f.GetLLMForChat(senderID, chatID)
+	if modelB != "deepseek-v3" {
+		t.Errorf("after sub switch, model = %q, want deepseek-v3", modelB)
+	}
+
+	// Simulate: update_subscription (settings panel) calls Invalidate + SwitchSubscription
+	// with chatID="" — per-chat cache was NOT cleared before the fix
+	f.Invalidate(senderID)
+	updatedSubB := *subB
+	updatedSubB.Model = "deepseek-r1"
+	updatedSubB.MaxOutputTokens = 16384
+	if err := f.SwitchSubscription(senderID, &updatedSubB, ""); err != nil {
+		t.Fatalf("SwitchSubscription updatedSubB: %v", err)
+	}
+
+	// GetLLMForChat should NOT return stale per-chat cache
+	_, modelUpdated, _, thinkingUpdated := f.GetLLMForChat(senderID, chatID)
+	if modelUpdated != "deepseek-r1" {
+		t.Errorf("after settings update, model = %q, want deepseek-r1 (stale per-chat cache bug)", modelUpdated)
+	}
+	// Verify thinking mode is also not stale
+	if thinkingUpdated != "" {
+		t.Errorf("after settings update, thinkingMode = %q, want empty", thinkingUpdated)
+	}
+}
+
+// TestSwitchModel_ClearsPerChatCache verifies that SwitchModel clears per-chat
+// model caches so GetLLMForChat returns the new model instead of a stale
+// per-chat entry.
+func TestSwitchModel_ClearsPerChatCache(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+
+	senderID := "cli_user"
+	chatID := "/home/user/project"
+	sub := &sqlite.LLMSubscription{
+		Provider: "openai", BaseURL: "https://api.example.com/v1", APIKey: "sk-test",
+		Model: "gpt-4o", MaxOutputTokens: 8192,
+	}
+
+	// Create per-chat cache via SwitchSubscription
+	if err := f.SwitchSubscription(senderID, sub, chatID); err != nil {
+		t.Fatalf("SwitchSubscription: %v", err)
+	}
+
+	// Now SwitchModel (e.g., from quick panel model switch)
+	f.SwitchModel(senderID, "gpt-4o-mini")
+
+	// GetLLMForChat should return the new model, not the stale per-chat one
+	_, model, _, _ := f.GetLLMForChat(senderID, chatID)
+	if model != "gpt-4o-mini" {
+		t.Errorf("after SwitchModel, per-chat model = %q, want gpt-4o-mini (stale per-chat cache bug)", model)
+	}
+}
+
+// TestInvalidate_DoesNotAffectOtherUsers verifies that Invalidate(senderID) only
+// clears entries for that specific sender, not other users.
+func TestInvalidate_DoesNotAffectOtherUsers(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+
+	subA := &sqlite.LLMSubscription{
+		Provider: "openai", BaseURL: "https://api-a.com/v1", APIKey: "sk-a",
+		Model: "gpt-4o",
+	}
+	subB := &sqlite.LLMSubscription{
+		Provider: "openai", BaseURL: "https://api-b.com/v1", APIKey: "sk-b",
+		Model: "claude-3-opus",
+	}
+
+	// User A gets per-chat cache
+	if err := f.SwitchSubscription("userA", subA, "/home/a"); err != nil {
+		t.Fatalf("SwitchSubscription userA: %v", err)
+	}
+	// User B gets per-chat cache
+	if err := f.SwitchSubscription("userB", subB, "/home/b"); err != nil {
+		t.Fatalf("SwitchSubscription userB: %v", err)
+	}
+
+	// Invalidate user A — should NOT affect user B
+	f.Invalidate("userA")
+
+	// User B's per-chat cache should still work
+	_, modelB, _, _ := f.GetLLMForChat("userB", "/home/b")
+	if modelB != "claude-3-opus" {
+		t.Errorf("userB model after Invalidate(userA) = %q, want claude-3-opus", modelB)
+	}
+}

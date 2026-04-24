@@ -3,77 +3,57 @@ title: "xbot"
 weight: 0
 ---
 
-**xbot** is a Go framework for building AI agents. It provides a message bus + plugin architecture where an **Agent** (LLM + tools + memory) receives messages from any **Channel** (CLI, Feishu, QQ, Web) through a **Bus**, processes them in a multi-turn loop with tool calling, and sends replies back. Designed for self-hosted deployments, it supports **OpenAI** and **Anthropic** as native LLM providers, plus any OpenAI-compatible API (DeepSeek, Qwen, Ollama, etc.) via the `openai` provider with a custom `base_url`.
+**xbot** 是一个自托管 AI Agent 框架。部署在你自己的服务器上，通过飞书 / QQ / 终端 / 浏览器与它对话，它能调用工具完成实际工作。
 
-## Architecture
+## 解决什么问题
+
+你想让 AI 帮团队做事——写代码、查文档、跑命令、操作飞书表格——但又不想把数据交给第三方 SaaS。xbot 让你在自己的服务器上运行一个全功能 AI Agent，团队成员通过他们已有的通讯工具与 Agent 对话。
+
+## 核心特性
+
+- 🧠 **多轮对话 + 工具调用** — Shell、文件读写、网页搜索、定时任务、子 Agent 委派
+- 📱 **多渠道接入** — 同一个 Agent，飞书 / QQ / 终端 / 浏览器不同入口
+- 🔑 **团队共享 LLM** — 管理员配置一次 API Key，全团队直接使用
+- 🏠 **完全自托管** — 数据不出你的服务器
+- 🧩 **可扩展** — Skills、SubAgents、MCP 协议
+
+## 我该用哪个渠道
+
+| 渠道 | 适合谁 | 特点 |
+|------|--------|------|
+| **CLI** | 开发者、终端用户 | 全功能 TUI，流式输出，工具调用 |
+| **飞书** | 团队协作 | 在群里 @机器人 对话，支持消息卡片 |
+| **QQ / NapCat** | 个人或小圈子 | QQ 聊天窗口交互 |
+| **Web** | 任何有浏览器的人 | 网页聊天，注册/登录，邀请制 |
+
+> 💡 **最常见场景**：部署 Server 模式 → 配置飞书应用 → 全团队在飞书群里 @机器人对话。
+
+## 快速开始
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.ps1 | iex
+```
+
+安装完成后运行 `xbot-cli`，首次会弹出 Setup 向导引导你配置 API Key。
+
+详见 [安装指南](/xbot/installation/)。
+
+## 架构
 
 ```
 ┌──────────┐     ┌──────────────┐     ┌────────┐     ┌──────────┐
-│  Feishu  │────▶│  Dispatcher  │────▶│ Agent  │────▶│   LLM    │
+│  飞书    │────▶│  Dispatcher  │────▶│ Agent  │────▶│   LLM    │
 │  QQ      │◀────│  (channel/)  │◀────│ (agent/)│◀────│ (llm/)   │
 │  NapCat  │     └──────────────┘     │        │     └──────────┘
 │  Web     │                          │        │
-│  CLI     │                          │        │────▶ Tools
+│  CLI     │                          │        │────▶ 工具
 └──────────┘                          │        │      (tools/)
                                       │        │
-                                      │        │────▶ Memory
+                                      │        │────▶ 记忆
                                       │        │      (memory/)
                                       └────────┘
 ```
-
-## Install
-
-### curl (Linux / macOS)
-
-```bash
-# Default: installs xbot-cli to /usr/local/bin
-curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-
-# Specific version
-VERSION=v0.0.7 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-
-# Custom install path
-INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-```
-
-### Build from Source
-
-```bash
-git clone https://github.com/CjiW/xbot.git && cd xbot
-make build          # Builds xbot (server + runner)
-make run            # Build and run server
-```
-
-To build `xbot-cli` only:
-
-```bash
-go build -o xbot-cli ./cmd/xbot-cli
-```
-
-## Features
-
-- **Multi-channel** — Pluggable channel adapters: CLI (TUI), Feishu (Lark), QQ, NapCat (OneBot 11), Web
-- **Tools** — 50+ built-in tools: Shell, File I/O, Web fetch/search, Context editing, SubAgent, Cron scheduling, Download, Feishu MCP, and more
-- **Memory** — Pluggable providers: **Flat** (in-memory blocks + grep archival) and **Letta/MemGPT** (SQLite core + vector search + FTS5)
-- **Skills & Agents** — Markdown-defined skill packages; role-based SubAgents with custom roles, max nesting depth 6
-- **MCP Protocol** — Global and session-scoped MCP servers, stdio and HTTP transports, lazy cleanup
-- **Permission Control** — OS user-based permission control with approval workflows for privileged operations
-- **Multi-tenant** — Channel + chatID isolation
-- **OAuth 2.0** — Built-in OAuth server for web channel authentication
-- **Hot-reload prompts** — Go templates with channel-specific overrides
-- **KV-Cache optimized** — Context ordering maximizes LLM cache hits
-
-## Documentation
-
-| Section | Description |
-|---------|-------------|
-| [Architecture](/architecture/) | System design and data flow |
-| [Channels](/channels/) | Channel setup guides |
-| [Guides](/guides/) | Sandbox, Permission Control, Memory, MCP, Skills & Agents |
-| [Tools](/tools/) | Built-in tools reference |
-| [Configuration](/configuration/) | Environment variables and config reference |
-| [Design](/design/) | Design documents |
-
-## Channels
-
-Each channel is a pluggable adapter on the message bus. See the [Channels](/xbot/channels/) page for setup guides and configuration details.

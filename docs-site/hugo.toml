@@ -2,7 +2,7 @@
 # GitHub: steps.pages.outputs.base_url
 # GitLab: $CI_PAGES_URL
 baseURL = ""
-languageCode = "en-us"
+languageCode = "zh-cn"
 title = "xbot"
 theme = "hugo-geekdoc"
 
@@ -27,3 +27,27 @@ pygmentsCodeFences = true
 
 [outputs]
   home = ["HTML", "RSS"]
+
+[[menu.main]]
+  name = "安装指南"
+  weight = 5
+
+[[menu.main]]
+  name = "配置参考"
+  weight = 15
+
+[[menu.main]]
+  name = "渠道"
+  weight = 20
+
+[[menu.main]]
+  name = "沙箱"
+  weight = 30
+
+[[menu.main]]
+  name = "架构"
+  weight = 40
+
+[[menu.main]]
+  name = "设计"
+  weight = 50

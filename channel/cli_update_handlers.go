@@ -802,14 +802,13 @@ func (m *cliModel) handleSuHistoryLoad(msg suHistoryLoadMsg) []tea.Cmd {
 		// static tool_summary would duplicate content with mismatched numbers.
 		m.removeAllToolSummaries()
 
-		// Always emit a tickCmd to guarantee the fast tick chain is running.
-		// fastTickActive may already be true (inherited from previous session view),
-		// but the actual tickCmd message in the BubbleTea queue may have been
-		// consumed without re-emitting (e.g. during splash animation early-return).
-		// An extra tickCmd is harmless — it just produces one redundant cliTickMsg
-		// that finds fastTickActive=true and re-emits its own tickCmd.
-		m.fastTickActive = true
-		cmds = append(cmds, tickCmd())
+		// Emit a tickCmd to guarantee the fast tick chain is running,
+		// but only if it's not already active (avoid duplicate chains).
+		// See handleSplashTick for the other half of this guard.
+		if !m.fastTickActive {
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
+		}
 
 	default:
 		// Turn is not active (nil or PhaseDone). If restoreSession() restored
@@ -879,10 +878,10 @@ func (m *cliModel) handleSplashTick(msg splashTickMsg) (tea.Model, tea.Cmd) {
 	if m.ready && msg.frame >= 20 {
 		// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
 		m.splashDone = true
-		if m.typing && m.progress != nil {
+		if m.typing && m.progress != nil && !m.fastTickActive {
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
-		} else {
+		} else if !m.typing || m.progress == nil {
 			cmds = append(cmds, idleTickCmd())
 		}
 		return m, tea.Batch(cmds...)
@@ -890,10 +889,10 @@ func (m *cliModel) handleSplashTick(msg splashTickMsg) (tea.Model, tea.Cmd) {
 	// 兜底上限：~2 秒（40 帧）
 	if msg.frame >= 40 {
 		m.splashDone = true
-		if m.typing && m.progress != nil {
+		if m.typing && m.progress != nil && !m.fastTickActive {
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
-		} else {
+		} else if !m.typing || m.progress == nil {
 			cmds = append(cmds, idleTickCmd())
 		}
 		return m, tea.Batch(cmds...)

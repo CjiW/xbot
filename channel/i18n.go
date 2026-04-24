@@ -261,6 +261,7 @@ func localeZH() *UILocale {
 		HelpCmds: []HelpCmdEntry{
 			{Cmd: "/cancel", Desc: "取消当前操作"},
 			{Cmd: "/clear", Desc: "清空聊天记录"},
+			{Cmd: "/channel", Desc: "配置频道 (Web/飞书/QQ)"},
 			{Cmd: "/compact", Desc: "压缩上下文"},
 			{Cmd: "/model", Desc: "切换模型"},
 			{Cmd: "/models", Desc: "列出可用模型"},
@@ -647,6 +648,7 @@ func localeEN() *UILocale {
 		HelpCmds: []HelpCmdEntry{
 			{Cmd: "/cancel", Desc: "Cancel current operation"},
 			{Cmd: "/clear", Desc: "Clear chat history"},
+			{Cmd: "/channel", Desc: "Configure channels (Web/Feishu/QQ)"},
 			{Cmd: "/compact", Desc: "Compress context"},
 			{Cmd: "/model", Desc: "Switch model"},
 			{Cmd: "/models", Desc: "List available models"},
@@ -1033,6 +1035,7 @@ func localeJA() *UILocale {
 		HelpCmds: []HelpCmdEntry{
 			{Cmd: "/cancel", Desc: "現在の操作をキャンセル"},
 			{Cmd: "/clear", Desc: "チャット履歴をクリア"},
+			{Cmd: "/channel", Desc: "チャンネル設定 (Web/飛書/QQ)"},
 			{Cmd: "/compact", Desc: "コンテキストを圧縮"},
 			{Cmd: "/model", Desc: "モデル切替"},
 			{Cmd: "/models", Desc: "利用可能モデル一覧"},

@@ -279,16 +279,22 @@ func extractReasoningContentFromDelta(delta openai.ChatCompletionChunkChoiceDelt
 	return ""
 }
 
-// assistantMessageWithReasoning 用于构建包含 reasoning_content 的 assistant message
+// assistantMessageWithReasoning 用于构建包含 reasoning_content 的 assistant message。
+// 注意：ReasoningContent 不使用 omitempty——当 thinking mode 开启时，即使值为空字符串也必须传给 API（DeepSeek 要求）。
+// 此结构体仅在显式决定需要 reasoning_content 字段时才序列化（thinking mode 开启或有实际 reasoning 内容），
+// 所以不带 omitempty 不会影响非 thinking 模式下的行为。
 type assistantMessageWithReasoning struct {
 	Role             string `json:"role"`
 	Content          any    `json:"content"` // string or null — must be present per OpenAI protocol
-	ReasoningContent string `json:"reasoning_content,omitempty"`
+	ReasoningContent string `json:"reasoning_content"`
 	ToolCalls        any    `json:"tool_calls,omitempty"`
 }
 
-// toOpenAIMessages 将业务消息转换为 OpenAI 消息格式
-func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessageParamUnion {
+// toOpenAIMessages 将业务消息转换为 OpenAI 消息格式。
+// thinkingMode 非 "disabled" 时，所有 assistant 消息都会包含 reasoning_content 字段
+// （即使为空字符串），以满足 DeepSeek thinking mode 的要求。
+func toOpenAIMessages(messages []ChatMessage, thinkingMode string) []openai.ChatCompletionMessageParamUnion {
+	thinkingEnabled := thinkingMode != "" && thinkingMode != "disabled"
 	result := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
 	for _, msg := range messages {
 		switch msg.Role {
@@ -321,10 +327,10 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 				result = append(result, openai.UserMessage(msg.Content))
 			}
 		case "assistant":
-			// 如果有 reasoning_content，使用原始 JSON 构建消息
-			if msg.ReasoningContent != "" {
-				// 使用 param.Override 构建包含 reasoning_content 的消息
-				var content any = msg.Content // 空字符串序列化为 "content":""
+			// Thinking mode 开启，或有实际 reasoning_content 时，使用 param.Override 路径
+			// 确保 reasoning_content 字段始终传给 API（DeepSeek thinking mode 要求）
+			if thinkingEnabled || msg.ReasoningContent != "" {
+				var content any = msg.Content
 				if msg.Content == "" {
 					content = nil // OpenAI 协议: 空 content 用 null
 				}
@@ -358,16 +364,22 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 	return result
 }
 
-// buildToolCallsParamForJSON 构建用于 JSON 序列化的 tool calls
+// buildToolCallsParamForJSON 构建用于 JSON 序列化的 tool calls。
+// OpenAI/DeepSeek-compatible chat history requires function.arguments to stay a
+// JSON string, not a decoded object. Empty arguments are normalized to "{}".
 func buildToolCallsParamForJSON(toolCalls []ToolCall) []map[string]any {
 	result := make([]map[string]any, 0, len(toolCalls))
 	for _, tc := range toolCalls {
+		args := tc.Arguments
+		if args == "" {
+			args = "{}"
+		}
 		result = append(result, map[string]any{
 			"id":   tc.ID,
 			"type": "function",
 			"function": map[string]any{
 				"name":      tc.Name,
-				"arguments": tc.Arguments,
+				"arguments": args,
 			},
 		})
 	}
@@ -527,8 +539,8 @@ func modelMaxOutputTokens(model string) int {
 	return 0
 }
 
-func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []ToolDefinition) openai.ChatCompletionNewParams {
-	openaiMessages := toOpenAIMessages(messages)
+func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) openai.ChatCompletionNewParams {
+	openaiMessages := toOpenAIMessages(messages, thinkingMode)
 
 	p := openai.ChatCompletionNewParams{
 		Model:    model,
@@ -672,7 +684,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	}).Info("[LLM] Starting non-stream request")
 
 	startTime := time.Now()
-	params := o.buildParams(model, messages, tools)
+	params := o.buildParams(model, messages, tools, thinkingMode)
 
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
@@ -691,7 +703,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 				o.maxTokensUpgrade.Delete(model)
 				log.Ctx(ctx).WithField("model", model).Info("[LLM] Model requires legacy max_tokens, retrying")
 			}
-			params = o.buildParams(model, messages, tools)
+			params = o.buildParams(model, messages, tools, thinkingMode)
 			completion, err = o.client.Chat.Completions.New(ctx, params, opts...)
 		}
 	}
@@ -808,7 +820,7 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 		log.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
 	}
 
-	stream, err := o.newStreamingWithRetry(ctx, model, messages, tools, opts)
+	stream, err := o.newStreamingWithRetry(ctx, model, messages, tools, thinkingMode, opts)
 	if err != nil {
 		return nil, fmt.Errorf("openai stream completion: %w", err)
 	}
@@ -822,8 +834,8 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	return eventChan, nil
 }
 
-func (o *OpenAILLM) newStreamingWithRetry(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, opts []option.RequestOption) (*ssestream.Stream[openai.ChatCompletionChunk], error) {
-	params := o.buildParams(model, messages, tools)
+func (o *OpenAILLM) newStreamingWithRetry(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string, opts []option.RequestOption) (*ssestream.Stream[openai.ChatCompletionChunk], error) {
+	params := o.buildParams(model, messages, tools, thinkingMode)
 	stream := o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
 	if err := stream.Err(); err != nil {
 		if verdict := isMaxTokensParamError(err); verdict != "" {
@@ -835,7 +847,7 @@ func (o *OpenAILLM) newStreamingWithRetry(ctx context.Context, model string, mes
 				log.Ctx(ctx).WithField("model", model).Info("[LLM] Stream: model requires legacy max_tokens, retrying")
 			}
 			stream.Close()
-			params = o.buildParams(model, messages, tools)
+			params = o.buildParams(model, messages, tools, thinkingMode)
 			stream = o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
 			if retryErr := stream.Err(); retryErr != nil {
 				stream.Close()

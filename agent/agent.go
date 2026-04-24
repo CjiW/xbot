@@ -1885,6 +1885,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// incrementally persisted. Only need to save the final assistant reply.
 
 	assistantMsg := llm.NewAssistantMessage(finalContent)
+	assistantMsg.ReasoningContent = out.ReasoningContent
 	// Attach iteration history as JSON detail for UI display (not included in LLM context).
 	if len(out.IterationHistory) > 0 {
 		if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {

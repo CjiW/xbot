@@ -490,11 +490,10 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
+		// Empty chatID = list all for this channel (cross-session).
+		// Non-admin with specific chatID must own it.
 		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
-		}
-		if p.ChatID == "" {
-			p.ChatID = bizID
 		}
 		return json.Marshal(backend.CountInteractiveSessions(p.Channel, p.ChatID))
 	case "list_interactive_sessions":
@@ -507,9 +506,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != bizID {
 			return nil, fmt.Errorf("access denied")
-		}
-		if p.ChatID == "" {
-			p.ChatID = bizID
 		}
 		return json.Marshal(backend.ListInteractiveSessions(p.Channel, p.ChatID))
 	case "inspect_interactive_session":
@@ -1028,6 +1024,29 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 
 	case "reset_token_state":
 		backend.ResetTokenState()
+		return nil, nil
+
+	case "get_channel_config":
+		cfgs, err := backend.GetChannelConfigs()
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(cfgs)
+
+	case "set_channel_config":
+		var p struct {
+			Channel string            `json:"channel"`
+			Values  map[string]string `json:"values"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("access denied: channel config requires admin")
+		}
+		if err := backend.SetChannelConfig(p.Channel, p.Values); err != nil {
+			return nil, err
+		}
 		return nil, nil
 
 	default:

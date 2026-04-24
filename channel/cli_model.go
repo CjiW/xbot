@@ -528,6 +528,11 @@ type cliModel struct {
 	updateNotice         *version.UpdateInfo // nil=nothing, non-nil=show notice
 	checkingUpdate       bool                // true while /update is in progress
 
+	// --- Channel Config Panel ---
+	panelChannelItems  []string                     // channel names: ["web", "feishu", "qq", "napcat"]
+	panelChannelCursor int                          // selected channel index
+	panelChannelCfg    map[string]map[string]string // cached channel configs
+
 	// --- §15 Subscription / Model Quick Switch ---
 	quickSwitchMode          string              // ""=off, "subscription"=selecting subscription, "model"=selecting model
 	quickSwitchList          []Subscription      // available subscriptions or models

@@ -56,6 +56,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 	}
 	assistantMsg := llm.NewAssistantMessage(finalContent)
+	assistantMsg.ReasoningContent = cardOut.ReasoningContent
 	if err := tenantSession.AddMessage(assistantMsg); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to save assistant message")
 	}

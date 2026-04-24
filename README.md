@@ -1,76 +1,93 @@
 <p align="center">
-  <strong>xbot</strong> — pluggable AI Agent framework
+  <strong>xbot</strong> — 自托管 AI Agent，接入你的飞书 / QQ / 终端 / 浏览器
 </p>
 
 <p align="center">
-  <img alt="Streaming" src="docs-site/static/img/cli/streaming.gif" width="720">
+<img alt="Streaming" src="docs-site/static/img/cli/streaming.gif" width="720">
 </p>
 
-## What is xbot
+## xbot 解决什么问题
 
-xbot is a Go framework for building AI agents. It provides a message bus + plugin architecture where an **Agent** (LLM + tools + memory) receives messages from any **Channel** (CLI, Feishu, QQ, Web) through a **Bus**, processes them in a multi-turn loop with tool calling, and sends replies back.
+你想让 AI 帮团队做事——写代码、查文档、跑命令、操作飞书表格——但又不想把数据交给第三方 SaaS。xbot 让你**在自己的服务器上部署一个全功能 AI Agent**，通过飞书/QQ/终端/浏览器与它对话，它能调用工具完成实际工作。
 
-```
-Channel → Bus → Agent → LLM ↔ Tools → Bus → Channel
-```
+**核心能力：**
+- 🧠 多轮对话 + 工具调用（Shell、文件读写、网页搜索、定时任务…）
+- 📱 多渠道接入（飞书、QQ、终端 TUI、Web 浏览器）——同一套 Agent，不同入口
+- 🔑 团队共享 LLM Key（管理员配置一次，所有人直接用）
+- 🧩 可扩展（Skills、SubAgents、MCP 协议）
+- 🏠 完全自托管，数据不出你的服务器
 
-Designed for self-hosted deployments. Cross-platform: Linux, macOS, and Windows (none sandbox with PowerShell). Supports **OpenAI** and **Anthropic** as native LLM providers, plus any OpenAI-compatible API (DeepSeek, Qwen, Ollama, etc.) via the `openai` provider with a custom `base_url`.
+## 我该用哪个渠道
 
-## Quick Start
+| 渠道 | 适合谁 | 特点 |
+|------|--------|------|
+| **CLI** | 开发者、终端重度用户 | 全功能 TUI，支持流式输出、工具调用、SubAgent |
+| **飞书** | 团队协作 | 在群里 @机器人 即可对话，支持消息卡片交互 |
+| **QQ / NapCat** | 个人或小圈子 | 通过 QQ 聊天窗口与 Agent 交互 |
+| **Web** | 任何有浏览器的人 | 网页聊天界面，支持注册/登录和邀请制 |
 
-### Install CLI / Server
+> 💡 **飞书场景最常见**：部署 server 模式 → 配置飞书应用 → 全团队在飞书群里 @机器人对话，无需各自配置 API Key。
+
+## 快速开始
+
+### 1. 安装
+
+安装器会问你选哪种模式（区别见下文）：
 
 ```bash
-# Linux / macOS (amd64, arm64)
-# Installer will ask whether to use:
-#   1) standalone mode
-#   2) server-client mode (configure local server + service + CLI remote connection)
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
 
-# Specific version
-VERSION=v0.0.7 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-
-# Custom install path (default: /usr/local/bin)
-INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-```
-
-In `server-client` mode, the installer will:
-- generate a random admin token
-- write/update `~/.xbot/config.json`
-- configure CLI default remote connection
-- install a local service (Startup folder on Windows / systemd on Linux / launchd on macOS)
-
-
-```powershell
 # Windows (PowerShell)
 irm https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.ps1 | iex
-
-# Specific version
-.\install.ps1 -Version v0.0.7
-
-# Custom install path (default: ~/.local/bin)
-.\install.ps1 -InstallPath C:\Tools
 ```
 
-### Build from Source
+指定版本或安装路径：
 
 ```bash
-git clone https://github.com/CjiW/xbot.git && cd xbot
-make build          # Builds xbot (server + runner)
-make run            # Build and run server
+VERSION=v0.0.24 curl -fsSL ... | bash          # 指定版本
+INSTALL_PATH=~/.local/bin curl -fsSL ... | bash  # 自定义路径
 ```
 
-To build `xbot-cli` only:
+### 2. 两种安装模式
+
+安装器会让你选择：
+
+| | Standalone（单机） | Server（服务端） |
+|--|---------------------|------------------|
+| **架构** | CLI 直接运行 Agent | 后台 Server + CLI 远程连接 |
+| **适合** | 个人使用 | 团队使用、多渠道接入 |
+| **多渠道** | ❌ 仅 CLI | ✅ 飞书/QQ/Web 同时启用 |
+| **Web UI** | ❌ | ✅ 浏览器聊天界面 |
+| **LLM 共享** | 各自配置 | 管理员配一次，全团队用 |
+| **后台运行** | 关终端就停 | 系统服务，开机自启 |
+
+> **大多数团队应选 Server 模式。** 个人开发者想快速体验可选 Standalone。
+
+### 3. 首次运行 & 配置 API Key
+
+安装完成后直接运行：
 
 ```bash
-go build -o xbot-cli ./cmd/xbot-cli
+xbot-cli
 ```
 
-### Configure
+首次运行会自动弹出 **Setup 向导**，引导你配置：
+1. LLM 提供商（OpenAI / Anthropic）
+2. API Key（必填）
+3. API 地址（用 OpenAI 兼容服务时修改，如 DeepSeek、Qwen）
+4. 模型名称
+5. 沙箱模式和记忆模式
 
-On first run, `xbot-cli` launches a setup wizard. Or edit `~/.xbot/config.json`:
+> ⚠️ **Setup 向导中的输入框**：选中输入框后，需要先按 **Enter** 进入编辑模式，然后才能输入内容。输入完毕后再按 **Enter** 确认。
 
-**OpenAI (or any compatible API):**
+也可以随时用 `/setup` 命令重新配置。
+
+### 4. 直接编辑配置文件
+
+配置文件位于 `~/.xbot/config.json`，也可以手动编辑：
+
+**OpenAI 或兼容 API（DeepSeek、Qwen、Ollama 等）：**
 
 ```json
 {
@@ -79,13 +96,11 @@ On first run, `xbot-cli` launches a setup wizard. Or edit `~/.xbot/config.json`:
     "api_key": "sk-xxx",
     "base_url": "https://api.openai.com/v1",
     "model": "gpt-4o"
-  },
-  "sandbox": { "mode": "none" },
-  "agent": { "memory_provider": "flat" }
+  }
 }
 ```
 
-**Anthropic:**
+**Anthropic：**
 
 ```json
 {
@@ -93,259 +108,124 @@ On first run, `xbot-cli` launches a setup wizard. Or edit `~/.xbot/config.json`:
     "provider": "anthropic",
     "api_key": "sk-ant-xxx",
     "model": "claude-sonnet-4-20250514"
-  },
-  "sandbox": { "mode": "none" },
-  "agent": { "memory_provider": "flat" }
+  }
 }
 ```
 
-## Channels
+**使用 DeepSeek：**
 
-Each channel is a pluggable adapter on the message bus. Enable channels via environment variables.
-
-### CLI (TUI)
-
-The default channel — a full-featured terminal UI built with [Bubble Tea](https://github.com/charmbracelet/bubbletea). Designed for power users who live in the terminal.
-
-```bash
-xbot-cli                # Interactive TUI
-xbot-cli "your prompt"  # One-shot mode
-echo "prompt" | xbot-cli # Pipe mode
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "api_key": "your-deepseek-key",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat"
+  }
+}
 ```
 
-See [CLI Channel Docs](https://cjiw.github.io/xbot/channels/cli/) for full documentation.
+## 渠道配置
 
-### Feishu (Lark)
+每个渠道通过 `~/.xbot/config.json` 启用，无需环境变量。
 
-WebSocket-based. Supports interactive message cards, doc/wiki/bitable read-write, file upload, and thread replies.
+### 飞书
 
-| Variable | Description |
-|----------|-------------|
-| `FEISHU_ENABLED` | Set `true` to enable |
-| `FEISHU_APP_ID` | App ID |
-| `FEISHU_APP_SECRET` | App Secret |
-| `FEISHU_ENCRYPT_KEY` | Event encryption key |
-| `FEISHU_VERIFICATION_TOKEN` | Verification token |
-| `FEISHU_ALLOW_FROM` | Allowed `open_id` list (comma-separated) |
+在 [飞书开放平台](https://open.feishu.cn) 创建应用后：
 
-### QQ
+```json
+{
+  "feishu": {
+    "enabled": true,
+    "app_id": "cli_xxx",
+    "app_secret": "xxx"
+  }
+}
+```
 
-Native QQ WebSocket channel.
+最小必需的应用权限：`im:message`、`im:message.receive_v1`、`im:message:send_as_bot`、`contact:user.base:readonly`
 
-| Variable | Description |
-|----------|-------------|
-| `QQ_ENABLED` | Set `true` to enable |
-| `QQ_APP_ID` | App ID |
-| `QQ_CLIENT_SECRET` | Client Secret |
-| `QQ_ALLOW_FROM` | Allowed `openid` list (comma-separated) |
+详见 [飞书配置指南](https://cjiw.github.io/xbot/channels/feishu/)。
 
-### NapCat (OneBot 11)
+### QQ / NapCat / Web
 
-Compatible with [NapCat](https://github.com/NapNeko/NapCatQQ) and other OneBot 11 implementations.
+详见各渠道的配置指南：[Channels](https://cjiw.github.io/xbot/channels/)
 
-| Variable | Description |
-|----------|-------------|
-| `NAPCAT_ENABLED` | Set `true` to enable |
-| `NAPCAT_WS_URL` | WebSocket URL (no default) |
-| `NAPCAT_TOKEN` | Auth token |
-| `NAPCAT_ALLOW_FROM` | Allowed QQ numbers (comma-separated) |
+## 从源码构建
 
-### Web
+```bash
+git clone https://github.com/CjiW/xbot.git && cd xbot
+make build          # 构建 xbot (server + runner)
+make run            # 构建并运行 server
+```
 
-Browser-based chat with optional login, invite-only mode, and persona isolation.
+仅构建 CLI：
 
-| Variable | Description |
-|----------|-------------|
-| `WEB_ENABLED` | Set `true` to enable |
-| `WEB_HOST` | Bind address (default `0.0.0.0`) |
-| `WEB_PORT` | Port (default `8082`) |
-| `WEB_STATIC_DIR` | Frontend static files |
-| `WEB_UPLOAD_DIR` | File upload directory |
-| `WEB_PERSONA_ISOLATION` | Per-user persona isolation |
-| `WEB_INVITE_ONLY` | Invite-only mode |
+```bash
+go build -o xbot-cli ./cmd/xbot-cli
+```
 
-## Features
+## 功能概览
 
-### Tools
+### 内置工具
 
-Built-in tools the agent can call during a conversation:
+Agent 在对话中可以调用这些工具：
 
-- **Shell** — Execute commands in sandbox (Docker / remote / none; Windows PowerShell supported in none mode)
-- **File I/O** — Read, write, Glob, Grep with workspace isolation
-- **Web** — Fetch pages, Tavily web search
-- **Context** — Edit conversation context mid-session
-- **SubAgent** — Delegate tasks to specialized sub-agents
-- **Cron** — Schedule tasks (cron expressions, one-shot `at`)
-- **Download** — Download files from URLs
-- **Feishu MCP** — Feishu API tools (doc, wiki, bitable, drive)
-- **Runner** — Manage sandbox runner connections
+- **Shell** — 在沙箱中执行命令（支持 Docker / 远程 / 无沙箱）
+- **文件操作** — 读写文件、搜索内容、Glob 匹配
+- **网页** — 抓取网页内容、Tavily 搜索
+- **上下文** — 编辑对话上下文（裁剪/替换/删除）
+- **SubAgent** — 委派任务给专门化的子 Agent
+- **定时任务** — Cron 表达式或一次性定时
+- **下载** — 从 URL 下载文件
+- **飞书工具** — 操作飞书文档、多维表格、云盘
+- **Runner** — 管理远程沙箱连接
 
-### Memory
+### 记忆系统
 
-Two pluggable providers:
+| | Flat（默认） | Letta (MemGPT) |
+|--|-------------|----------------|
+| 核心记忆 | 内存块 | SQLite（始终在上下文中） |
+| 归档记忆 | Grep 搜索 | 向量搜索 |
+| 依赖 | 无 | 需要嵌入模型 |
 
-| | Flat (default) | Letta (MemGPT) |
-|--|----------------|----------------|
-| Core | In-memory blocks | SQLite (always in prompt) |
-| Archival | Grep-searchable blob | Vector search (chromem-go) |
-| Recall | Event history | FTS5 full-text search |
-| Dependencies | None | Embedding model required |
+### Skills & SubAgents
 
-Set via `MEMORY_PROVIDER=flat` or `MEMORY_PROVIDER=letta`. Letta also requires embedding config (`LLM_EMBEDDING_PROVIDER`, `LLM_EMBEDDING_MODEL`, etc.).
+- **Skills** — Markdown 定义的能力包，放在 `~/.xbot/skills/`
+- **SubAgents** — 基于角色的子 Agent（探索、代码审查等），自定义角色放 `~/.xbot/agents/`
 
-### Skills & Agents
+### MCP 协议
 
-- **Skills** — Markdown-defined capability packages loaded from `~/.xbot/skills/`. Two built-in: `skill-creator`, `agent-creator`.
-- **SubAgents** — Delegate tasks to role-based sub-agents (e.g. `explore`, `code-reviewer`). Custom roles in `~/.xbot/agents/`. Max nesting depth: 6 (`MAX_SUBAGENT_DEPTH`).
+支持全局和会话级 MCP Server，stdio 和 HTTP 传输。
 
-### MCP Protocol
-
-- **Global**: `.xbot/mcp.json` for always-on servers
-- **Session**: Dynamic loading at runtime via `ManageTools` tool
-- Supports stdio and HTTP transports, inactivity timeout, lazy cleanup
-
-### Other
-
-- **Multi-tenant** — Channel + chatID isolation
-- **Hot-reload prompts** — Go templates with channel-specific overrides
-- **KV-Cache optimized** — Context ordering maximizes LLM cache hits
-- **OAuth 2.0** — Built-in OAuth server for web channel authentication
-
-## Architecture
+## 架构
 
 ```
 ┌──────────┐     ┌──────────────┐     ┌────────┐     ┌──────────┐
-│  Feishu  │────▶│  Dispatcher  │────▶│ Agent  │────▶│   LLM    │
+│  飞书    │────▶│  Dispatcher  │────▶│ Agent  │────▶│   LLM    │
 │  QQ      │◀────│  (channel/)  │◀────│ (agent/)│◀────│ (llm/)   │
 │  NapCat  │     └──────────────┘     │        │     └──────────┘
 │  Web     │                          │        │
-│  CLI     │                          │        │────▶ Tools
+│  CLI     │                          │        │────▶ 工具
 └──────────┘                          │        │      (tools/)
                                       │        │
-                                      │        │────▶ Memory
+                                      │        │────▶ 记忆
                                       │        │      (memory/)
                                       └────────┘
 ```
 
-| Package | Role |
-|---------|------|
-| `bus/` | Inbound/outbound message channels |
-| `channel/` | Channel adapters and message dispatcher |
-| `agent/` | Agent loop (LLM → tools → response) |
-| `llm/` | LLM clients (OpenAI, Anthropic) |
-| `tools/` | Tool registry and implementations |
-| `memory/` | Memory providers (flat / letta) |
-| `config/` | Environment-based configuration |
-| `storage/` | SQLite persistence (sessions, memory, tenants) |
-| `session/` | Multi-tenant session management |
-| `cron/` | Scheduled task execution |
-| `oauth/` | OAuth 2.0 framework |
-| `crypto/` | AES-256-GCM encryption for API keys |
-| `logger/` | Structured logging with rotation |
-| `web/` | React 19 + Vite + TailwindCSS 4 frontend |
-| `agents/` | Embedded agent role definitions |
-| `cmd/` | Entrypoints (`xbot-cli`, sandbox runner) |
-| `prompt/` | Default system prompt template |
+## 文档
 
-## Configuration
+完整文档：[cjiw.github.io/xbot](https://cjiw.github.io/xbot/)
 
-All config via environment variables or `.env` file. See [`.env.example`](.env.example) for a complete template.
-
-### LLM
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
-| `LLM_BASE_URL` | `https://api.openai.com/v1` | API endpoint (openai default; optional override for anthropic) |
-| `LLM_API_KEY` | — | API key |
-| `LLM_MODEL` | `gpt-4o` | Model name |
-| `LLM_RETRY_ATTEMPTS` | `5` | Retry count on failure |
-| `LLM_RETRY_DELAY` | `1s` | Initial retry backoff |
-| `LLM_RETRY_MAX_DELAY` | `30s` | Max retry backoff |
-| `LLM_RETRY_TIMEOUT` | `120s` | Per-call timeout |
-
-### Agent
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENT_MAX_ITERATIONS` | `2000` | Max tool-call iterations per turn |
-| `AGENT_MAX_CONCURRENCY` | `3` | Max concurrent LLM calls |
-| `AGENT_MAX_CONTEXT_TOKENS` | `200000` | Max context window tokens |
-| `AGENT_ENABLE_AUTO_COMPRESS` | `true` | Auto context compression |
-| `AGENT_COMPRESSION_THRESHOLD` | `0.7` | Token ratio to trigger compression |
-| `AGENT_CONTEXT_MODE` | — | Custom context management mode |
-| `AGENT_PURGE_OLD_MESSAGES` | `false` | Purge old messages after compression |
-| `MAX_SUBAGENT_DEPTH` | `6` | SubAgent max nesting depth |
-
-### Sandbox
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SANDBOX_MODE` | `none` | `none` / `docker` / `remote` |
-| `SANDBOX_DOCKER_IMAGE` | `ubuntu:22.04` | Docker image for sandbox |
-| `SANDBOX_IDLE_TIMEOUT_MINUTES` | `30` | Idle timeout (0 = disabled) |
-| `SANDBOX_WS_PORT` | `8080` | Remote sandbox WebSocket port |
-| `SANDBOX_AUTH_TOKEN` | — | Runner authentication token |
-| `SANDBOX_PUBLIC_URL` | — | Public URL for runner connections |
-
-### Infrastructure
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WORK_DIR` | `.` | Working directory |
-| `PROMPT_FILE` | `prompt.md` | Custom prompt template |
-| `XBOT_ENCRYPTION_KEY` | — | AES-256-GCM key (base64, 32 bytes) |
-| `TAVILY_API_KEY` | — | Tavily web search API key |
-| `OAUTH_ENABLE` | `false` | Enable OAuth server |
-| `OAUTH_HOST` | `127.0.0.1` | OAuth bind address |
-| `OAUTH_PORT` | `8081` | OAuth port |
-| `OAUTH_BASE_URL` | — | OAuth callback base URL |
-| `SERVER_HOST` | `0.0.0.0` | HTTP server bind address |
-| `SERVER_PORT` | `8080` | HTTP server port |
-| `LOG_LEVEL` | `info` | Log level |
-| `LOG_FORMAT` | `json` | Log format |
-| `PPROF_ENABLE` | `false` | Enable pprof endpoint |
-
-## Deployment
-
-### Docker
-
-```bash
-docker run -d --name xbot --restart unless-stopped \
-  --security-opt seccomp=unconfined --cap-add SYS_ADMIN \
-  -v /opt/xbot/.xbot:/data/.xbot \
-  -e WORK_DIR=/data \
-  -e LLM_PROVIDER=openai \
-  -e LLM_BASE_URL=https://api.openai.com/v1 \
-  -e LLM_API_KEY=your_key \
-  -e LLM_MODEL=gpt-4o-mini \
-  xbot:latest
-```
-
-### Makefile
-
-```bash
-make dev    # Development mode
-make build  # Build binary
-make run    # Build and run
-make test   # Test with race detection
-make fmt    # Format code
-make lint   # golangci-lint
-make ci     # lint → build → test
-make clean  # Remove build artifacts
-```
-
-## Documentation
-
-Full documentation is available at [cjiw.github.io/xbot](https://cjiw.github.io/xbot/).
-
-- [Architecture](https://cjiw.github.io/xbot/architecture/) — System design and data flow
-- [Channels](https://cjiw.github.io/xbot/channels/) — Channel setup guides (CLI, Feishu, Web, QQ/NapCat)
-- [Guides](https://cjiw.github.io/xbot/guides/) — Sandbox, Permission Control, Memory, MCP, Skills & Agents
-- [Tools](https://cjiw.github.io/xbot/tools/) — Built-in tools reference
-- [Configuration](https://cjiw.github.io/xbot/configuration/) — Environment variables and config reference
-- [Design](https://cjiw.github.io/xbot/design/) — Design documents
-- [CHANGELOG](CHANGELOG.md) — Release history
+| 文档 | 说明 |
+|------|------|
+| [安装指南](https://cjiw.github.io/xbot/installation/) | 两种模式详解、Setup 向导 |
+| [渠道配置](https://cjiw.github.io/xbot/channels/) | 飞书 / QQ / NapCat / Web / CLI |
+| [配置参考](https://cjiw.github.io/xbot/configuration/) | config.json 完整字段说明 |
+| [沙箱指南](https://cjiw.github.io/xbot/guides/sandbox-docker/) | Docker / 远程沙箱配置 |
+| [架构](https://cjiw.github.io/xbot/architecture/) | 系统设计和数据流 |
+| [CHANGELOG](CHANGELOG.md) | 版本历史 |
 
 ## License
 

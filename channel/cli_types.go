@@ -549,6 +549,8 @@ type CLIChannelConfig struct {
 	ChatCreateFn         func(channelName, senderID, label string) (string, error)                                                      // 创建新 ChatRoom（返回 chatID）
 	SessionsList         func() []SessionPanelEntry                                                                                     // 列出所有 session（main + subagent）
 	GetActiveProgressFn  func(channelName, chatID string) *CLIProgressPayload                                                           // 获取目标 session 的活跃进度（session switch 恢复用）
+	ChannelConfigGetFn   func() (map[string]map[string]string, error)                                                                   // 获取频道配置（用于 /channel 面板）
+	ChannelConfigSetFn   func(channel string, values map[string]string) error                                                           // 保存频道配置（用于 /channel 面板）
 }
 
 type AgentPanelEntry struct {

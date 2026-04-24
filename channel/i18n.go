@@ -392,6 +392,31 @@ func localeZH() *UILocale {
 		SetupSchema: []SettingDefinition{
 
 			{
+				Key: "llm_provider", Label: "LLM 供应商", Description: "大模型服务提供商",
+				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
+				Options: []SettingOption{
+					{Label: "OpenAI", Value: "openai"},
+					{Label: "Anthropic", Value: "anthropic"},
+					{Label: "OpenRouter", Value: "openrouter"},
+					{Label: "Ollama", Value: "ollama"},
+					{Label: "Azure OpenAI", Value: "azure"},
+					{Label: "Google AI (Gemini)", Value: "google"},
+					{Label: "自定义 (OpenAI 兼容)", Value: "custom"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "模型服务的 API 密钥",
+				Type: SettingTypePassword, Category: "LLM",
+			},
+			{
+				Key: "llm_model", Label: "模型", Description: "使用的模型名称",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "Base URL", Description: "API 端点地址（自定义供应商时填写）",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "网络搜索服务密钥（可选，留空则无法使用 WebSearch）",
 				Type: SettingTypePassword, Category: "LLM",
 			},
@@ -741,6 +766,31 @@ func localeEN() *UILocale {
 		SetupSchema: []SettingDefinition{
 
 			{
+				Key: "llm_provider", Label: "LLM Provider", Description: "Large language model service provider",
+				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
+				Options: []SettingOption{
+					{Label: "OpenAI", Value: "openai"},
+					{Label: "Anthropic", Value: "anthropic"},
+					{Label: "OpenRouter", Value: "openrouter"},
+					{Label: "Ollama", Value: "ollama"},
+					{Label: "Azure OpenAI", Value: "azure"},
+					{Label: "Google AI (Gemini)", Value: "google"},
+					{Label: "Custom (OpenAI-compatible)", Value: "custom"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "API key for the model service",
+				Type: SettingTypePassword, Category: "LLM",
+			},
+			{
+				Key: "llm_model", Label: "Model", Description: "Model name to use",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "Base URL", Description: "API endpoint URL (for custom providers)",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web search service key (optional, leave empty to disable WebSearch)",
 				Type: SettingTypePassword, Category: "LLM",
 			},
@@ -1089,6 +1139,31 @@ func localeJA() *UILocale {
 		// --- J. Settings schema ---
 		SetupSchema: []SettingDefinition{
 
+			{
+				Key: "llm_provider", Label: "LLM プロバイダー", Description: "大規模言語モデルサービスプロバイダー",
+				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
+				Options: []SettingOption{
+					{Label: "OpenAI", Value: "openai"},
+					{Label: "Anthropic", Value: "anthropic"},
+					{Label: "OpenRouter", Value: "openrouter"},
+					{Label: "Ollama", Value: "ollama"},
+					{Label: "Azure OpenAI", Value: "azure"},
+					{Label: "Google AI (Gemini)", Value: "google"},
+					{Label: "カスタム (OpenAI 互換)", Value: "custom"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "モデルサービスのAPIキー",
+				Type: SettingTypePassword, Category: "LLM",
+			},
+			{
+				Key: "llm_model", Label: "モデル", Description: "使用するモデル名",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "Base URL", Description: "APIエンドポイントURL（カスタムプロバイダー用）",
+				Type: SettingTypeText, Category: "LLM",
+			},
 			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web検索サービスキー（オプション、空の場合 WebSearch は無効）",
 				Type: SettingTypePassword, Category: "LLM",

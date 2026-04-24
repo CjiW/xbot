@@ -597,6 +597,10 @@ func (b *LocalBackend) UpdateSubscription(id string, sub channel.Subscription) e
 		ThinkingMode:    existing.ThinkingMode,
 		IsDefault:       sub.Active,
 	}
+	// Never overwrite with a masked key from server RPC transport.
+	if strings.HasSuffix(dbSub.APIKey, "****") && len(dbSub.APIKey) <= 20 {
+		dbSub.APIKey = existing.APIKey
+	}
 	if err := svc.Update(dbSub); err != nil {
 		return err
 	}

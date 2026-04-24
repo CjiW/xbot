@@ -2307,13 +2307,18 @@ func (m *cliModel) editQuickSwitchEntry() {
 		if m.subscriptionMgr == nil {
 			return
 		}
+		apiKey := values["sub_api_key"]
+		// Never write back a masked API key — it would destroy the real key in storage.
+		if isMaskedAPIKey(apiKey) {
+			apiKey = target.APIKey
+		}
 		updated := &Subscription{
 			ID:       target.ID,
 			Name:     values["sub_name"],
 			Provider: values["sub_provider"],
 			Model:    values["sub_model"],
 			BaseURL:  values["sub_base_url"],
-			APIKey:   values["sub_api_key"],
+			APIKey:   apiKey,
 			Active:   target.Active,
 		}
 		if err := m.subscriptionMgr.Update(target.ID, updated); err != nil {

@@ -1236,12 +1236,19 @@ type InteractiveSessionInfo struct {
 	Background bool
 	Task       string // one-shot subagent task description (empty for interactive)
 	Preview    string // latest progress/last reply summary for panel display
+	ChatID     string // parent session's chatID (for cross-session listing)
 }
 
 // ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
+// If chatID is empty, all sessions for that channel are returned (for cross-session listing).
 func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSessionInfo {
 	a.cleanupExpiredSessions()
-	prefix := channel + ":" + chatID + "/"
+	var prefix string
+	if chatID != "" {
+		prefix = channel + ":" + chatID + "/"
+	} else {
+		prefix = channel + ":"
+	}
 	var results []InteractiveSessionInfo
 
 	a.interactiveSubAgents.Range(func(key, value any) bool {
@@ -1249,7 +1256,7 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 		if !ok {
 			return true
 		}
-		// Only return sessions belonging to this channel/chatID
+		// Only return sessions belonging to this channel (and chatID if specified)
 		if !strings.HasPrefix(keyStr, prefix) {
 			return true
 		}
@@ -1265,12 +1272,29 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 			Background: ia.background,
 			Task:       ia.task,
 			Preview:    summarizeInteractivePreviewLocked(ia),
+			ChatID:     parseInteractiveKeyChatID(keyStr),
 		}
 		ia.mu.Unlock()
 		results = append(results, info)
 		return true
 	})
 	return results
+}
+
+// parseInteractiveKeyChatID extracts the parent chatID from an interactive key.
+// Key format: "channel:chatID/roleName:instance"
+func parseInteractiveKeyChatID(key string) string {
+	// Find the "/" separator between chatID and roleName
+	slashIdx := strings.Index(key, "/")
+	if slashIdx <= 0 {
+		return ""
+	}
+	// Skip the "channel:" prefix to get chatID
+	colonIdx := strings.Index(key, ":")
+	if colonIdx < 0 || colonIdx >= slashIdx {
+		return ""
+	}
+	return key[colonIdx+1 : slashIdx]
 }
 
 // CountInteractiveSessions returns the number of active interactive sessions for the given channel/chatID.

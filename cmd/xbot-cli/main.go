@@ -937,7 +937,7 @@ func main() {
 				defer app.agentCacheMu.RUnlock()
 				return app.agentCacheCount
 			}
-			return app.backend.CountInteractiveSessions("cli", absWorkDir)
+			return app.backend.CountInteractiveSessions("cli", "")
 		},
 		AgentList: func() []channel.AgentPanelEntry {
 			if app.backend == nil {
@@ -948,7 +948,7 @@ func main() {
 				defer app.agentCacheMu.RUnlock()
 				return app.agentCacheList
 			}
-			sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
+			sessions := app.backend.ListInteractiveSessions("cli", "")
 			entries := make([]channel.AgentPanelEntry, len(sessions))
 			for i, s := range sessions {
 				entries[i] = channel.AgentPanelEntry{
@@ -987,6 +987,10 @@ func main() {
 			tenants, err := app.backend.ListTenants()
 			seen := make(map[string]bool) // dedup agent sessions by role:instance
 			if err == nil && len(tenants) > 0 {
+				// Fetch all interactive sessions across all chatIDs at once
+				// (empty chatID = list all for the channel).
+				allSessions := app.backend.ListInteractiveSessions("cli", "")
+
 				for _, t := range tenants {
 					// Agent tenants (channel="agent") are not real "main" sessions —
 					// they're internal bookkeeping for interactive SubAgent persistence.
@@ -1006,13 +1010,12 @@ func main() {
 						Label:   label,
 						Active:  isActive,
 					})
-					// SubAgent sessions: only list for the current workdir tenant.
-					// Other tenants' agent sessions are not relevant to this context.
-					if t.ChatID != absWorkDir {
-						continue
-					}
-					sessions := app.backend.ListInteractiveSessions(t.Channel, t.ChatID)
-					for _, s := range sessions {
+					// SubAgent sessions: list agents belonging to this tenant's chatID.
+					// With cross-session listing, agents from other sessions are also visible.
+					for _, s := range allSessions {
+						if s.ChatID != t.ChatID {
+							continue
+						}
 						agentKey := s.Role + ":" + s.Instance
 						if seen[agentKey] {
 							continue
@@ -1039,7 +1042,7 @@ func main() {
 					Label:   "主会话  You ↔ Agent",
 					Active:  true,
 				})
-				sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
+				sessions := app.backend.ListInteractiveSessions("cli", "")
 				for _, s := range sessions {
 					agentKey := s.Role + ":" + s.Instance
 					if seen[agentKey] {
@@ -1052,7 +1055,7 @@ func main() {
 						Channel:     "cli",
 						Role:        s.Role,
 						Instance:    s.Instance,
-						ParentID:    absWorkDir,
+						ParentID:    s.ChatID,
 						Running:     s.Running,
 						MessageHint: s.Preview,
 					})
@@ -1483,8 +1486,8 @@ func main() {
 					if app.backend == nil {
 						return
 					}
-					count := app.backend.CountInteractiveSessions("cli", remoteChatID)
-					sessions := app.backend.ListInteractiveSessions("cli", remoteChatID)
+					count := app.backend.CountInteractiveSessions("cli", "")
+					sessions := app.backend.ListInteractiveSessions("cli", "")
 					entries := make([]channel.AgentPanelEntry, len(sessions))
 					for i, s := range sessions {
 						entries[i] = channel.AgentPanelEntry{

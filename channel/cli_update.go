@@ -56,7 +56,8 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 					m.modelCount = len(m.channel.modelLister.ListModels())
 				}
 			} else {
-				m.refreshCachedModelName()
+				// Subscription has no model configured — clear stale model name.
+				m.cachedModelName = ""
 			}
 		}
 		// If we came from the settings panel, re-open it so the user can continue editing

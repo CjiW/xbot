@@ -169,7 +169,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 			}
 			return ExecSpec{
 				Command:   shell,
-				Args:      LoginShellArgs(shell, shellCmd),
+				Args:      []string{shell, "-l", "-c", shellCmd},
 				Shell:     false,
 				Dir:       dir,
 				Timeout:   timeout,
@@ -185,7 +185,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 			}
 			return ExecSpec{
 				Command: shell,
-				Args:    LoginShellArgs(shell, shellCmd),
+				Args:    []string{shell, "-l", "-c", shellCmd},
 				Shell:   false,
 				Dir:     remoteDir,
 				Timeout: timeout,

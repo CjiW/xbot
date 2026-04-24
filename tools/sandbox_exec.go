@@ -67,9 +67,12 @@ func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
 		return "", fmt.Errorf("failed to get shell: %w", err)
 	}
 
+	// RunInSandboxRawWithShell only runs in docker/remote sandbox (none returns early above).
+	// These sandboxes are always Linux — use hardcoded -l -c to avoid LoginShellArgs
+	// returning -Command when compiled on Windows.
 	spec := ExecSpec{
 		Command: shell,
-		Args:    LoginShellArgs(shell, shellCmd),
+		Args:    []string{shell, "-l", "-c", shellCmd},
 		Shell:   false,
 		Timeout: 30 * time.Second,
 		UserID:  userID,

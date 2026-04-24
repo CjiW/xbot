@@ -2076,6 +2076,11 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	// sandbox 模式下 CWD 已经是 sandbox 内路径，无 cd 时默认为 promptWorkDir
 	mc.CWD = tenantSession.GetCurrentDir()
 	if mc.CWD == "" {
+		log.WithFields(log.Fields{
+			"channel":      msg.Channel,
+			"chat_id":      msg.ChatID,
+			"fallback_dir": promptWorkDir,
+		}).Debug("Session CWD empty, using promptWorkDir fallback")
 		mc.CWD = promptWorkDir
 	}
 

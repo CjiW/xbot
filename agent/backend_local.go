@@ -201,6 +201,12 @@ func (b *LocalBackend) SetCWD(ch, chatID, dir string) error {
 	// the same filesystem. In docker/remote mode, host paths don't map to the
 	// sandbox environment.
 	if b.agent.sandboxMode != "none" {
+		log.WithFields(log.Fields{
+			"sandbox_mode": b.agent.sandboxMode,
+			"channel":      ch,
+			"chat_id":      chatID,
+			"dir":          dir,
+		}).Debug("SetCWD rejected: sandbox mode not 'none'")
 		return fmt.Errorf("CWD sync not supported in %s sandbox mode", b.agent.sandboxMode)
 	}
 	if b.agent.MultiSession() == nil {
@@ -211,6 +217,11 @@ func (b *LocalBackend) SetCWD(ch, chatID, dir string) error {
 		return err
 	}
 	sess.SetCurrentDir(dir)
+	log.WithFields(log.Fields{
+		"channel": ch,
+		"chat_id": chatID,
+		"dir":     dir,
+	}).Debug("SetCWD applied to session")
 	return nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/signal"
@@ -397,7 +398,25 @@ func isLocalServer(serverURL string) bool {
 		return false
 	}
 	h := strings.Split(u.Host, ":")[0] // strip port
-	return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == ""
+	// Fast path: standard loopback addresses
+	if h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "" {
+		return true
+	}
+	// Slow path: check if the host is a local network interface IP
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // newCLIApp 执行公共初始化：加载配置、创建 Backend。
@@ -1428,9 +1447,12 @@ func main() {
 		if isLocalServer(app.cfg.CLI.ServerURL) {
 			if cwd, err := os.Getwd(); err == nil {
 				if err := app.backend.SetCWD("cli", remoteChatID, cwd); err != nil {
-					log.WithError(err).Warn("Failed to sync CWD to server")
+					log.WithError(err).WithField("chat_id", remoteChatID).Warn("Failed to sync CWD to server")
 				} else {
-					log.WithField("cwd", cwd).Info("Synced CLI CWD to local server")
+					log.WithFields(log.Fields{
+						"cwd":     cwd,
+						"chat_id": remoteChatID,
+					}).Info("Synced CLI CWD to local server")
 				}
 			}
 		}

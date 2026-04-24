@@ -75,25 +75,6 @@ jobs:
           name: xbot-cli-linux-arm64
           path: dist/xbot-cli
 
-  build-darwin-amd64:
-    name: Build darwin/amd64
-    runs-on: macos-13
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Build
-        run: |
-          mkdir -p dist
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
-            -ldflags "-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -o dist/xbot-cli ./cmd/xbot-cli
-      - uses: actions/upload-artifact@v4
-        with:
-          name: xbot-cli-darwin-amd64
-          path: dist/xbot-cli
-
   build-darwin-arm64:
     name: Build darwin/arm64
     runs-on: macos-latest
@@ -155,7 +136,7 @@ jobs:
 
   release:
     name: Release
-    needs: [frontend, build-linux-amd64, build-linux-arm64, build-darwin-amd64, build-darwin-arm64, build-windows-amd64, build-windows-arm64]
+    needs: [frontend, build-linux-amd64, build-linux-arm64, build-darwin-arm64, build-windows-amd64, build-windows-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -176,7 +157,6 @@ jobs:
           files: |
             dist/xbot-cli-linux-amd64
             dist/xbot-cli-linux-arm64
-            dist/xbot-cli-darwin-amd64
             dist/xbot-cli-darwin-arm64
             dist/xbot-cli-windows-amd64.exe
             dist/xbot-cli-windows-arm64.exe

@@ -196,6 +196,8 @@ func (b fakeBackend) ListTenants() ([]agent.TenantInfo, error)                  
 func (b fakeBackend) GetHistory(_, _ string) ([]channel.HistoryMessage, error)           { return nil, nil }
 func (b fakeBackend) TrimHistory(_, _ string, _ time.Time) error                         { return nil }
 func (b fakeBackend) ResetTokenState()                                                   {}
+func (b fakeBackend) GetChannelConfigs() (map[string]map[string]string, error)           { return nil, nil }
+func (b fakeBackend) SetChannelConfig(channel string, values map[string]string) error    { return nil }
 func (b fakeBackend) Close() error                                                       { return nil }
 func (b fakeBackend) Run(_ context.Context) error                                        { return nil }
 func (b fakeBackend) GetLLMConcurrency(_ string) int                                     { return 0 }

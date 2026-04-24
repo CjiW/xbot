@@ -1063,6 +1063,18 @@ func main() {
 			}
 			return entries
 		},
+		ChannelConfigGetFn: func() (map[string]map[string]string, error) {
+			if app.backend == nil {
+				return nil, fmt.Errorf("agent not initialized")
+			}
+			return app.backend.GetChannelConfigs()
+		},
+		ChannelConfigSetFn: func(channelName string, values map[string]string) error {
+			if app.backend == nil {
+				return fmt.Errorf("agent not initialized")
+			}
+			return app.backend.SetChannelConfig(channelName, values)
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

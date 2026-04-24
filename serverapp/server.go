@@ -1026,6 +1026,29 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		backend.ResetTokenState()
 		return nil, nil
 
+	case "get_channel_config":
+		cfgs, err := backend.GetChannelConfigs()
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(cfgs)
+
+	case "set_channel_config":
+		var p struct {
+			Channel string            `json:"channel"`
+			Values  map[string]string `json:"values"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("access denied: channel config requires admin")
+		}
+		if err := backend.SetChannelConfig(p.Channel, p.Values); err != nil {
+			return nil, err
+		}
+		return nil, nil
+
 	default:
 		return nil, fmt.Errorf("unknown RPC method: %s", method)
 	}

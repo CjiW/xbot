@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -653,6 +654,99 @@ func (b *LocalBackend) ResetTokenState() {
 	// No-op: token state is per-tenant in DB (tenant_state table), not a
 	// global variable. Clearing it would require knowing the current tenant.
 	// /rewind already clears token state via TrimHistory → SetTokenState(0,0).
+}
+
+func (b *LocalBackend) GetChannelConfigs() (map[string]map[string]string, error) {
+	cfg := config.LoadFromFile(config.ConfigFilePath())
+	if cfg == nil {
+		return nil, fmt.Errorf("config not found")
+	}
+	result := make(map[string]map[string]string)
+	result["web"] = map[string]string{
+		"enable": strconv.FormatBool(cfg.Web.Enable),
+		"host":   cfg.Web.Host,
+		"port":   strconv.Itoa(cfg.Web.Port),
+	}
+	result["feishu"] = map[string]string{
+		"enabled":            strconv.FormatBool(cfg.Feishu.Enabled),
+		"app_id":             cfg.Feishu.AppID,
+		"app_secret":         cfg.Feishu.AppSecret,
+		"encrypt_key":        cfg.Feishu.EncryptKey,
+		"verification_token": cfg.Feishu.VerificationToken,
+		"domain":             cfg.Feishu.Domain,
+	}
+	result["qq"] = map[string]string{
+		"enabled":       strconv.FormatBool(cfg.QQ.Enabled),
+		"app_id":        cfg.QQ.AppID,
+		"client_secret": cfg.QQ.ClientSecret,
+	}
+	result["napcat"] = map[string]string{
+		"enabled": strconv.FormatBool(cfg.NapCat.Enabled),
+		"ws_url":  cfg.NapCat.WSUrl,
+		"token":   cfg.NapCat.Token,
+	}
+	return result, nil
+}
+
+func (b *LocalBackend) SetChannelConfig(channel string, values map[string]string) error {
+	cfg := config.LoadFromFile(config.ConfigFilePath())
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	switch channel {
+	case "web":
+		if v, ok := values["enable"]; ok {
+			cfg.Web.Enable, _ = strconv.ParseBool(v)
+		}
+		if v, ok := values["host"]; ok {
+			cfg.Web.Host = v
+		}
+		if v, ok := values["port"]; ok {
+			cfg.Web.Port, _ = strconv.Atoi(v)
+		}
+	case "feishu":
+		if v, ok := values["enabled"]; ok {
+			cfg.Feishu.Enabled, _ = strconv.ParseBool(v)
+		}
+		if v, ok := values["app_id"]; ok {
+			cfg.Feishu.AppID = v
+		}
+		if v, ok := values["app_secret"]; ok {
+			cfg.Feishu.AppSecret = v
+		}
+		if v, ok := values["encrypt_key"]; ok {
+			cfg.Feishu.EncryptKey = v
+		}
+		if v, ok := values["verification_token"]; ok {
+			cfg.Feishu.VerificationToken = v
+		}
+		if v, ok := values["domain"]; ok {
+			cfg.Feishu.Domain = v
+		}
+	case "qq":
+		if v, ok := values["enabled"]; ok {
+			cfg.QQ.Enabled, _ = strconv.ParseBool(v)
+		}
+		if v, ok := values["app_id"]; ok {
+			cfg.QQ.AppID = v
+		}
+		if v, ok := values["client_secret"]; ok {
+			cfg.QQ.ClientSecret = v
+		}
+	case "napcat":
+		if v, ok := values["enabled"]; ok {
+			cfg.NapCat.Enabled, _ = strconv.ParseBool(v)
+		}
+		if v, ok := values["ws_url"]; ok {
+			cfg.NapCat.WSUrl = v
+		}
+		if v, ok := values["token"]; ok {
+			cfg.NapCat.Token = v
+		}
+	default:
+		return fmt.Errorf("unknown channel: %s", channel)
+	}
+	return config.SaveToFile(config.ConfigFilePath(), cfg)
 }
 
 func (b *LocalBackend) Run(ctx context.Context) error {

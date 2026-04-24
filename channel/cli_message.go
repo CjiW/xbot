@@ -587,6 +587,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	case "/usage":
 		m.handleUsageCommand()
 
+	case "/channel":
+		m.openChannelPanel()
+
 	default:
 		// 🥚 彩蛋 #7: /version 三连检测
 		if command == "/version" {

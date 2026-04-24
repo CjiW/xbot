@@ -266,6 +266,16 @@ type AgentBackend interface {
 	// large token counts and triggering an immediate incorrect compression.
 	ResetTokenState()
 
+	// --- Channel configuration (remote-mode friendly) ---
+
+	// GetChannelConfigs returns channel configurations as flat maps.
+	// Keys: "web", "feishu", "qq", "napcat".
+	GetChannelConfigs() (map[string]map[string]string, error)
+
+	// SetChannelConfig updates a channel's configuration in config.json.
+	// channel: "web", "feishu", "qq", or "napcat".
+	SetChannelConfig(channel string, values map[string]string) error
+
 	// Close shuts down the agent, releasing all resources.
 	Close() error
 

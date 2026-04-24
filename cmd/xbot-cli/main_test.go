@@ -544,8 +544,14 @@ func (b *fakeAgentBackend) GetHistory(string, string) ([]channel.HistoryMessage,
 }
 func (b *fakeAgentBackend) TrimHistory(string, string, time.Time) error { return nil }
 func (b *fakeAgentBackend) ResetTokenState()                            {}
-func (b *fakeAgentBackend) Close() error                                { return nil }
-func (b *fakeAgentBackend) Run(context.Context) error                   { return nil }
+func (b *fakeAgentBackend) GetChannelConfigs() (map[string]map[string]string, error) {
+	return nil, nil
+}
+func (b *fakeAgentBackend) SetChannelConfig(channel string, values map[string]string) error {
+	return nil
+}
+func (b *fakeAgentBackend) Close() error              { return nil }
+func (b *fakeAgentBackend) Run(context.Context) error { return nil }
 
 func TestCLISettingHandlersCoversAllRuntimeKeys(t *testing.T) {
 	missing := missingCLIHandlerKeys()

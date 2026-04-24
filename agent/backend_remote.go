@@ -1311,6 +1311,28 @@ func (b *RemoteBackend) ResetTokenState() {
 	}
 }
 
+func (b *RemoteBackend) GetChannelConfigs() (map[string]map[string]string, error) {
+	raw, err := b.callRPC("get_channel_config", nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var result map[string]map[string]string
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal channel configs: %w", err)
+	}
+	return result, nil
+}
+
+func (b *RemoteBackend) SetChannelConfig(channel string, values map[string]string) error {
+	return b.callRPCVoid("set_channel_config", map[string]any{
+		"channel": channel,
+		"values":  values,
+	})
+}
+
 func (b *RemoteBackend) Run(ctx context.Context) error {
 	<-ctx.Done()
 	return ctx.Err()
@@ -1345,6 +1367,7 @@ func RPCMethodList() []string {
 		"update_subscription", "set_subscription_model",
 		"get_history", "trim_history",
 		"reset_token_state",
+		"get_channel_config", "set_channel_config",
 		"is_processing", "get_active_progress",
 		"rewind_checkpoints",
 	}

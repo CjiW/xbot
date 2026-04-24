@@ -463,10 +463,10 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 	case splashDoneMsg:
 		// §14 启动画面结束确认
 		m.splashDone = true
-		if m.typing && m.progress != nil {
+		if m.typing && m.progress != nil && !m.fastTickActive {
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
-		} else {
+		} else if !m.typing || m.progress == nil {
 			cmds = append(cmds, idleTickCmd())
 		}
 

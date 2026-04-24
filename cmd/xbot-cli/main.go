@@ -329,7 +329,12 @@ func updateActiveSubscription(backend agent.AgentBackend, cfg *config.Config, va
 		sub.Provider = strings.TrimSpace(v)
 	}
 	if v, ok := values["llm_api_key"]; ok && strings.TrimSpace(v) != "" {
-		sub.APIKey = strings.TrimSpace(v)
+		key := strings.TrimSpace(v)
+		// Never overwrite with a masked key (e.g. "sk-a****") from server RPC.
+		// This would destroy the real API key in storage.
+		if !strings.HasSuffix(key, "****") || len(key) > 20 {
+			sub.APIKey = key
+		}
 	}
 	if v, ok := values["llm_model"]; ok && strings.TrimSpace(v) != "" {
 		sub.Model = strings.TrimSpace(v)
@@ -1879,7 +1884,10 @@ func (m *configSubscriptionManager) Update(id string, sub *channel.Subscription)
 			m.cfg.Subscriptions[i].Name = sub.Name
 			m.cfg.Subscriptions[i].Provider = sub.Provider
 			m.cfg.Subscriptions[i].BaseURL = sub.BaseURL
-			m.cfg.Subscriptions[i].APIKey = sub.APIKey
+			// Never overwrite with a masked API key from server RPC.
+			if !strings.HasSuffix(sub.APIKey, "****") || len(sub.APIKey) > 20 {
+				m.cfg.Subscriptions[i].APIKey = sub.APIKey
+			}
 			m.cfg.Subscriptions[i].Model = sub.Model
 			// If modifying active subscription, sync cfg.LLM
 			if m.cfg.Subscriptions[i].Active {

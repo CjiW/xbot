@@ -86,6 +86,13 @@ var cliSubscriptionScopedSettingKeys = map[string]struct{}{
 	"thinking_mode":     {},
 }
 
+// isMaskedAPIKey detects API keys that were masked by the server for safe transport.
+// Server masks keys as "<prefix>****" (e.g. "sk-a****"). Writing masked keys
+// back to storage would destroy the real key — this function prevents that.
+func isMaskedAPIKey(key string) bool {
+	return strings.HasSuffix(key, "****") && len(key) <= 20
+}
+
 func isUserScopedSettingKey(key string) bool {
 	_, ok := cliUserScopedSettingKeys[key]
 	return ok

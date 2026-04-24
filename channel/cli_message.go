@@ -372,14 +372,11 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 				// Get current values: config is the single source of truth for LLM settings.
 				// Only overlay non-LLM settings from SettingsService (e.g. theme, language).
 				currentValues := m.mergeCLISettingsValues()
-				// Inject model list into combo options
-				// ALL model dropdowns (llm_model + tiers) use ListAllModels() which includes
-				// default LLM models + all subscription Model fields, so newly added
-				// subscriptions are always visible without restart.
+				// Inject model list into combo options for tier model selectors.
 				if m.channel.modelLister != nil {
 					allModels := m.channel.modelLister.ListAllModels()
 					for i, s := range schema {
-						if (s.Key == "llm_model" || s.Key == "vanguard_model" || s.Key == "balance_model" || s.Key == "swift_model") && len(allModels) > 0 {
+						if (s.Key == "vanguard_model" || s.Key == "balance_model" || s.Key == "swift_model") && len(allModels) > 0 {
 							opts := make([]SettingOption, len(allModels))
 							for j, ml := range allModels {
 								opts[j] = SettingOption{Label: ml, Value: ml}

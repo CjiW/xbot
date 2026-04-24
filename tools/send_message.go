@@ -96,7 +96,14 @@ func (t *SendMessageTool) Execute(ctx *ToolContext, raw string) (*ToolResult, er
 
 // sendToAgent sends a message to a single agent via Dispatcher.
 // The agent must have been registered as an AgentChannel (by SubAgent or CreateChat).
+// If the caller is in a group, the target must also be a member of the same group.
 func (t *SendMessageTool) sendToAgent(ctx *ToolContext, addr, message string) (*ToolResult, error) {
+	// Group membership check: if caller is in a group, target must be a fellow member.
+	if ctx.GroupID != "" {
+		if !isInGroup(ctx, addr) {
+			return nil, fmt.Errorf("cross-group messaging not allowed: you are in group %s but %s is not a member", ctx.GroupID, addr)
+		}
+	}
 	if ctx.MessageSender == nil {
 		return nil, fmt.Errorf("message sending not available in this context")
 	}
@@ -110,86 +117,74 @@ func (t *SendMessageTool) sendToAgent(ctx *ToolContext, addr, message string) (*
 	return NewResult(result), nil
 }
 
-// sendToGroup handles the meeting model for group chats.
-// Moderator messages without @mentions just add to history.
-// @mentioned agents receive the full discussion history + the question.
+// isInGroup checks if addr is a member of the caller's group.
+func isInGroup(ctx *ToolContext, addr string) bool {
+	for _, m := range ctx.GroupMembers {
+		if m == addr {
+			return true
+		}
+	}
+	return false
+}
+
+// sendToGroup handles virtual group messaging.
+// The group has NO message store — it only defines a membership boundary.
+// Messages are sent directly to agent members (each agent has its own session).
+// sendToGroup handles virtual group messaging.
+// The group has NO message store — it only defines a membership boundary.
+// Messages are sent directly to agent members (each agent has its own session).
+// @mentioned agents receive the message prefixed with group context.
+// Without @mentions, the message is broadcast to all members.
 func (t *SendMessageTool) sendToGroup(ctx *ToolContext, groupName, message string) (*ToolResult, error) {
-	gs, ok := GetGroupState(groupName)
+	gm, ok := GetGroup(groupName)
 	if !ok {
 		return nil, fmt.Errorf("group %q not found (create it with CreateChat first)", groupName)
 	}
-	if gs.Closed {
+	if gm.Closed {
 		return nil, fmt.Errorf("group %q is closed", groupName)
 	}
 
-	// Identify sender as the moderator
-	sender := "moderator"
-
-	// Parse @mentions from the message
-	mentions := parseMentions(message)
-
-	// Always add moderator message to history
-	gs.AddMessage(sender, message, false)
-
-	// No @mentions → just record, don't trigger anyone
-	if len(mentions) == 0 {
-		historyLen := len(gs.Messages)
-		return NewResult(fmt.Sprintf("Message added to group %s discussion (history: %d messages). No agents @mentioned, so no one was triggered.", groupName, historyLen)), nil
-	}
-
-	// Trigger each @mentioned agent sequentially via Dispatcher
 	if ctx.MessageSender == nil {
 		return nil, fmt.Errorf("message sending not available in this context")
 	}
 
+	mentions := parseMentions(message)
+
+	// No @mentions → broadcast to all members
+	if len(mentions) == 0 {
+		var responses []string
+		for _, memberAddr := range gm.Members {
+			prefixedMsg := fmt.Sprintf("[group:%s] %s", groupName, message)
+			result, err := ctx.MessageSender.SendMessage(memberAddr, "", prefixedMsg)
+			if err != nil {
+				responses = append(responses, fmt.Sprintf("[WARN] %s: %v", memberAddr, err))
+			} else {
+				responses = append(responses, fmt.Sprintf("[→ %s]: %s", memberAddr, truncateMsg(result, 200)))
+			}
+		}
+		return NewResult(fmt.Sprintf("Broadcast to group %s (%d members):\n%s",
+			groupName, len(gm.Members), strings.Join(responses, "\n"))), nil
+	}
+
+	// @mentioned agents: send directly with group context prefix.
+	// Each agent already has its own session for full context.
 	var responses []string
 	for _, agentAddr := range mentions {
-		if !gs.IsMember(agentAddr) {
-			responses = append(responses, fmt.Sprintf("[ERROR] %s is not a member of this group", agentAddr))
+		if !gm.IsMember(agentAddr) {
+			responses = append(responses, fmt.Sprintf("[REJECT] %s is not a member of group %s", agentAddr, groupName))
 			continue
 		}
 
-		// Build the prompt with full discussion history
-		history := gs.GetHistory()
-		prompt := fmt.Sprintf(`You are participating in a group discussion. Here is the full conversation so far:
-
-%s
-
----
-
-The moderator just @mentioned you. Please respond to their message. Stay focused on the topic and provide your analysis/opinion.`, history)
-
-		// Send via Dispatcher (AgentChannel)
-		result, err := ctx.MessageSender.SendMessage(agentAddr, "", prompt)
+		prefixedMsg := fmt.Sprintf("[group:%s] %s", groupName, message)
+		result, err := ctx.MessageSender.SendMessage(agentAddr, "", prefixedMsg)
 		if err != nil {
 			responses = append(responses, fmt.Sprintf("[ERROR] %s: %v", agentAddr, err))
 			continue
 		}
-
-		// Add agent's response to group history
-		gs.AddMessage(agentAddr, result, false)
-		responses = append(responses, fmt.Sprintf("[%s]:\n%s", agentAddr, result))
+		responses = append(responses, fmt.Sprintf("[%s]:\n%s", agentAddr, truncateMsg(result, 500)))
 	}
 
-	// Check round limit
-	gs.mu.Lock()
-	gs.Round++
-	round := gs.Round
-	maxRounds := gs.MaxRounds
-	gs.mu.Unlock()
-
-	if maxRounds > 0 && round >= maxRounds {
-		gs.Close(fmt.Sprintf("max rounds (%d) reached", maxRounds))
-	}
-
-	summary := fmt.Sprintf("Group %s — round %d/%d\nModerator: %s\n\n%s",
-		groupName, round, maxRounds, message, strings.Join(responses, "\n\n---\n\n"))
-
-	if gs.Closed {
-		summary += "\n\n[Group closed: max rounds reached]"
-	}
-
-	return NewResult(summary), nil
+	return NewResult(strings.Join(responses, "\n\n---\n\n")), nil
 }
 
 // parseMentions extracts @agent:role/instance addresses from a message.
@@ -274,4 +269,12 @@ func parseAddress(addr string) (channelName, chatID string) {
 	}
 	// Agent or group: the whole address is the channel name
 	return addr, ""
+}
+
+// truncateMsg limits a string to n chars with "..." suffix.
+func truncateMsg(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

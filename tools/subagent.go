@@ -245,6 +245,12 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			agentChName := "agent:" + params.Role + "/" + params.Instance
 			if ctx.RegisterAgentChannel != nil {
 				sendFn := func(sendCtx context.Context, task string) (string, error) {
+					// Replace ctx.Ctx with the AgentChannel's long-lived context.
+					// The original ctx.Ctx is cancelled when the tool returns,
+					// but sendFn may be called much later via SendMessage.
+					oldCtx := ctx.Ctx
+					ctx.Ctx = sendCtx
+					defer func() { ctx.Ctx = oldCtx }()
 					return im.SendInteractive(ctx, task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, effectiveModel)
 				}
 				if regErr := ctx.RegisterAgentChannel(agentChName, sendFn); regErr != nil {

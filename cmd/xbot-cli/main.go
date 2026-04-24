@@ -125,8 +125,7 @@ func saveCLIConfig(cfg *config.Config) error {
 
 func isCLISubscriptionSettingKey(key string) bool {
 	switch key {
-	case "llm_provider", "llm_api_key", "llm_model", "llm_base_url",
-		"max_output_tokens", "thinking_mode":
+	case "max_output_tokens", "thinking_mode":
 		return true
 	default:
 		return false
@@ -791,29 +790,23 @@ func main() {
 			if app.backend == nil {
 				return
 			}
-			_, llmChanged := values["llm_provider"]
-			_, keyChanged := values["llm_api_key"]
-			_, modelChanged := values["llm_model"]
-			_, urlChanged := values["llm_base_url"]
 			_, vanguardChanged := values["vanguard_model"]
 			_, balanceChanged := values["balance_model"]
 			_, swiftChanged := values["swift_model"]
 			_, maxOutputChanged := values["max_output_tokens"]
 			_, thinkingChanged := values["thinking_mode"]
 
-			llmFieldChanged := llmChanged || keyChanged || modelChanged || urlChanged || maxOutputChanged || thinkingChanged
-
-			// ── LLM fields: update via subscription manager (single source of truth) ──
-			if llmFieldChanged {
+			// ── Subscription-scoped fields: update via subscription manager ──
+			if maxOutputChanged || thinkingChanged {
 				if err := updateActiveSubscription(app.backend, app.cfg, values); err != nil {
 					log.Warnf("Failed to update active subscription: %v", err)
 				}
 			}
 
-			// ── Non-LLM settings: persist and apply runtime ──
+			// ── Non-subscription settings: persist and apply runtime ──
 			for k, v := range values {
 				if isCLISubscriptionSettingKey(k) {
-					continue // LLM fields handled above
+					continue // subscription fields handled above
 				}
 				_ = app.backend.SetSetting("cli", "cli_user", k, v)
 			}
@@ -841,7 +834,7 @@ func main() {
 						_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 					}
 				}
-				if llmFieldChanged || maxOutputChanged || thinkingChanged {
+				if maxOutputChanged || thinkingChanged {
 					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 						app.llmClient = newClient
 						app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
@@ -1068,18 +1061,16 @@ func main() {
 				}
 			}
 			// Append group chats
-			for _, g := range tools.ListGroupSummaries() {
+			for _, g := range tools.ListGroups() {
 				status := ""
 				if g.Closed {
 					status = " [closed]"
-				} else {
-					status = fmt.Sprintf(" [round %d/%d]", g.Round, g.MaxRounds)
 				}
 				entries = append(entries, channel.SessionPanelEntry{
 					ID:          g.Name,
 					Type:        "group",
 					Label:       "💬 " + g.Name + status,
-					MessageHint: fmt.Sprintf("%d members, %d messages", len(g.Members), g.MsgCount),
+					MessageHint: fmt.Sprintf("%d members", len(g.Members)),
 				})
 			}
 			return entries

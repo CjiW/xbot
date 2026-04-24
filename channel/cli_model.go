@@ -809,9 +809,11 @@ func (m *cliModel) refreshCachedModelName() {
 	if m.channel == nil {
 		return
 	}
-	// Single source of truth: read from cfg.LLM.Model (derived from active subscription)
-	if m.channel.config.GetCurrentValues != nil {
-		m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
+	// Single source of truth: read from active subscription (not from settings values)
+	if m.channel.subscriptionMgr != nil {
+		if sub, err := m.channel.subscriptionMgr.GetDefault(m.senderID); err == nil && sub != nil {
+			m.cachedModelName = sub.Model
+		}
 	}
 	// Cache model count for View() (avoids ListAllModels RPC per frame)
 	if m.channel.modelLister != nil {

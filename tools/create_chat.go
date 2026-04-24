@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"xbot/llm"
@@ -137,17 +138,20 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 		return nil, fmt.Errorf("group requires at least 2 members, got %d", len(params.Members))
 	}
 
-	maxRounds := params.MaxRounds
-	if maxRounds <= 0 {
-		maxRounds = 10
-	}
-
 	// Generate unique group ID
 	groupID := fmt.Sprintf("g%d", groupCounter.Add(1))
 	groupName := "group:" + groupID
 
+	// Set group context on the moderator's ToolContext so spawned agents inherit it
+	if ctx.Metadata == nil {
+		ctx.Metadata = make(map[string]string)
+	}
+	ctx.Metadata["group_id"] = groupName
+	ctx.Metadata["group_members"] = strings.Join(params.Members, ",")
+	ctx.GroupID = groupName
+	ctx.GroupMembers = params.Members
+
 	// Pre-spawn all member agents so their AgentChannels are registered in Dispatcher.
-	// Without this, @mentions in SendMessage would fail with "unknown channel".
 	im, _ := ctx.Manager.(InteractiveSubAgentManager)
 	var spawnWarnings []string
 	for _, memberAddr := range params.Members {
@@ -159,7 +163,7 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] interactive SubAgent not supported, %s not spawned", memberAddr))
 			continue
 		}
-		role, instance := parseAgentAddr(memberAddr[6:]) // strip "agent:" prefix
+		role, instance := parseAgentAddr(memberAddr[6:])
 		if role == "" {
 			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] invalid agent address %q, skipping", memberAddr))
 			continue
@@ -173,13 +177,18 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 		task := "Ready. Waiting for group discussion."
 		_, err := im.SpawnInteractive(ctx, task, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, effectiveModel)
 		if err != nil {
-			// Session may already exist (not an error for groups)
 			spawnWarnings = append(spawnWarnings, fmt.Sprintf("[WARN] spawn %s: %v", memberAddr, err))
 			continue
 		}
-		// Register AgentChannel in Dispatcher
 		if ctx.RegisterAgentChannel != nil {
 			sendFn := func(sendCtx context.Context, msg string) (string, error) {
+				// Replace ctx.Ctx with the AgentChannel's long-lived context.
+				// The original ctx.Ctx (from tool execution) is cancelled when
+				// the tool returns, but sendFn may be called much later via
+				// SendMessage → Dispatcher → AgentChannel.
+				oldCtx := ctx.Ctx
+				ctx.Ctx = sendCtx
+				defer func() { ctx.Ctx = oldCtx }()
 				return im.SendInteractive(ctx, msg, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, effectiveModel)
 			}
 			if regErr := ctx.RegisterAgentChannel(memberAddr, sendFn); regErr != nil {
@@ -188,15 +197,15 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 		}
 	}
 
-	// Create group state
-	CreateGroupState(groupID, "moderator", params.Members, maxRounds)
+	// Create group membership (virtual — no message store, agents use their own sessions)
+	CreateGroup(groupID, params.Members)
 
 	result := fmt.Sprintf(
-		"Created group chat: %s\nMembers: %v\nMax rounds: %d\n\n"+
+		"Created group chat: %s\nMembers: %v\n\n"+
 			"Usage:\n"+
-			"- SendMessage(to=\"%s\", message=\"...\") → add to discussion (no agent triggered)\n"+
-			"- SendMessage(to=\"%s\", message=\"@agent:role/instance ...\") → trigger specific agent",
-		groupName, params.Members, maxRounds, groupName, groupName)
+			"- SendMessage(to=\"%s\", message=\"...\") → broadcast to all members\n"+
+			"- SendMessage(to=\"%s\", message=\"@agent:role/instance ...\") → trigger specific member",
+		groupName, params.Members, groupName, groupName)
 
 	if len(spawnWarnings) > 0 {
 		result += "\n\n" + fmt.Sprintf("Spawn warnings (%d):\n", len(spawnWarnings))

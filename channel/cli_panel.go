@@ -55,24 +55,9 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 		if _, ok := m.panelValues[def.Key]; !ok && def.DefaultValue != "" {
 			m.panelValues[def.Key] = def.DefaultValue
 		}
-		// Inject model list as combo options for llm_model.
-		// Use ListAllModels so models from ALL subscriptions are visible,
-		// not just the current default LLM. This allows the user to switch
-		// to a model on a different subscription (e.g. glm-5.1) directly.
-		if def.Key == "llm_model" && m.channel.modelLister != nil && len(def.Options) == 0 {
-			models := m.channel.modelLister.ListAllModels()
-			if len(models) > 0 {
-				opts := make([]SettingOption, len(models))
-				for j, mdl := range models {
-					opts[j] = SettingOption{Label: mdl, Value: mdl}
-				}
-				def.Options = opts
-				def.Type = SettingTypeCombo
-			}
-		}
 		// Inject cross-subscription model list for tier model selectors.
 		if (def.Key == "vanguard_model" || def.Key == "balance_model" || def.Key == "swift_model") && m.channel.modelLister != nil && len(def.Options) == 0 {
-			models := m.channel.modelLister.ListAllModels()
+			models := m.channel.modelLister.ListModels()
 			if len(models) > 0 {
 				opts := make([]SettingOption, len(models))
 				for j, mdl := range models {
@@ -2295,13 +2280,13 @@ func (m *cliModel) editQuickSwitchEntry() {
 	editSchema := []SettingDefinition{
 		{Key: "sub_name", Label: "Name", Description: "Display name for this subscription", Type: SettingTypeText, DefaultValue: target.Name},
 		{Key: "sub_provider", Label: "Provider", Description: "LLM provider (openai, anthropic, deepseek, etc.)", Type: SettingTypeText, DefaultValue: target.Provider},
-		{Key: "sub_model", Label: "Model", Description: "Model name", Type: SettingTypeText, DefaultValue: target.Model},
+		{Key: "sub_model", Label: "Model", Description: "Model name", Type: SettingTypeCombo, DefaultValue: target.Model},
 		{Key: "sub_base_url", Label: "Base URL", Description: "API base URL (leave empty for provider default)", Type: SettingTypeText, DefaultValue: target.BaseURL},
 		{Key: "sub_api_key", Label: "API Key", Description: "API key (leave empty to use global key)", Type: SettingTypePassword, DefaultValue: target.APIKey},
 	}
 	// Inject model list into combo for model field
 	if m.channel.modelLister != nil {
-		models := m.channel.modelLister.ListModels()
+		models := m.channel.modelLister.ListAllModels()
 		if len(models) > 0 {
 			opts := make([]SettingOption, len(models))
 			for j, mdl := range models {

@@ -1,120 +1,60 @@
 package tools
 
-import (
-	"fmt"
-	"sync"
-	"time"
-)
+import "sync"
 
-// GroupState manages a meeting-style group chat.
-// The moderator controls who speaks via @mentions.
-// All members can see the full discussion history, but only @mentioned agents respond.
-type GroupState struct {
-	ID        string
-	Moderator string   // creator address (e.g., "main")
-	Members   []string // all member addresses (e.g., ["agent:reviewer/r1", "agent:tester/t1"])
-	MaxRounds int
-	Round     int
-	Closed    bool
-	Messages  []GroupMessage
-	mu        sync.Mutex
+// GroupMembership defines a virtual group chat — it's just a set of agent members.
+// There is NO separate message store. Each agent already has its own session
+// with full message history. The group only constrains which agents can
+// communicate: agents in the same group can SendMessage directly to each other.
+//
+// This is a deliberate simplification over the old GroupState model which
+// duplicated agent session functionality (message store, history formatting).
+type GroupMembership struct {
+	ID      string   // e.g. "g1"
+	Name    string   // e.g. "group:g1"
+	Members []string // agent addresses e.g. ["agent:reviewer/r1", "agent:tester/t1"]
+	Closed  bool
 }
 
-// GroupMessage is a single message in the group discussion.
-type GroupMessage struct {
-	Sender    string    // who sent this message
-	Content   string    // message content
-	Timestamp time.Time // when it was sent
-	IsSystem  bool      // true for system messages (join, close, etc.)
-}
+// groupStore holds active group memberships.
+var groupStore sync.Map // "group:<id>" -> *GroupMembership
 
-// groupStore holds active group chats.
-var groupStore sync.Map // "group:<id>" -> *GroupState
-
-// CreateGroupState creates a new group and stores it.
-func CreateGroupState(id, moderator string, members []string, maxRounds int) *GroupState {
-	gs := &GroupState{
-		ID:        id,
-		Moderator: moderator,
-		Members:   members,
-		MaxRounds: maxRounds,
-		Messages: []GroupMessage{
-			{
-				Sender:    "system",
-				Content:   fmt.Sprintf("Group created. Moderator: %s, Members: %v", moderator, members),
-				Timestamp: time.Now(),
-				IsSystem:  true,
-			},
-		},
+// CreateGroup creates a new group membership and stores it.
+func CreateGroup(id string, members []string) *GroupMembership {
+	gm := &GroupMembership{
+		ID:      id,
+		Name:    "group:" + id,
+		Members: members,
 	}
-	groupStore.Store("group:"+id, gs)
-	return gs
+	groupStore.Store(gm.Name, gm)
+	return gm
 }
 
-// GetGroupState retrieves a group by name (e.g., "group:g1").
-func GetGroupState(name string) (*GroupState, bool) {
+// GetGroup retrieves a group membership by name (e.g., "group:g1").
+func GetGroup(name string) (*GroupMembership, bool) {
 	v, ok := groupStore.Load(name)
 	if !ok {
 		return nil, false
 	}
-	gs, ok := v.(*GroupState)
+	gm, ok := v.(*GroupMembership)
 	if !ok {
 		return nil, false
 	}
-	return gs, true
+	return gm, true
 }
 
-// DeleteGroupState removes a group from the store.
-func DeleteGroupState(name string) {
+// DeleteGroup removes a group from the store.
+func DeleteGroup(name string) {
 	groupStore.Delete(name)
 }
 
-// AddMessage adds a message to the group history. Returns the round number.
-func (g *GroupState) AddMessage(sender, content string, isSystem bool) int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	msg := GroupMessage{
-		Sender:    sender,
-		Content:   content,
-		Timestamp: time.Now(),
-		IsSystem:  isSystem,
-	}
-	g.Messages = append(g.Messages, msg)
-	return len(g.Messages)
-}
-
-// GetHistory returns the formatted discussion history for agent context.
-func (g *GroupState) GetHistory() string {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	result := fmt.Sprintf("=== Group Discussion: %s ===\n", g.ID)
-	result += fmt.Sprintf("Members: %v\n\n", g.Members)
-	for _, msg := range g.Messages {
-		if msg.IsSystem {
-			result += fmt.Sprintf("[System] %s\n", msg.Content)
-		} else {
-			result += fmt.Sprintf("[%s]: %s\n", msg.Sender, msg.Content)
-		}
-	}
-	result += "\n=== End of History ==="
-	return result
-}
-
 // Close marks the group as closed.
-func (g *GroupState) Close(reason string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+func (g *GroupMembership) Close() {
 	g.Closed = true
-	g.Messages = append(g.Messages, GroupMessage{
-		Sender:    "system",
-		Content:   fmt.Sprintf("Group closed: %s", reason),
-		Timestamp: time.Now(),
-		IsSystem:  true,
-	})
 }
 
-// IsMember checks if an address is a group member.
-func (g *GroupState) IsMember(addr string) bool {
+// IsMember checks if an address is in this group.
+func (g *GroupMembership) IsMember(addr string) bool {
 	for _, m := range g.Members {
 		if m == addr {
 			return true
@@ -123,37 +63,47 @@ func (g *GroupState) IsMember(addr string) bool {
 	return false
 }
 
-// GroupSummary is a lightweight snapshot of a group chat for listing.
-type GroupSummary struct {
-	ID        string
-	Name      string // e.g. "group:g1"
-	Members   []string
-	Round     int
-	MaxRounds int
-	Closed    bool
-	MsgCount  int
+// RemoveMember removes an address from the group. Returns true if the member was found.
+// If no members remain, the group is deleted from the store.
+func RemoveMember(groupName, memberAddr string) bool {
+	gm, ok := GetGroup(groupName)
+	if !ok {
+		return false
+	}
+	for i, m := range gm.Members {
+		if m == memberAddr {
+			gm.Members = append(gm.Members[:i], gm.Members[i+1:]...)
+			break
+		}
+	}
+	if len(gm.Members) == 0 {
+		DeleteGroup(groupName)
+	}
+	return true
 }
 
-// ListGroupSummaries returns info about all active and closed group chats.
-func ListGroupSummaries() []GroupSummary {
+// GroupSummary is a lightweight snapshot for CLI listing.
+type GroupSummary struct {
+	ID      string
+	Name    string
+	Members []string
+	Closed  bool
+}
+
+// ListGroups returns info about all active and closed groups.
+func ListGroups() []GroupSummary {
 	var results []GroupSummary
 	groupStore.Range(func(key, value any) bool {
-		gs, ok := value.(*GroupState)
+		gm, ok := value.(*GroupMembership)
 		if !ok {
 			return true
 		}
-		gs.mu.Lock()
-		summary := GroupSummary{
-			ID:        gs.ID,
-			Name:      key.(string),
-			Members:   append([]string{}, gs.Members...),
-			Round:     gs.Round,
-			MaxRounds: gs.MaxRounds,
-			Closed:    gs.Closed,
-			MsgCount:  len(gs.Messages),
-		}
-		gs.mu.Unlock()
-		results = append(results, summary)
+		results = append(results, GroupSummary{
+			ID:      gm.ID,
+			Name:    gm.Name,
+			Members: append([]string{}, gm.Members...),
+			Closed:  gm.Closed,
+		})
 		return true
 	})
 	return results

@@ -82,10 +82,6 @@ var cliActionSettingKeys = map[string]struct{}{
 }
 
 var cliSubscriptionScopedSettingKeys = map[string]struct{}{
-	"llm_provider":      {},
-	"llm_api_key":       {},
-	"llm_model":         {},
-	"llm_base_url":      {},
 	"max_output_tokens": {},
 	"thinking_mode":     {},
 }
@@ -137,17 +133,11 @@ func (m *cliModel) mergeCLISettingsValues() map[string]string {
 			values[k] = v
 		}
 	}
-	// LLM fields come exclusively from the active subscription (single source of truth).
-	// This replaces the old path where LLM values came from GetCurrentValues / user_settings.
+	// Subscription-scoped settings (max_output_tokens, thinking_mode) from active subscription.
 	if m.channel.subscriptionMgr != nil {
 		if sub, err := m.channel.subscriptionMgr.GetDefault(m.senderID); err == nil && sub != nil {
-			values["llm_provider"] = sub.Provider
-			values["llm_base_url"] = sub.BaseURL
-			values["llm_model"] = sub.Model
 			values["max_output_tokens"] = strconv.Itoa(sub.MaxOutputTokens)
 			values["thinking_mode"] = sub.ThinkingMode
-			// Don't overwrite api_key if GetCurrentValues already set it
-			// ( GetCurrentValues may have the unmasked key from backend)
 		}
 	}
 	// User-scoped settings (theme, language, context_mode, etc.) override GetCurrentValues
@@ -240,7 +230,7 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 	if m.channel.modelLister != nil {
 		allModels := m.channel.modelLister.ListAllModels()
 		for i, s := range schema {
-			if (s.Key == "llm_model" || s.Key == "vanguard_model" || s.Key == "balance_model" || s.Key == "swift_model") && len(allModels) > 0 {
+			if (s.Key == "vanguard_model" || s.Key == "balance_model" || s.Key == "swift_model") && len(allModels) > 0 {
 				opts := make([]SettingOption, len(allModels))
 				for j, ml := range allModels {
 					opts[j] = SettingOption{Label: ml, Value: ml}

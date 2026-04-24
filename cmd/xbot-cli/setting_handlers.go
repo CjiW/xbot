@@ -163,7 +163,8 @@ func isKnownNonRuntimeKey(key string) bool {
 	switch key {
 	case "theme", "language", "runner_server", "runner_token", "runner_workspace",
 		"enable_stream", "enable_masking", "default_user", "privileged_user",
-		"subscription_manage", "runner_panel", "danger_zone":
+		"subscription_manage", "runner_panel", "danger_zone",
+		"llm_provider", "llm_api_key", "llm_model", "llm_base_url":
 		return true
 	}
 	return false

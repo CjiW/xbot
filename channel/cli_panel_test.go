@@ -85,7 +85,7 @@ func TestApplyQuickSwitch(t *testing.T) {
 				return nil
 			},
 			GetCurrentValues: func() map[string]string {
-				return map[string]string{"llm_model": "glm-4"}
+				return map[string]string{"theme": "midnight"}
 			},
 		},
 	}
@@ -198,9 +198,9 @@ func TestPanelBoxLeftAlign(t *testing.T) {
 	t.Error("could not find 'Name:' in panel output")
 }
 
-// TestSubscriptionGenerationGuard tests that stale per-subscription LLM values
-// are NEVER written back after a subscription switch. This is the structural guarantee
-// against the subscription overwrite bug.
+// TestSubscriptionGenerationGuard tests that stale per-subscription values
+// (max_output_tokens, thinking_mode) are NEVER written back after a subscription switch.
+// This is the structural guarantee against the subscription overwrite bug.
 func TestSubscriptionGenerationGuard(t *testing.T) {
 	model := newCLIModel()
 	model.subGeneration = 5
@@ -210,30 +210,27 @@ func TestSubscriptionGenerationGuard(t *testing.T) {
 
 	// Simulate: user edits some values
 	values := map[string]string{
-		"llm_provider":   "openai",
-		"llm_api_key":    "old-key-123",
-		"llm_model":      "gpt-4o",
-		"llm_base_url":   "https://api.openai.com/v1",
-		"vanguard_model": "claude-opus-4",
-		"balance_model":  "claude-sonnet-4",
-		"max_tokens":     "4096",
+		"max_output_tokens": "8192",
+		"thinking_mode":     "auto",
+		"vanguard_model":    "claude-opus-4",
+		"balance_model":     "claude-sonnet-4",
 	}
 
 	// Simulate: subscription switch happens (generation increments)
 	model.subGeneration = 6
 
 	// Simulate: the onSubmit callback runs (this is what the guard checks)
-	// After switch, stale LLM fields should be stripped
+	// After switch, stale subscription-scoped fields should be stripped
 	if model.panelSubGeneration != model.subGeneration {
-		for _, k := range []string{"llm_provider", "llm_model", "llm_base_url", "llm_api_key"} {
+		for _, k := range []string{"max_output_tokens", "thinking_mode"} {
 			delete(values, k)
 		}
 	}
 
-	// Verify: per-subscription LLM fields are GONE
-	for _, k := range []string{"llm_provider", "llm_api_key", "llm_model", "llm_base_url"} {
+	// Verify: per-subscription fields are GONE
+	for _, k := range []string{"max_output_tokens", "thinking_mode"} {
 		if _, exists := values[k]; exists {
-			t.Errorf("BUG: stale LLM field %q should have been deleted after subscription switch", k)
+			t.Errorf("BUG: stale subscription field %q should have been deleted after subscription switch", k)
 		}
 	}
 
@@ -244,36 +241,31 @@ func TestSubscriptionGenerationGuard(t *testing.T) {
 	if values["balance_model"] != "claude-sonnet-4" {
 		t.Errorf("global setting balance_model should be preserved, got %q", values["balance_model"])
 	}
-	if values["max_tokens"] != "4096" {
-		t.Errorf("global setting max_tokens should be preserved, got %q", values["max_tokens"])
-	}
 }
 
 // TestSubscriptionGenerationGuardNoSwitch tests that when subscription does NOT change,
-// all LLM fields are preserved (no false positives).
+// all subscription-scoped fields are preserved (no false positives).
 func TestSubscriptionGenerationGuardNoSwitch(t *testing.T) {
 	model := newCLIModel()
 	model.subGeneration = 5
 	model.panelSubGeneration = 5 // same generation = no switch
 
 	values := map[string]string{
-		"llm_provider": "anthropic",
-		"llm_api_key":  "key-456",
-		"llm_model":    "claude-sonnet-4",
-		"llm_base_url": "https://api.anthropic.com",
+		"max_output_tokens": "8192",
+		"thinking_mode":     "auto",
 	}
 
 	// Guard should NOT strip anything
 	if model.panelSubGeneration != model.subGeneration {
-		for _, k := range []string{"llm_provider", "llm_model", "llm_base_url", "llm_api_key"} {
+		for _, k := range []string{"max_output_tokens", "thinking_mode"} {
 			delete(values, k)
 		}
 	}
 
 	// All fields should still be present
-	for _, k := range []string{"llm_provider", "llm_api_key", "llm_model", "llm_base_url"} {
+	for _, k := range []string{"max_output_tokens", "thinking_mode"} {
 		if _, exists := values[k]; !exists {
-			t.Errorf("LLM field %q should NOT be deleted when subscription hasn't changed", k)
+			t.Errorf("subscription field %q should NOT be deleted when subscription hasn't changed", k)
 		}
 	}
 }

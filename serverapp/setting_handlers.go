@@ -229,15 +229,5 @@ func applyRuntimeSettings(cfg *config.Config, backend agent.AgentBackend, sender
 // missingHandlerKeys returns keys from channel.CLIRuntimeSettingKeys
 // that are missing from settingHandlerRegistry.
 func missingHandlerKeys() []string {
-	expected := make(map[string]bool, len(channel.CLIRuntimeSettingKeys))
-	for _, k := range channel.CLIRuntimeSettingKeys {
-		expected[k] = true
-	}
-	var missing []string
-	for k := range expected {
-		if _, ok := settingHandlerRegistry[k]; !ok {
-			missing = append(missing, k)
-		}
-	}
-	return missing
+	return channel.MissingRegistryKeys(settingHandlerRegistry)
 }

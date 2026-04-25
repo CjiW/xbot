@@ -185,11 +185,5 @@ func isKnownNonRuntimeKey(key string) bool {
 // missingCLIHandlerKeys returns keys from channel.CLIRuntimeSettingKeys
 // that are missing from cliSettingHandlers.
 func missingCLIHandlerKeys() []string {
-	var missing []string
-	for _, k := range channel.CLIRuntimeSettingKeys {
-		if _, ok := cliSettingHandlers[k]; !ok {
-			missing = append(missing, k)
-		}
-	}
-	return missing
+	return channel.MissingRegistryKeys(cliSettingHandlers)
 }

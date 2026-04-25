@@ -49,9 +49,9 @@ type runState struct {
 	dynamicInjector          *DynamicContextInjector
 
 	// Messages
-	messages           []llm.ChatMessage
-	initialMsgCount    int
-	lastPersistedCount int
+	messages        []llm.ChatMessage
+	initialMsgCount int
+	persistence     *PersistenceBridge
 
 	// Token tracking
 	tokenTracker *TokenTracker
@@ -130,7 +130,7 @@ func newRunState(cfg RunConfig) *runState {
 		batchProgressByIteration: batchProgressByIteration,
 		messages:                 messages,
 		initialMsgCount:          len(messages),
-		lastPersistedCount:       len(messages),
+		persistence:              NewPersistenceBridge(cfg.Session, len(messages)),
 		tokenTracker:             NewTokenTracker(cfg.LastPromptTokens, cfg.LastCompletionTokens),
 	}
 }
@@ -317,9 +317,7 @@ func (s *runState) buildOutput(ob *bus.OutboundMessage) *RunOutput {
 	if s.cfg.Memory != nil {
 		out.Messages = s.messages
 	}
-	if len(s.messages) > s.lastPersistedCount {
-		engineMsgs := make([]llm.ChatMessage, len(s.messages)-s.lastPersistedCount)
-		copy(engineMsgs, s.messages[s.lastPersistedCount:])
+	if engineMsgs := s.persistence.ComputeEngineMessages(s.messages); engineMsgs != nil {
 		out.EngineMessages = engineMsgs
 	}
 	if len(s.iterationSnapshots) > 0 {
@@ -463,25 +461,8 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		s.progressLines = append(s.progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newCount))
 		s.notifyProgress("")
 	}
-	if s.cfg.Session != nil {
-		if clearErr := s.cfg.Session.Clear(); clearErr != nil {
-			log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for force compression, skipping persistence")
-		} else {
-			allOk := true
-			for _, msg := range result.SessionView {
-				if err := assertNoSystemPersist(msg); err != nil {
-					continue
-				}
-				if addErr := s.cfg.Session.AddMessage(msg); addErr != nil {
-					log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
-					allOk = false
-					break
-				}
-			}
-			if allOk {
-				s.lastPersistedCount = len(s.messages)
-			}
-		}
+	if ok, _ := s.persistence.RewriteAfterCompress(result.SessionView, len(s.messages)); !ok {
+		log.Ctx(ctx).Warn("Force compression persistence failed, session may be inconsistent")
 	}
 	compressCutoff := time.Now()
 	if s.cfg.OffloadStore != nil {
@@ -602,27 +583,8 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 					s.messages = s.syncMessages(result.LLMView)
 					newCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
 					s.tokenTracker.ResetAfterCompress(int64(newCount), len(s.messages))
-					if s.cfg.Session != nil {
-						if clearErr := s.cfg.Session.Clear(); clearErr != nil {
-							log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for context_window_exceeded compression")
-						} else {
-							allOk := true
-							for _, msg := range result.SessionView {
-								if err := assertNoSystemPersist(msg); err != nil {
-									continue
-								}
-								if err := s.cfg.Session.AddMessage(msg); err != nil {
-									log.Ctx(ctx).WithError(err).Error("Partial write during context_window_exceeded compression")
-									allOk = false
-									break
-								}
-							}
-							if allOk {
-								s.lastPersistedCount = len(s.messages)
-							} else {
-								log.Ctx(ctx).Warn("Context window exceeded compression persistence failed, session may be inconsistent")
-							}
-						}
+					if ok, _ := s.persistence.RewriteAfterCompress(result.SessionView, len(s.messages)); !ok {
+						log.Ctx(ctx).Warn("Context window exceeded compression persistence failed, session may be inconsistent")
 					}
 					log.Ctx(ctx).Info("Forced compression completed after context_window_exceeded, retrying")
 					return nil, true // retry loop iteration
@@ -819,7 +781,7 @@ func (s *runState) maybeCompress(ctx context.Context) {
 				if s.cfg.Session != nil {
 					persistedMasked := 0
 					for _, entry := range maskedEntries {
-						if entry.MessageIndex < s.lastPersistedCount {
+						if s.persistence.IsPersisted(entry.MessageIndex) {
 							if err := s.cfg.Session.UpdateMessageContent(entry.MessageIndex, entry.Content); err != nil {
 								log.Ctx(ctx).WithError(err).WithField("idx", entry.MessageIndex).Warn("Failed to persist masked message to session")
 							} else {
@@ -978,36 +940,13 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	}
 
 	// Persist compaction result to session
-	if s.cfg.Session != nil {
-		if err := s.cfg.Session.Clear(); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compaction, skipping persistence")
-		} else {
-			allOk := true
-			for _, msg := range result.SessionView {
-				if err := assertNoSystemPersist(msg); err != nil {
-					continue
-				}
-				if err := s.cfg.Session.AddMessage(msg); err != nil {
-					log.Ctx(ctx).WithError(err).Error("Partial write during auto compaction, session may be corrupted")
-					allOk = false
-					break
-				}
-			}
-			if allOk {
-				log.Ctx(ctx).Info("Auto compaction persisted to session")
-				if hook := cm.SessionHook(); hook != nil {
-					hook.AfterPersist(ctx, s.cfg.Session, result)
-				}
-				// Update the persistence watermark to match the new (compressed) message
-				// slice length. Without this, postToolProcessing's incremental persist
-				// check (len(s.messages) > s.lastPersistedCount) will never be true again
-				// because s.messages shrank but lastPersistedCount still points to the old
-				// (larger) index, causing all subsequent messages to be lost on restart.
-				s.lastPersistedCount = len(s.messages)
-			} else {
-				log.Ctx(ctx).Warn("Auto compaction persistence failed, using in-memory result only")
-			}
+	if ok, _ := s.persistence.RewriteAfterCompress(result.SessionView, len(s.messages)); ok {
+		log.Ctx(ctx).Info("Auto compaction persisted to session")
+		if hook := cm.SessionHook(); hook != nil {
+			hook.AfterPersist(ctx, s.cfg.Session, result)
 		}
+	} else {
+		log.Ctx(ctx).Warn("Auto compaction persistence failed, using in-memory result only")
 	}
 
 	// Clean offload and mask entries that were compressed away.
@@ -1470,26 +1409,7 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 	}
 
 	// --- Incremental session persistence ---
-	if s.cfg.Session != nil && len(s.messages) > s.lastPersistedCount {
-		persistOk := true
-		for _, msg := range s.messages[s.lastPersistedCount:] {
-			if msg.Role == "system" {
-				continue
-			}
-			persistMsg := msg
-			if strings.Contains(persistMsg.Content, "<system-reminder>") {
-				persistMsg.Content = stripSystemReminder(persistMsg.Content)
-			}
-			if err := s.cfg.Session.AddMessage(persistMsg); err != nil {
-				log.Ctx(ctx).WithError(err).Error("Failed to persist message to session")
-				persistOk = false
-				break
-			}
-		}
-		if persistOk {
-			s.lastPersistedCount = len(s.messages)
-		}
-	}
+	s.persistence.IncrementalPersist(s.messages)
 
 	// --- Background notification draining (bg tasks + bg subagents) ---
 	if s.cfg.DrainBgNotifications != nil {
@@ -1556,7 +1476,7 @@ func (s *runState) injectBgTaskNotification(ctx context.Context, iteration int, 
 	if s.cfg.Session != nil {
 		_ = s.cfg.Session.AddMessage(bgAssistantMsg)
 		_ = s.cfg.Session.AddMessage(bgToolMsg)
-		s.lastPersistedCount = len(s.messages)
+		s.persistence.MarkAllPersisted(len(s.messages))
 	}
 
 	if s.structuredProgress != nil {
@@ -1618,7 +1538,7 @@ func (s *runState) injectSubAgentBgNotification(ctx context.Context, iteration i
 	if s.cfg.Session != nil {
 		_ = s.cfg.Session.AddMessage(assistantMsg)
 		_ = s.cfg.Session.AddMessage(toolMsg)
-		s.lastPersistedCount = len(s.messages)
+		s.persistence.MarkAllPersisted(len(s.messages))
 	}
 
 	// Show completion in TUI progress block

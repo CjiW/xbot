@@ -2,14 +2,17 @@ package hooks
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,19 +24,30 @@ import (
 // and returns the parsed response as a Result.
 type HTTPExecutor struct {
 	client      *http.Client
-	allowedNets []*net.IPNet // SSRF 白名单（CIDR 格式）
+	allowedNets []*net.IPNet // SSRF whitelist (CIDR format)
+	mu          sync.RWMutex // protects allowedNets
 	envLookupFn func(string) (string, bool)
 }
 
+// maxHTTPResponseSize limits HTTP hook response body to 1 MB to prevent OOM.
+const maxHTTPResponseSize = 1 << 20
+
 // NewHTTPExecutor creates a new HTTPExecutor with a default HTTP client and
 // SSRF protection that blocks RFC 1918 / loopback / link-local addresses.
+// The SSRF check runs at dial time (inside the Transport) to prevent DNS rebinding.
 func NewHTTPExecutor() *HTTPExecutor {
-	return &HTTPExecutor{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+	e := &HTTPExecutor{
 		envLookupFn: os.LookupEnv,
 	}
+	e.client = &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			DialContext: e.dialWithSSRFCheck,
+			// Match default Transport TLS settings
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		},
+	}
+	return e
 }
 
 // Type returns "http".
@@ -56,9 +70,13 @@ func (e *HTTPExecutor) Execute(ctx context.Context, def *HookDef, event Event) (
 		timeout = time.Duration(def.Timeout) * time.Second
 	}
 
-	// 2. SSRF check.
-	if err := e.checkSSRF(def.URL); err != nil {
-		return nil, fmt.Errorf("SSRF check: %w", err)
+	// 2. SSRF check: validate URL scheme (only http/https allowed).
+	parsedURL, err := url.Parse(def.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parse URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported URL scheme: %s", parsedURL.Scheme)
 	}
 
 	// 3. Build request body.
@@ -99,7 +117,11 @@ func (e *HTTPExecutor) Execute(ctx context.Context, def *HookDef, event Event) (
 	// 6. Send request.
 	resp, err := e.client.Do(req)
 	if err != nil {
-		// Connection failure → non-blocking error.
+		// SSRF errors are blocking — return as hard error.
+		if strings.Contains(err.Error(), "SSRF:") {
+			return nil, err
+		}
+		// Other connection failures → non-blocking error.
 		return &Result{
 			Decision: "allow",
 			Reason:   fmt.Sprintf("HTTP request failed: %v", err),
@@ -107,7 +129,7 @@ func (e *HTTPExecutor) Execute(ctx context.Context, def *HookDef, event Event) (
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPResponseSize))
 	if err != nil {
 		return &Result{
 			Decision: "allow",
@@ -128,37 +150,37 @@ func (e *HTTPExecutor) Execute(ctx context.Context, def *HookDef, event Event) (
 }
 
 // ---------------------------------------------------------------------------
-// SSRF protection
+// SSRF protection (dial-time check to prevent DNS rebinding)
 // ---------------------------------------------------------------------------
 
-// checkSSRF resolves the URL host and blocks private IP addresses unless they
-// are in the allowedNets whitelist.
-func (e *HTTPExecutor) checkSSRF(rawURL string) error {
-	host := extractHost(rawURL)
-	if host == "" {
-		return fmt.Errorf("empty host in URL %q", rawURL)
+// dialWithSSRFCheck is a custom DialContext that resolves the target hostname
+// and blocks connections to private/reserved IPs unless they are in allowedNets.
+// This runs at actual TCP dial time, eliminating DNS rebinding TOCTOU attacks.
+func (e *HTTPExecutor) dialWithSSRFCheck(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("SSRF: invalid address %q: %w", addr, err)
 	}
 
-	// Resolve hostname to IP addresses.
-	ips, err := net.LookupIP(host)
+	// Resolve hostname to IP addresses at dial time.
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		// If DNS resolution fails, allow the request — it will fail at connect time.
-		return nil
+		return nil, fmt.Errorf("SSRF: DNS lookup failed for %q: %w", host, err)
 	}
 
 	for _, ip := range ips {
-		if e.isAllowedIP(ip) {
-			continue
-		}
-		if isPrivateIP(ip) {
-			return fmt.Errorf("target %s resolves to private IP %s (blocked by SSRF policy)", host, ip)
+		if !e.isAllowedIP(ip.IP) && isPrivateIP(ip.IP) {
+			return nil, fmt.Errorf("SSRF: %s resolves to private/reserved IP %s (blocked)", host, ip.IP)
 		}
 	}
-	return nil
+
+	return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
 }
 
 // isAllowedIP checks whether the given IP falls within any of the allowed CIDR ranges.
 func (e *HTTPExecutor) isAllowedIP(ip net.IP) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	for _, cidr := range e.allowedNets {
 		if cidr.Contains(ip) {
 			return true
@@ -178,23 +200,39 @@ func (e *HTTPExecutor) SetAllowedNets(cidrs []string) {
 		}
 		nets = append(nets, ipNet)
 	}
+	e.mu.Lock()
 	e.allowedNets = nets
+	e.mu.Unlock()
 }
 
-// isPrivateIP checks whether the given IP is an RFC 1918, loopback, or
-// link-local address.
+// isPrivateIP checks whether the given IP is in a private, loopback, link-local,
+// or other reserved address range that should not be accessible via HTTP hooks.
 func isPrivateIP(ip net.IP) bool {
 	privateRanges := []struct {
 		network string
 	}{
+		// Loopback
 		{"127.0.0.0/8"},
+		{"::1/128"},
+		// RFC 1918 private
 		{"10.0.0.0/8"},
 		{"172.16.0.0/12"},
 		{"192.168.0.0/16"},
-		{"::1/128"},
-		{"fd00::/8"},
+		// Link-local
 		{"169.254.0.0/16"},
 		{"fe80::/10"},
+		// IPv6 unique local
+		{"fd00::/8"},
+		// 0.0.0.0/8 — on Linux/macOS, connecting to 0.0.0.0:PORT = 127.0.0.1:PORT
+		{"0.0.0.0/8"},
+		// CGNAT / shared address space
+		{"100.64.0.0/10"},
+		// Benchmarking (used by some cloud internal metadata)
+		{"198.18.0.0/15"},
+		// Multicast
+		{"224.0.0.0/4"},
+		// Reserved
+		{"240.0.0.0/4"},
 	}
 
 	for _, r := range privateRanges {
@@ -228,47 +266,6 @@ func (e *HTTPExecutor) resolveEnvVars(s string) string {
 		}
 		return ""
 	})
-}
-
-// extractHost parses a URL string and returns the hostname (without port).
-func extractHost(rawURL string) string {
-	// Simple host extraction — avoid importing net/url for minimal deps.
-	// Handle scheme://host:port/path.
-	s := rawURL
-
-	// Remove scheme.
-	for _, prefix := range []string{"https://", "http://"} {
-		if len(s) > len(prefix) && s[:len(prefix)] == prefix {
-			s = s[len(prefix):]
-			break
-		}
-	}
-
-	// Remove path and beyond.
-	for i := 0; i < len(s); i++ {
-		if s[i] == '/' || s[i] == '?' || s[i] == '#' {
-			s = s[:i]
-			break
-		}
-	}
-
-	// Handle IPv6: [::1]:port → ::1
-	if len(s) > 0 && s[0] == '[' {
-		end := strings.IndexByte(s, ']')
-		if end >= 0 {
-			return s[1:end]
-		}
-	}
-
-	// Remove port.
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == ':' {
-			s = s[:i]
-			break
-		}
-	}
-
-	return s
 }
 
 // parseHTTPSuccessResult decodes the HTTP response body as a JSON Result.

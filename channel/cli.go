@@ -21,8 +21,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/google/uuid"
-	"xbot/bus"
 	"xbot/agent/hooks"
+	"xbot/bus"
 	"xbot/clipanic"
 	"xbot/llm"
 	log "xbot/logger"
@@ -379,7 +379,7 @@ func (c *CLIChannel) SendToast(text, icon string) {
 // SetApprovalState stores the ApprovalState reference so that Start() can wire
 // the CLIApprovalHandler after the tea.Program is created.
 func (c *CLIChannel) SetApprovalState(state *hooks.ApprovalState) {
-c.approvalState = state
+	c.approvalState = state
 }
 
 // SetSendInboundFn overrides the default sendInbound behavior.
@@ -545,12 +545,12 @@ func (c *CLIChannel) SetResetTokenStateFn(fn func()) {
 // SetCheckpointState sets the file checkpoint state for /rewind file rollback.
 // If the model hasn't been created yet, the state is cached and applied later.
 func (c *CLIChannel) SetCheckpointState(state *hooks.CheckpointState) {
-c.programMu.Lock()
-defer c.programMu.Unlock()
-if c.model != nil {
-c.model.checkpointState = state
-}
-c.pendingCheckpointState = state
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil {
+		c.model.checkpointState = state
+	}
+	c.pendingCheckpointState = state
 }
 
 // InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。

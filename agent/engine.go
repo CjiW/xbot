@@ -472,20 +472,20 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			for idx, tc := range response.ToolCalls {
 				r := results[idx]
 				batchResults[idx] = hooks.ToolBatchResult{
-				ToolName: tc.Name,
-				Success:  r.err == nil && (r.result == nil || !r.result.IsError),
-				Elapsed:  r.elapsed,
+					ToolName: tc.Name,
+					Success:  r.err == nil && (r.result == nil || !r.result.IsError),
+					Elapsed:  r.elapsed,
 				}
 				if r.err != nil {
-				batchResults[idx].Error = r.err.Error()
+					batchResults[idx].Error = r.err.Error()
 				} else if r.result != nil && r.result.IsError {
-				batchResults[idx].Error = r.result.Summary
+					batchResults[idx].Error = r.result.Summary
 				}
 			}
 			s.cfg.HookManager.Emit(ctx, &hooks.PostToolBatchEvent{
 				BasePayload: hooks.BasePayload{
-				SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
-				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
+					SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
+					SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
 				},
 				ToolCount: len(response.ToolCalls),
 				Results:   batchResults,

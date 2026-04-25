@@ -169,8 +169,8 @@ type FeishuChannel struct {
 
 	// Permission control
 	approvalState *hooks.ApprovalState
-	approvalsMu  sync.Mutex
-	approvals    map[string]*feishuPendingApproval
+	approvalsMu   sync.Mutex
+	approvals     map[string]*feishuPendingApproval
 
 	// AskUser pending state: key is "chatID:senderID" → waiting for user's answer
 	askUserMu sync.Mutex

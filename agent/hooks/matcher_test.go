@@ -223,7 +223,7 @@ func TestMatcher_IfCondition_Empty(t *testing.T) {
 	// No SetIf call → ifCond is empty
 
 	ev := &PreToolUseEvent{
-		ToolName_: "Shell",
+		ToolName_:  "Shell",
 		ToolInput_: map[string]any{"command": "ls"},
 	}
 	if !m.MatchIf(ev) {

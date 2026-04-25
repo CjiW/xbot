@@ -250,7 +250,7 @@ func TestCommandExecutor_StdinPayload(t *testing.T) {
 		Timeout: 5,
 	}
 	event := &testEvent{payload: map[string]any{
-		"session_id": "sess-xyz",
+		"session_id":      "sess-xyz",
 		"hook_event_name": "Test",
 	}}
 

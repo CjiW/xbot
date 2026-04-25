@@ -34,9 +34,9 @@ type ConfigLayer struct {
 
 // LoadHooksConfig reads and merges hooks configuration from up to three layers:
 //
-//	1. User layer:   ~/.xbot/hooks.json
-//	2. Project layer: <projectDir>/.xbot/hooks.json
-//	3. Local layer:   <projectDir>/.xbot/hooks.local.json
+//  1. User layer:   ~/.xbot/hooks.json
+//  2. Project layer: <projectDir>/.xbot/hooks.json
+//  3. Local layer:   <projectDir>/.xbot/hooks.local.json
 //
 // Later layers override earlier ones.  Within the same event + matcher,
 // hooks are appended (never replaced).

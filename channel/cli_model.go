@@ -447,10 +447,10 @@ type cliModel struct {
 	fileCompActive  bool     // true = Tab 循环中，阻止重新 glob
 
 	// --- §9 Rewind (/rewind command) ---
-	rewindMode     bool                  // true = rewind overlay active
-	rewindItems    []rewindItem          // candidate user messages for rewind selection
-	rewindCursor   int                   // selected index in rewindItems
-	rewindResult   *tools.RewindResult   // result of the last rewind operation (for display)
+	rewindMode      bool                   // true = rewind overlay active
+	rewindItems     []rewindItem           // candidate user messages for rewind selection
+	rewindCursor    int                    // selected index in rewindItems
+	rewindResult    *tools.RewindResult    // result of the last rewind operation (for display)
 	checkpointState *hooks.CheckpointState // file checkpoint state for rewind file rollback (nil = no file tracking)
 
 	// --- §10 TODO 进度条 ---

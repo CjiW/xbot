@@ -11,10 +11,6 @@ import (
 	log "xbot/logger"
 )
 
-// maxCheckpointFileSize is the maximum file size (in bytes) to snapshot.
-// Files larger than this are skipped (1 MB).
-const maxCheckpointFileSize = 1 << 20
-
 // FileSnapshot records the state of a file before an agent edit.
 type FileSnapshot struct {
 	TurnIdx  int    `json:"turn_idx"`

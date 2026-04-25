@@ -1738,8 +1738,8 @@ func Run(args []string) error {
 	if feishuCh != nil {
 		feishuCh.SetCardBuilder(backend.GetCardBuilder())
 		if state := backend.ApprovalState(); state != nil {
-				feishuCh.SetApprovalState(state)
-			}
+			feishuCh.SetApprovalState(state)
+		}
 
 		// 传递 admin chatID 和 web DB（用于 admin 命令如 !webadd）
 		if adminChatID != "" {

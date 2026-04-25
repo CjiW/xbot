@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"time"
+
+	"xbot/tools"
 )
 
 // CommandExecutor runs shell commands as hook handlers.
@@ -52,7 +54,9 @@ func (e *CommandExecutor) Execute(ctx context.Context, def *HookDef, event Event
 	defer cancel()
 
 	// 3. Build command.
-	cmd := exec.CommandContext(cmdCtx, "sh", "-c", def.Command)
+	cmd := exec.Command("sh", "-c", def.Command)
+	// Use process group so timeout can kill the entire tree (shell + children).
+	tools.SetProcessAttrs(cmd)
 
 	// 4. Set environment variables — inherit current + add XBOT_* vars.
 	cmd.Env = append(cmd.Environ(),
@@ -76,7 +80,24 @@ func (e *CommandExecutor) Execute(ctx context.Context, def *HookDef, event Event
 	cmd.Stderr = &stderr
 
 	// 7. Run the command.
-	exitErr := cmd.Run()
+	var exitErr error
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start command: %w", err)
+	}
+
+	// Wait for command or context cancellation.
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	select {
+	case exitErr = <-waitCh:
+		// Command finished normally.
+	case <-cmdCtx.Done():
+		// Timeout — kill the entire process group.
+		tools.KillProcess(cmd)
+		<-waitCh // drain Wait
+		return nil, cmdCtx.Err()
+	}
 
 	stdoutStr := stdout.String()
 	stderrStr := stderr.String()
@@ -97,10 +118,10 @@ func (e *CommandExecutor) Execute(ctx context.Context, def *HookDef, event Event
 	}
 
 	// 8. Interpret result based on exit code.
-	switch {
-	case exitCode == 0:
+	switch exitCode {
+	case 0:
 		return parseSuccessResult(stdoutStr, stderrStr), nil
-	case exitCode == 2:
+	case 2:
 		return &Result{
 			ExitCode: exitCode,
 			Stdout:   stdoutStr,

@@ -142,4 +142,3 @@ func TestWorkingDirFromContext(t *testing.T) {
 		t.Errorf("expected /home/user/project, got %q", dir)
 	}
 }
-

@@ -940,7 +940,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 				SessionID: s.cfg.ChatID, Channel: s.cfg.Channel,
 				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
 			},
-			Trigger:               "token_limit",
+			Trigger:              "token_limit",
 			EstimatedTokensAfter: int64(newTokenCount),
 		})
 	}

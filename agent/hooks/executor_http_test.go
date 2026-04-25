@@ -367,25 +367,3 @@ func TestIsPrivateIP(t *testing.T) {
 		})
 	}
 }
-
-func TestExtractHost(t *testing.T) {
-	tests := []struct {
-		url  string
-		want string
-	}{
-		{"http://example.com/path", "example.com"},
-		{"https://example.com:8080/path", "example.com"},
-		{"http://127.0.0.1:9090/hook", "127.0.0.1"},
-		{"https://[::1]:8080/test", "::1"},
-		{"http://my-host.local", "my-host.local"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.url, func(t *testing.T) {
-			got := extractHost(tt.url)
-			if got != tt.want {
-				t.Errorf("extractHost(%q) = %q, want %q", tt.url, got, tt.want)
-			}
-		})
-	}
-}

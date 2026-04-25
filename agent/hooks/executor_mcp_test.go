@@ -13,8 +13,8 @@ import (
 // testToolEvent is a minimal Event implementation that supports ToolName and
 // ToolInput for MCP executor tests.
 type testToolEvent struct {
-	payload  map[string]any
-	toolName string
+	payload   map[string]any
+	toolName  string
 	toolInput map[string]any
 }
 

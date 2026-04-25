@@ -223,7 +223,7 @@ func (e *PostToolUseFailureEvent) Payload() map[string]any {
 // PostToolBatchEvent is emitted after a batch of tools finishes.
 type PostToolBatchEvent struct {
 	BasePayload
-	ToolCount int              `json:"tool_count"`
+	ToolCount int               `json:"tool_count"`
 	Results   []ToolBatchResult `json:"results"`
 }
 

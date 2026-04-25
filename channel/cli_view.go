@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -259,11 +260,18 @@ func (m *cliModel) View() tea.View {
 				}
 				readyParts = append(readyParts, modelHint)
 			}
-			// Context usage percentage (from last LLM API response)
+			// Context usage: right-aligned via padBetween so it stays fixed
+			// regardless of model name length changes
+			var ctxBar string
 			if ctxHint := m.renderContextUsage(); ctxHint != "" {
-				readyParts = append(readyParts, ctxHint)
+				ctxBar = ctxHint
 			}
-			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
+			leftParts := strings.Join(readyParts, " · ")
+			if ctxBar != "" {
+				status = readyStatusStyle.Render(padBetween(leftParts, ctxBar, m.width))
+			} else {
+				status = readyStatusStyle.Render(leftParts)
+			}
 		}
 		// 临时状态提示（自动过期）
 		if m.tempStatus != "" {
@@ -815,19 +823,15 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 
 		// Phase hint (active tool is shown in progress block, skip here to avoid duplication)
 		switch m.progress.Phase {
-		case "thinking":
-			sb.WriteString(" · " + m.pickVerb(m.ticker.ticks))
 		case "compressing":
-			sb.WriteString(" · " + m.locale.StatusCompressing)
+		sb.WriteString(" · " + m.locale.StatusCompressing)
 		case "retrying":
-			sb.WriteString(" · " + m.locale.StatusRetrying)
+		sb.WriteString(" · " + m.locale.StatusRetrying)
 		default:
-			if len(m.progress.CompletedTools) > 0 {
-				sb.WriteString(" · " + m.locale.StatusDone)
-			}
+		if len(m.progress.CompletedTools) > 0 {
+			sb.WriteString(" · " + m.locale.StatusDone)
 		}
-	} else {
-		sb.WriteString(m.pickVerb(m.ticker.ticks) + "...")
+		}
 	}
 
 	// Total elapsed
@@ -837,18 +841,21 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		sb.WriteString(formatElapsed(elapsed))
 	}
 
-	// §18 Context usage bar (replaces raw token count)
+	// §18 Context usage bar — right-aligned so position stays fixed
+	var ctxBar string
 	if ctxHint := m.renderContextUsage(); ctxHint != "" {
-		sb.WriteString(" · ")
-		sb.WriteString(ctxHint)
+		ctxBar = ctxHint
 	} else if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.TotalTokens > 0 {
 		// Fallback: raw token count when context bar data is not yet available
 		tu := m.progress.TokenUsage
-		sb.WriteString(" · ")
-		sb.WriteString(s.TokenUsage.Render(formatTokenCount(tu)))
+		ctxBar = s.TokenUsage.Render(formatTokenCount(tu))
 	}
 
-	return sb.String()
+	leftText := sb.String()
+	if ctxBar != "" {
+		return padBetween(leftText, ctxBar, m.width)
+	}
+	return leftText
 }
 
 // formatTokenCount 格式化 Token 使用量为紧凑字符串
@@ -900,8 +907,16 @@ func (m *cliModel) renderContextUsage() string {
 		promptBudget = maxTokens / 2
 	}
 
-	// Compression threshold: 75% of promptBudget (matches trigger.go)
-	compressThreshold := int64(float64(promptBudget) * 0.75)
+	// Compression threshold: configurable, default 90% of promptBudget
+	compressRatio := 0.9
+	if m.channel != nil && m.channel.config.GetCurrentValues != nil {
+		if v := m.channel.config.GetCurrentValues()["compression_threshold"]; v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+				compressRatio = f
+			}
+		}
+	}
+	compressThreshold := int64(float64(promptBudget) * compressRatio)
 
 	// Bar width: adapt to terminal width
 	barWidth := 20

@@ -828,12 +828,16 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		}
 	}
 
-	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
+	compressThreshold := 0.9
+	if s.cfg.ContextManagerConfig != nil && s.cfg.ContextManagerConfig.CompressionThreshold > 0 {
+		compressThreshold = s.cfg.ContextManagerConfig.CompressionThreshold
+	}
+	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget, compressThreshold) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
 
 	// Free snip layer (Claude Code style): before expensive API-based compression,
 	// trim old tool result contents that are no longer needed. This is free — no
 	// API call required, just replaces large tool result content with placeholders.
-	// Triggered when context exceeds 65% of prompt budget but before the 75%
+	// Triggered when context exceeds 65% of prompt budget but before the
 	// compression threshold. Only activates when maxOutputTokens is reasonable
 	// (>100 tokens) to avoid interfering with test scenarios using extreme values.
 	snipped := false
@@ -846,7 +850,7 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		"max_context":        maxTokens,
 		"max_output_tokens":  maxOutputTokens,
 		"prompt_budget":      promptBudget,
-		"threshold":          int(float64(promptBudget) * 0.75),
+		"threshold":          int(float64(promptBudget) * compressThreshold),
 		"msg_count":          len(s.messages),
 		"need":               needCompress,
 		"snipped":            snipped,

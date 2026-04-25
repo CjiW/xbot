@@ -814,7 +814,7 @@ func Load() *Config {
 		cfg.Agent.MaxContextTokens = 200000
 	}
 	if cfg.Agent.CompressionThreshold == 0 {
-		cfg.Agent.CompressionThreshold = 0.7
+		cfg.Agent.CompressionThreshold = 0.9
 	}
 	if cfg.Agent.MaxSubAgentDepth == 0 {
 		cfg.Agent.MaxSubAgentDepth = 6

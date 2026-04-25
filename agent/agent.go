@@ -794,7 +794,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg.MaxContextTokens = 100000 // 默认 100k token
 	}
 	if cfg.CompressionThreshold == 0 {
-		cfg.CompressionThreshold = 0.7
+		cfg.CompressionThreshold = 0.9
 	}
 	if cfg.MaxSubAgentDepth <= 0 {
 		cfg.MaxSubAgentDepth = 6

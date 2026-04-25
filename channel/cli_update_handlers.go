@@ -379,56 +379,9 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 
 	if msg.payload != nil {
 		// Sync todo items from progress event
-		if len(msg.payload.Todos) > 0 {
-			allDone := true
-			for _, t := range msg.payload.Todos {
-				if !t.Done {
-					allDone = false
-					break
-				}
-			}
-			if m.todosDoneCleared && allDone {
-				// Already cleared by user input; don't re-accept stale all-done list
-			} else {
-				m.todos = make([]CLITodoItem, len(msg.payload.Todos))
-				copy(m.todos, msg.payload.Todos)
-				m.todosDoneCleared = false
-				m.relayoutViewport() // TODO 行数可能变化，重新计算 viewport 高度
-			}
-		} else {
-			prevTodoCount := len(m.todos)
-			m.todos = nil
-			if prevTodoCount > 0 {
-				m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-			}
-		}
-		// Detect iteration change: snapshot previous iteration into history
-		if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
-			// Snapshot all completed tools from prev — they belong to iterations
-			// that finished before this new iteration started. Don't filter by
-			// Iteration field because tools from earlier iterations may have been
-			// carried forward via the CompletedTools carry-forward logic.
-			prevIterTools := prev.CompletedTools
-			prevReasoning := prev.Reasoning
-			if prevReasoning == "" {
-				prevReasoning = prev.ReasoningStreamContent
-			}
-			if len(prevIterTools) > 0 || prev.Thinking != "" || prevReasoning != "" {
-				snap := cliIterationSnapshot{
-					Iteration:   m.lastSeenIteration,
-					Thinking:    prev.Thinking,
-					Reasoning:   prevReasoning,
-					Tools:       prevIterTools,
-					ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
-				}
-				m.iterationHistory = append(m.iterationHistory, snap)
-			}
-			// Clear lastCompletedTools to prevent stale tools from being
-			// re-snapshotted when the final iteration is snapshotted in handleAgentMessage.
-			m.lastCompletedTools = m.lastCompletedTools[:0]
-			m.lastSeenIteration = msg.payload.Iteration
-			m.iterationStartTime = time.Now()
-		}
+		m.syncProgressTodos(msg.payload)
+		// Detect iteration change and snapshot previous iteration
+		m.snapshotIterationChange(msg.payload, prev)
 
 		// §2 工具可视化：快照 CompletedTools 到独立字段
 		// Accept all completed tools regardless of their Iteration field — they
@@ -438,103 +391,167 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			copy(m.lastCompletedTools, msg.payload.CompletedTools)
 		}
 		if msg.payload.Phase == "done" {
-			// Snapshot the final iteration before clearing progress.
-			// This handles the case where PhaseDone arrives before
-			// handleAgentMessage (e.g. agent error/cancel).
-			// Skip if handleAgentMessage already processed (m.typing == false
-			// means the reply arrived and cleaned up iteration state).
-			if m.typing && m.lastSeenIteration >= 0 {
-				alreadySnapped := slices.ContainsFunc(m.iterationHistory, func(s cliIterationSnapshot) bool {
-					return s.Iteration == m.lastSeenIteration
-				})
-				if !alreadySnapped {
-					var finalTools []CLIToolProgress
-					// Check progress.CompletedTools first (set by progressFinalizer)
-					finalTools = append(finalTools, msg.payload.CompletedTools...)
-					// Also include any from lastCompletedTools (race safety)
-					for _, t := range m.lastCompletedTools {
-						if !slices.ContainsFunc(finalTools, func(existing CLIToolProgress) bool {
-							return existing.Name == t.Name && existing.Label == t.Label
-						}) {
-							finalTools = append(finalTools, t)
-						}
-					}
-					snap := cliIterationSnapshot{
-						Iteration:   m.lastSeenIteration,
-						Thinking:    msg.payload.Thinking,
-						Tools:       finalTools,
-						ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
-					}
-					// Carry over reasoning: priority is lastReasoning (captured before progress clear)
-					// > prev progress Reasoning > prev ReasoningStreamContent
-					// > PhaseDone payload Reasoning
-					if m.lastReasoning != "" {
-						snap.Reasoning = m.lastReasoning
-					} else if prev != nil && prev.Reasoning != "" {
-						snap.Reasoning = prev.Reasoning
-					} else if prev != nil && prev.ReasoningStreamContent != "" {
-						snap.Reasoning = prev.ReasoningStreamContent
-					} else if msg.payload.Reasoning != "" {
-						snap.Reasoning = msg.payload.Reasoning
-					}
-					if len(finalTools) > 0 || snap.Thinking != "" || snap.Reasoning != "" {
-						m.iterationHistory = append(m.iterationHistory, snap)
-					}
-				}
-				// Generate tool_summary if we have iteration history.
-				// Append to end immediately so cancel/error cases (no handleAgentMessage)
-				// still display the summary. handleAgentMessage will relocate it before
-				// the assistant reply if one follows.
-				if len(m.iterationHistory) > 0 {
-					m.pendingToolSummary = &cliMessage{
-						role:       "tool_summary",
-						content:    "",
-						timestamp:  time.Now(),
-						iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
-						dirty:      true,
-					}
-					m.messages = append(m.messages, *m.pendingToolSummary)
-					m.renderCacheValid = false
-				}
-			}
-			// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
-			m.todos = nil
-			m.todosDoneCleared = false
-			m.endAgentTurn(turnID)
-			if turnID == m.agentTurnID {
-				m.inputReady = true
-				if len(m.messageQueue) > 0 {
-					m.needFlushQueue = true
-				}
-			}
-
-			// For agent sessions (interactive SubAgent viewer), the outbound
-			// message goes back to the parent agent's channel/chatID — it never
-			// arrives as a cliOutboundMsg for this session view. So we must
-			// synthesize the assistant message from the progress payload's final
-			// content (Thinking field carries the last clean assistant text).
-			// For main sessions, handleAgentMessage handles this and will
-			// relocate the tool_summary before the assistant reply.
-			if m.channelName == "agent" && !m.typing {
-				assistantContent := msg.payload.Thinking
-				if assistantContent == "" {
-					assistantContent = msg.payload.StreamContent
-				}
-				if assistantContent != "" {
-					m.messages = append(m.messages, cliMessage{
-						role:      "assistant",
-						content:   assistantContent,
-						timestamp: time.Now(),
-						dirty:     true,
-					})
-					m.renderCacheValid = false
-				}
-			}
-
-			m.relayoutViewport()
+			m.handleProgressDone(msg, prev, turnID)
 		}
 	}
 	m.updateViewportContent()
+}
+
+// syncProgressTodos syncs todo items from the progress payload.
+func (m *cliModel) syncProgressTodos(payload *CLIProgressPayload) {
+	if payload == nil {
+		return
+	}
+	if len(payload.Todos) > 0 {
+		allDone := true
+		for _, t := range payload.Todos {
+			if !t.Done {
+				allDone = false
+				break
+			}
+		}
+		if m.todosDoneCleared && allDone {
+			// Already cleared by user input; don't re-accept stale all-done list
+		} else {
+			m.todos = make([]CLITodoItem, len(payload.Todos))
+			copy(m.todos, payload.Todos)
+			m.todosDoneCleared = false
+			m.relayoutViewport()
+		}
+	} else {
+		prevTodoCount := len(m.todos)
+		m.todos = nil
+		if prevTodoCount > 0 {
+			m.relayoutViewport()
+		}
+	}
+}
+
+// snapshotIterationChange detects iteration changes and snapshots the previous
+// iteration's tools/reasoning into iteration history.
+func (m *cliModel) snapshotIterationChange(payload *CLIProgressPayload, prev *CLIProgressPayload) {
+	if payload == nil {
+		return
+	}
+	if payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
+		prevIterTools := prev.CompletedTools
+		prevReasoning := prev.Reasoning
+		if prevReasoning == "" {
+			prevReasoning = prev.ReasoningStreamContent
+		}
+		if len(prevIterTools) > 0 || prev.Thinking != "" || prevReasoning != "" {
+			snap := cliIterationSnapshot{
+				Iteration:   m.lastSeenIteration,
+				Thinking:    prev.Thinking,
+				Reasoning:   prevReasoning,
+				Tools:       prevIterTools,
+				ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
+			}
+			m.iterationHistory = append(m.iterationHistory, snap)
+		}
+		m.lastCompletedTools = m.lastCompletedTools[:0]
+		m.lastSeenIteration = payload.Iteration
+		m.iterationStartTime = time.Now()
+	}
+}
+
+// handleProgressDone handles the Phase "done" case: snapshots the final iteration,
+// generates tool summary, resets iteration tracking state, and synthesizes agent messages.
+func (m *cliModel) handleProgressDone(msg cliProgressMsg, prev *CLIProgressPayload, turnID uint64) {
+	// Snapshot the final iteration before clearing progress.
+	// This handles the case where PhaseDone arrives before
+	// handleAgentMessage (e.g. agent error/cancel).
+	// Skip if handleAgentMessage already processed (m.typing == false
+	// means the reply arrived and cleaned up iteration state).
+	if m.typing && m.lastSeenIteration >= 0 {
+		alreadySnapped := slices.ContainsFunc(m.iterationHistory, func(s cliIterationSnapshot) bool {
+			return s.Iteration == m.lastSeenIteration
+		})
+		if !alreadySnapped {
+			var finalTools []CLIToolProgress
+			// Check progress.CompletedTools first (set by progressFinalizer)
+			finalTools = append(finalTools, msg.payload.CompletedTools...)
+			// Also include any from lastCompletedTools (race safety)
+			for _, t := range m.lastCompletedTools {
+				if !slices.ContainsFunc(finalTools, func(existing CLIToolProgress) bool {
+					return existing.Name == t.Name && existing.Label == t.Label
+				}) {
+					finalTools = append(finalTools, t)
+				}
+			}
+			snap := cliIterationSnapshot{
+				Iteration:   m.lastSeenIteration,
+				Thinking:    msg.payload.Thinking,
+				Tools:       finalTools,
+				ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
+			}
+			// Carry over reasoning: priority is lastReasoning (captured before progress clear)
+			// > prev progress Reasoning > prev ReasoningStreamContent
+			// > PhaseDone payload Reasoning
+			if m.lastReasoning != "" {
+				snap.Reasoning = m.lastReasoning
+			} else if prev != nil && prev.Reasoning != "" {
+				snap.Reasoning = prev.Reasoning
+			} else if prev != nil && prev.ReasoningStreamContent != "" {
+				snap.Reasoning = prev.ReasoningStreamContent
+			} else if msg.payload.Reasoning != "" {
+				snap.Reasoning = msg.payload.Reasoning
+			}
+			if len(finalTools) > 0 || snap.Thinking != "" || snap.Reasoning != "" {
+				m.iterationHistory = append(m.iterationHistory, snap)
+			}
+		}
+		// Generate tool_summary if we have iteration history.
+		// Append to end immediately so cancel/error cases (no handleAgentMessage)
+		// still display the summary. handleAgentMessage will relocate it before
+		// the assistant reply if one follows.
+		if len(m.iterationHistory) > 0 {
+			m.pendingToolSummary = &cliMessage{
+				role:       "tool_summary",
+				content:    "",
+				timestamp:  time.Now(),
+				iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
+				dirty:      true,
+			}
+			m.messages = append(m.messages, *m.pendingToolSummary)
+			m.renderCacheValid = false
+		}
+	}
+	// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
+	m.todos = nil
+	m.todosDoneCleared = false
+	m.endAgentTurn(turnID)
+	if turnID == m.agentTurnID {
+		m.inputReady = true
+		if len(m.messageQueue) > 0 {
+			m.needFlushQueue = true
+		}
+	}
+
+	// For agent sessions (interactive SubAgent viewer), the outbound
+	// message goes back to the parent agent's channel/chatID — it never
+	// arrives as a cliOutboundMsg for this session view. So we must
+	// synthesize the assistant message from the progress payload's final
+	// content (Thinking field carries the last clean assistant text).
+	// For main sessions, handleAgentMessage handles this and will
+	// relocate the tool_summary before the assistant reply.
+	if m.channelName == "agent" && !m.typing {
+		assistantContent := msg.payload.Thinking
+		if assistantContent == "" {
+			assistantContent = msg.payload.StreamContent
+		}
+		if assistantContent != "" {
+			m.messages = append(m.messages, cliMessage{
+				role:      "assistant",
+				content:   assistantContent,
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+			m.renderCacheValid = false
+		}
+	}
+
+	m.relayoutViewport()
 }
 
 // handleInjectedUserMsg processes user messages injected by the agent (e.g. bg task completion).

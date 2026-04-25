@@ -52,6 +52,10 @@ resolve_version() {
 }
 
 # Non-interactive: use MODE env var. Interactive: prompt user.
+# IMPORTANT: all prompt output goes to stderr (>&2) because this function
+# is called via command substitution: MODE=$(ask_mode). $() captures stdout,
+# so any echo/printf to stdout would be swallowed — the user would never see
+# the prompt but read would block waiting for input.
 ask_mode() {
     if [ -n "${MODE:-}" ]; then
         case "$MODE" in
@@ -60,25 +64,25 @@ ask_mode() {
         esac
         return
     fi
-    # When piped (curl | bash), stdin is not a terminal but the user may still
-    # be at an interactive shell. Try /dev/tty first — it bypasses the pipe
-    # and connects directly to the user's terminal.
-    if [ ! -e /dev/tty ]; then
+    # Try /dev/tty — bypasses the curl pipe on stdin so we can read user input.
+    # Check readability: -c (char device) + -r (readable) is more reliable than -e.
+    if ! [ -c /dev/tty ] || ! [ -r /dev/tty ]; then
         info "Non-interactive mode (no /dev/tty). Defaulting to standalone."
-        info "Use MODE=server-client or run interactively to change."
+        info "Set MODE=server-client to install server-client mode."
         echo "standalone"
         return
     fi
-    echo ""
-    echo "Choose install mode:"
-    echo "  1) standalone      - CLI runs locally in-process"
-    echo "  2) server-client   - install local server service, CLI connects remotely"
-    printf "Select [1/2] (default 1): "
-    read -r mode </dev/tty
+    echo "" >&2
+    echo "Choose install mode:" >&2
+    echo "  1) standalone      - CLI runs locally in-process" >&2
+    echo "  2) server-client   - install local server service, CLI connects remotely" >&2
+    printf "Select [1/2] (default 1): " >&2
+    local mode
+    read -r mode </dev/tty || mode=1
     case "${mode:-1}" in
         1) echo "standalone" ;;
         2) echo "server-client" ;;
-        *) error "Invalid selection: ${mode}" ;;
+        *) echo "standalone" ;;
     esac
 }
 

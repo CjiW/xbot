@@ -8,6 +8,7 @@ import (
 	"xbot/channel"
 	"xbot/config"
 	log "xbot/logger"
+	"xbot/tools"
 )
 
 // settingHandler defines how a setting key updates runtime state.
@@ -18,6 +19,10 @@ type settingHandler struct {
 	// ApplyBackend applies runtime side effects via the backend.
 	// Called after ApplyConfig. Both backend and senderID are non-nil/non-empty.
 	ApplyBackend func(backend agent.AgentBackend, senderID, value string)
+	// ApplyFull is called with both cfg and backend. Used when the side effect
+	// needs config context (e.g. sandbox reinit needs cfg.Agent.WorkDir).
+	// If set, called instead of the ApplyConfig+ApplyBackend pair.
+	ApplyFull func(cfg *config.Config, backend agent.AgentBackend, senderID, value string)
 }
 
 // settingHandlerRegistry is the single source of truth for server-side runtime
@@ -52,6 +57,14 @@ var settingHandlerRegistry = map[string]settingHandler{
 	// --- Agent settings ---
 	"sandbox_mode": {
 		ApplyConfig: func(cfg *config.Config, value string) { cfg.Sandbox.Mode = value },
+		ApplyFull: func(cfg *config.Config, backend agent.AgentBackend, senderID, value string) {
+			workDir := cfg.Agent.WorkDir
+			if workDir == "" {
+				workDir = "."
+			}
+			tools.ReinitSandbox(cfg.Sandbox, workDir)
+			backend.SetSandbox(tools.GetSandbox(), value)
+		},
 	},
 	"memory_provider": {
 		ApplyConfig: func(cfg *config.Config, value string) { cfg.Agent.MemoryProvider = value },
@@ -136,11 +149,15 @@ func applyRuntimeSetting(cfg *config.Config, backend agent.AgentBackend, senderI
 		}
 		return
 	}
-	if handler.ApplyConfig != nil {
-		handler.ApplyConfig(cfg, value)
-	}
-	if handler.ApplyBackend != nil && backend != nil {
-		handler.ApplyBackend(backend, senderID, value)
+	if handler.ApplyFull != nil && backend != nil {
+		handler.ApplyFull(cfg, backend, senderID, value)
+	} else {
+		if handler.ApplyConfig != nil {
+			handler.ApplyConfig(cfg, value)
+		}
+		if handler.ApplyBackend != nil && backend != nil {
+			handler.ApplyBackend(backend, senderID, value)
+		}
 	}
 	if backend != nil && backend.LLMFactory() != nil {
 		backend.LLMFactory().SetModelTiers(cfg.LLM)
@@ -165,21 +182,29 @@ func applyRuntimeSettings(cfg *config.Config, backend agent.AgentBackend, sender
 			}
 			continue
 		}
-		if handler.ApplyConfig != nil {
-			handler.ApplyConfig(cfg, v)
-		}
-		if handler.ApplyBackend != nil && backend != nil {
-			handler.ApplyBackend(backend, senderID, v)
+		if handler.ApplyFull != nil && backend != nil {
+			handler.ApplyFull(cfg, backend, senderID, v)
+		} else {
+			if handler.ApplyConfig != nil {
+				handler.ApplyConfig(cfg, v)
+			}
+			if handler.ApplyBackend != nil && backend != nil {
+				handler.ApplyBackend(backend, senderID, v)
+			}
 		}
 	}
 	// Process context_mode last so it overrides enable_auto_compress
 	if v, ok := values["context_mode"]; ok && v != "" {
 		handler := settingHandlerRegistry["context_mode"]
-		if handler.ApplyConfig != nil {
-			handler.ApplyConfig(cfg, v)
-		}
-		if handler.ApplyBackend != nil && backend != nil {
-			handler.ApplyBackend(backend, senderID, v)
+		if handler.ApplyFull != nil && backend != nil {
+			handler.ApplyFull(cfg, backend, senderID, v)
+		} else {
+			if handler.ApplyConfig != nil {
+				handler.ApplyConfig(cfg, v)
+			}
+			if handler.ApplyBackend != nil && backend != nil {
+				handler.ApplyBackend(backend, senderID, v)
+			}
 		}
 	}
 	// SetModelTiers and config save: once after all keys

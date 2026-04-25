@@ -359,24 +359,22 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 		} else if m.typing {
 			// Turn started but no structured progress yet — create minimal payload
 			m.progress = msg.payload
-
-			// Cache token usage for context bar display (ready-status bar).
-			// This is also done in endAgentTurn and handleReconnectProgress,
-			// but we need it here too so the context bar updates in real-time
-			// during each progress event, not just at turn end.
-			if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.PromptTokens > 0 {
-				m.lastTokenUsage = m.progress.TokenUsage
-				if m.progress.TokenUsage.MaxOutputTokens > 0 {
-					m.cachedMaxOutputTokens = m.progress.TokenUsage.MaxOutputTokens
-				}
-			}
-			if m.cachedMaxContextTokens == 0 {
-				m.cachedMaxContextTokens = m.resolveMaxContextTokens()
-			}
 		}
 		return
 	}
 	m.progress = msg.payload
+
+	// Cache token usage for context bar display — every progress event
+	// carries fresh token counts from the agent's updateTokenUsage().
+	if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.PromptTokens > 0 {
+		m.lastTokenUsage = m.progress.TokenUsage
+		if m.progress.TokenUsage.MaxOutputTokens > 0 {
+			m.cachedMaxOutputTokens = m.progress.TokenUsage.MaxOutputTokens
+		}
+	}
+	if m.cachedMaxContextTokens == 0 {
+		m.cachedMaxContextTokens = m.resolveMaxContextTokens()
+	}
 
 	// Restore iteration history from reconnect/GetActiveProgress snapshot.
 	// When a CLI reconnects mid-turn, the server sends completed iterations

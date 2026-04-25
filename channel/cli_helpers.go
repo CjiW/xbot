@@ -102,7 +102,7 @@ func isUserScopedSettingKey(key string) bool {
 	return ok
 }
 
-func isGlobalScopedSettingKey(key string) bool {
+func IsGlobalScopedSettingKey(key string) bool {
 	_, ok := cliGlobalScopedSettingKeys[key]
 	return ok
 }
@@ -121,7 +121,7 @@ func cliSettingScope(key string) string {
 	if isUserScopedSettingKey(key) {
 		return "user"
 	}
-	if isGlobalScopedSettingKey(key) {
+	if IsGlobalScopedSettingKey(key) {
 		return "global"
 	}
 	if isSubscriptionScopedSettingKey(key) {

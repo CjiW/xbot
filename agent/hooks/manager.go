@@ -115,21 +115,23 @@ func (m *Manager) ReloadConfig() error {
 //   - command-type handlers are skipped when EnableCommandHooks is false.
 //
 // Decision aggregation priority: deny > defer > ask > allow.
+
+// hookEntry represents a matched handler to execute.
+type hookEntry struct {
+	builtin *CallbackHook
+	def     *HookDef
+}
+
 func (m *Manager) Emit(ctx context.Context, event Event) (*Decision, error) {
 	eventName := event.EventName()
 
 	// Collect all matching handlers.
-	type handler struct {
-		builtin *CallbackHook
-		def     *HookDef
-	}
-
 	m.mu.RLock()
-	handlers := make([]handler, 0, len(m.builtins)+16)
+	handlers := make([]hookEntry, 0, len(m.builtins)+16)
 
 	// 1. Builtins — always match.
 	for _, b := range m.builtins {
-		handlers = append(handlers, handler{builtin: b})
+		handlers = append(handlers, hookEntry{builtin: b})
 	}
 
 	// 2. Config hooks — match by event name, matcher, and if-condition.
@@ -145,7 +147,7 @@ func (m *Manager) Emit(ctx context.Context, event Event) (*Decision, error) {
 			if !matcher.SetIf(def.If).MatchIf(event) {
 				continue
 			}
-			handlers = append(handlers, handler{def: def})
+			handlers = append(handlers, hookEntry{def: def})
 		}
 	}
 
@@ -171,53 +173,10 @@ func (m *Manager) Emit(ctx context.Context, event Event) (*Decision, error) {
 	// Execute handlers and collect decisions.
 	var decisions []*Decision
 	for _, h := range handlers {
-		// Callback handler.
-		if h.builtin != nil {
-			result, err := h.builtin.Fn(ctx, event)
-			if err != nil {
-				log.Errorf("hooks: builtin %q error: %v", h.builtin.Name, err)
-				continue
-			}
-			decisions = append(decisions, resultToDecision(result))
-			continue
+		decision := m.executeHandler(ctx, h, event, commandEnabled)
+		if decision != nil {
+			decisions = append(decisions, decision)
 		}
-
-		def := h.def
-
-		// Command handler — check enabled flag.
-		if def.Type == "command" && !commandEnabled {
-			log.Debug("hooks: skipping command handler (EnableCommandHooks=false)")
-			continue
-		}
-
-		// Async handler — fire and forget.
-		if def.Async {
-			go func(d *HookDef) {
-				exec := m.getExecutor(d.Type)
-				if exec == nil {
-					log.Errorf("hooks: no executor for type %q", d.Type)
-					return
-				}
-				_, err := exec.Execute(ctx, d, event)
-				if err != nil {
-					log.Errorf("hooks: async %s handler error: %v", d.Type, err)
-				}
-			}(def)
-			continue
-		}
-
-		// Sync handler.
-		exec := m.getExecutor(def.Type)
-		if exec == nil {
-			log.Errorf("hooks: no executor for type %q", def.Type)
-			continue
-		}
-		result, err := exec.Execute(ctx, def, event)
-		if err != nil {
-			log.Errorf("hooks: %s handler error: %v", def.Type, err)
-			continue
-		}
-		decisions = append(decisions, resultToDecision(result))
 	}
 
 	if len(decisions) == 0 {
@@ -225,6 +184,78 @@ func (m *Manager) Emit(ctx context.Context, event Event) (*Decision, error) {
 	}
 
 	return aggregateDecisions(decisions), nil
+}
+
+// executeHandler runs a single handler with panic recovery.
+// Returns nil for async handlers or handlers that should be skipped.
+func (m *Manager) executeHandler(ctx context.Context, h hookEntry, event Event, commandEnabled bool) (decision *Decision) {
+	// Recover from panics — a hook must never crash the agent.
+	defer func() {
+		if r := recover(); r != nil {
+			name := "<unknown>"
+			switch {
+			case h.builtin != nil:
+				name = "builtin:" + h.builtin.Name
+			case h.def != nil:
+				name = string(h.def.Type) + ":" + h.def.Command
+			}
+			log.Errorf("hooks: handler %q panicked: %v — skipping", name, r)
+			decision = nil // treat as skipped (Defer)
+		}
+	}()
+
+	// Callback handler.
+	if h.builtin != nil {
+		result, err := h.builtin.Fn(ctx, event)
+		if err != nil {
+			log.Errorf("hooks: builtin %q error: %v", h.builtin.Name, err)
+			return nil
+		}
+		return resultToDecision(result)
+	}
+
+	def := h.def
+
+	// Command handler — check enabled flag.
+	if def.Type == "command" && !commandEnabled {
+		log.Debug("hooks: skipping command handler (EnableCommandHooks=false)")
+		return nil
+	}
+
+	// Async handler — fire and forget with independent context.
+	if def.Async {
+		go func(d *HookDef) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("hooks: async %s handler panicked: %v", d.Type, r)
+				}
+			}()
+			asyncCtx := context.WithoutCancel(ctx)
+			exec := m.getExecutor(d.Type)
+			if exec == nil {
+				log.Errorf("hooks: no executor for type %q", d.Type)
+				return
+			}
+			_, err := exec.Execute(asyncCtx, d, event)
+			if err != nil {
+				log.Errorf("hooks: async %s handler error: %v", d.Type, err)
+			}
+		}(def)
+		return nil
+	}
+
+	// Sync handler.
+	exec := m.getExecutor(def.Type)
+	if exec == nil {
+		log.Errorf("hooks: no executor for type %q", def.Type)
+		return nil
+	}
+	result, err := exec.Execute(ctx, def, event)
+	if err != nil {
+		log.Errorf("hooks: %s handler error: %v", def.Type, err)
+		return nil
+	}
+	return resultToDecision(result)
 }
 
 // ---------------------------------------------------------------------------

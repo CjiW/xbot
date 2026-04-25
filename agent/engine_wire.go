@@ -1074,7 +1074,12 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
 		// 6-8. Execute with hooks (shared implementation — same as defaultToolExecutor)
-		return executeWithHooks(cfg.HookManager, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
+		return executeWithHooks(cfg.HookManager, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool, hooks.BasePayload{
+			SessionID: cfg.ChatID,
+			Channel:   cfg.Channel,
+			SenderID:  cfg.OriginUserID,
+			ChatID:    cfg.ChatID,
+		})
 	}
 }
 

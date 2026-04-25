@@ -89,3 +89,4 @@ cmd-output-*.md
 mermaid-ascii
 ultraviolet
 .VSCodeCounter/
+.config/

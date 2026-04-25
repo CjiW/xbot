@@ -531,17 +531,25 @@ func executeWithHooks(
 	toolCtx *tools.ToolContext,
 	toolName, toolArgs string,
 	tool tools.Tool,
+	base hooks.BasePayload,
 ) (*tools.ToolResult, error) {
 	// Parse toolArgs to map for event payload
 	var toolInput map[string]any
 	json.Unmarshal([]byte(toolArgs), &toolInput)
 
+	// Fill timestamp and CWD from context.
+	base.Timestamp = time.Now().Format(time.RFC3339)
+	if wd := tools.WorkingDirFromContext(toolExecCtx); wd != "" && base.CWD == "" {
+		base.CWD = wd
+	}
+
 	// Pre-tool hooks via Manager.Emit
 	if hookMgr != nil {
 		hookCtx := tools.WithWorkingDir(toolExecCtx, toolCtx.WorkingDir)
 		preEvent := &hooks.PreToolUseEvent{
-			ToolName_:  toolName,
-			ToolInput_: toolInput,
+			BasePayload: base,
+			ToolName_:   toolName,
+			ToolInput_:  toolInput,
 		}
 		decision, err := hookMgr.Emit(hookCtx, preEvent)
 		if err != nil {
@@ -567,12 +575,14 @@ func executeWithHooks(
 		var postEvent hooks.Event
 		if err != nil {
 			postEvent = &hooks.PostToolUseFailureEvent{
-				ToolName_:  toolName,
-				ToolInput_: toolInput,
-				ToolError:  err.Error(),
+				BasePayload: base,
+				ToolName_:   toolName,
+				ToolInput_:  toolInput,
+				ToolError:   err.Error(),
 			}
 		} else {
 			postEvent = &hooks.PostToolUseEvent{
+				BasePayload:   base,
 				ToolName_:     toolName,
 				ToolInput_:    toolInput,
 				ToolElapsedMs: elapsed.Milliseconds(),
@@ -602,7 +612,12 @@ func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCa
 		}
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
-		return executeWithHooks(cfg.HookManager, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
+		return executeWithHooks(cfg.HookManager, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool, hooks.BasePayload{
+			SessionID: cfg.ChatID,
+			Channel:   cfg.Channel,
+			SenderID:  cfg.OriginUserID,
+			ChatID:    cfg.ChatID,
+		})
 	}
 }
 

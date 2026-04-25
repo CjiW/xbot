@@ -132,3 +132,84 @@ func TestValidateRunAsReason(t *testing.T) {
 		})
 	}
 }
+
+func TestIsKnownDotFile(t *testing.T) {
+	t.Run("known files return true", func(t *testing.T) {
+		for _, name := range []string{
+			".xbot", ".git", ".github", ".gitlab-ci.yml",
+			".gitignore", ".editorconfig", ".env",
+			".env.example", ".env.local",
+		} {
+			t.Run(name, func(t *testing.T) {
+				if !isKnownDotFile(name) {
+					t.Errorf("isKnownDotFile(%q) = false, want true", name)
+				}
+			})
+		}
+	})
+
+	t.Run("unknown files return false", func(t *testing.T) {
+		for _, name := range []string{".foo", "package.json", "README.md", "."} {
+			t.Run(name, func(t *testing.T) {
+				if isKnownDotFile(name) {
+					t.Errorf("isKnownDotFile(%q) = true, want false", name)
+				}
+			})
+		}
+	})
+}
+
+func TestSplitJSONLLines(t *testing.T) {
+	t.Run("empty data returns empty slice", func(t *testing.T) {
+		got := splitJSONLLines([]byte{})
+		if len(got) != 0 {
+			t.Errorf("got %d lines, want 0", len(got))
+		}
+	})
+
+	t.Run("single line no newline returns one element", func(t *testing.T) {
+		got := splitJSONLLines([]byte(`{"a":1}`))
+		if len(got) != 1 {
+			t.Fatalf("got %d lines, want 1", len(got))
+		}
+		if string(got[0]) != `{"a":1}` {
+			t.Errorf("got %q, want %q", string(got[0]), `{"a":1}`)
+		}
+	})
+
+	t.Run("two lines returns two elements", func(t *testing.T) {
+		got := splitJSONLLines([]byte("line1\nline2"))
+		if len(got) != 2 {
+			t.Fatalf("got %d lines, want 2", len(got))
+		}
+		if string(got[0]) != "line1" {
+			t.Errorf("got[0] = %q, want %q", string(got[0]), "line1")
+		}
+		if string(got[1]) != "line2" {
+			t.Errorf("got[1] = %q, want %q", string(got[1]), "line2")
+		}
+	})
+
+	t.Run("trailing newline yields no trailing empty element", func(t *testing.T) {
+		got := splitJSONLLines([]byte("line1\n"))
+		if len(got) != 1 {
+			t.Fatalf("got %d lines, want 1", len(got))
+		}
+		if string(got[0]) != "line1" {
+			t.Errorf("got[0] = %q, want %q", string(got[0]), "line1")
+		}
+	})
+
+	t.Run("multiple newlines correct count", func(t *testing.T) {
+		got := splitJSONLLines([]byte("a\nb\nc\n"))
+		if len(got) != 3 {
+			t.Fatalf("got %d lines, want 3", len(got))
+		}
+		want := []string{"a", "b", "c"}
+		for i, w := range want {
+			if string(got[i]) != w {
+				t.Errorf("got[%d] = %q, want %q", i, string(got[i]), w)
+			}
+		}
+	})
+}

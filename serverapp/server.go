@@ -437,9 +437,19 @@ func Run(args []string) error {
 
 	// Sync Agent runtime settings from DB (admin user).
 	// DB is the source of truth — config.json may be stale after user changes.
+	// Exception: sandbox_mode is a server-level config initialized from config.json
+	// by InitSandbox above. DB should NOT override it on startup.
 	if ss := backend.SettingsService(); ss != nil {
 		if vals, err := ss.GetSettings("cli", cliSenderID); err == nil {
+			// Preserve config.json sandbox_mode — it was already used by InitSandbox.
+			// Remove from vals so applyRuntimeSettings doesn't override it.
+			sandboxFromConfig := cfg.Sandbox.Mode
+			delete(vals, "sandbox_mode")
 			applyRuntimeSettings(cfg, backend, cliSenderID, vals)
+			// Ensure sandbox_mode stays as config.json set it.
+			if sandboxFromConfig != "" {
+				cfg.Sandbox.Mode = sandboxFromConfig
+			}
 			log.Info("Agent runtime settings synced from DB")
 		}
 	}

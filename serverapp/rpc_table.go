@@ -153,6 +153,15 @@ func registerSettingsHandlers(t rpcTable, h *rpcContext) {
 		case "llm_provider", "llm_api_key", "llm_model", "llm_base_url":
 			return nil
 		}
+		// Global-scoped keys (sandbox_mode) are server-level config, not per-user.
+		// Apply runtime effect but don't persist to user_settings DB —
+		// the source of truth is config.json.
+		if channel.IsGlobalScopedSettingKey(p.Key) {
+			if isAdmin(rpcAuthID(ctx)) {
+				applyRuntimeSetting(h.cfg, h.backend, bizID, p.Key, p.Value)
+			}
+			return nil
+		}
 		if h.backend.SettingsService() == nil {
 			return errSettingsUnavailable
 		}

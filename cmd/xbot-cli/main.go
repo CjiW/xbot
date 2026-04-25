@@ -899,6 +899,9 @@ func main() {
 				if isCLISubscriptionSettingKey(k) {
 					continue // subscription fields handled above
 				}
+				if channel.IsGlobalScopedSettingKey(k) {
+					continue // global-scoped keys not stored in DB
+				}
 				_ = app.backend.SetSetting("cli", "cli_user", k, v)
 			}
 			applyCLISettingsToBackend(app.backend, "cli_user", values)

@@ -931,6 +931,12 @@ func (b *RemoteBackend) SetMaxContextTokens(n int) {
 	}
 }
 
+func (b *RemoteBackend) SetCompressionThreshold(f float64) {
+	if err := b.callRPCVoid("set_compression_threshold", map[string]float64{"threshold": f}); err != nil {
+		log.WithError(err).Warn("RemoteBackend: SetCompressionThreshold RPC failed")
+	}
+}
+
 func (b *RemoteBackend) SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model string) {
 	if err := b.callRPCVoid("set_proxy_llm", map[string]string{"model": model}); err != nil {
 		log.WithError(err).Warn("RemoteBackend: SetProxyLLM RPC failed")
@@ -1379,7 +1385,7 @@ func RPCMethodList() []string {
 	return []string{
 		"get_context_mode", "set_context_mode",
 		"get_settings", "set_setting",
-		"set_max_iterations", "set_max_concurrency", "set_max_context_tokens",
+		"set_max_iterations", "set_max_concurrency", "set_max_context_tokens", "set_compression_threshold",
 		"get_default_model", "set_user_model", "switch_model",
 		"get_user_max_context", "set_user_max_context",
 		"get_user_max_output_tokens", "set_user_max_output_tokens",

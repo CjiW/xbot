@@ -128,6 +128,9 @@ type AgentBackend interface {
 	// SetMaxContextTokens sets the max context token limit.
 	SetMaxContextTokens(n int)
 
+	// SetCompressionThreshold sets the context compression threshold ratio.
+	SetCompressionThreshold(f float64)
+
 	// SetSandbox replaces the sandbox instance and mode at runtime.
 	SetSandbox(sb tools.Sandbox, mode string)
 

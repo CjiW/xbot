@@ -24,16 +24,17 @@ var cliUserScopedSettingKeys = map[string]struct{}{
 }
 
 var cliGlobalScopedSettingKeys = map[string]struct{}{
-	"vanguard_model":  {},
-	"balance_model":   {},
-	"swift_model":     {},
-	"sandbox_mode":    {},
-	"memory_provider": {},
-	"tavily_api_key":  {},
-	"enable_stream":   {},
-	"enable_masking":  {},
-	"default_user":    {},
-	"privileged_user": {},
+	"vanguard_model":       {},
+	"balance_model":        {},
+	"swift_model":          {},
+	"sandbox_mode":         {},
+	"compression_threshold": {},
+	"memory_provider":      {},
+	"tavily_api_key":       {},
+	"enable_stream":        {},
+	"enable_masking":       {},
+	"default_user":         {},
+	"privileged_user":      {},
 }
 
 // CLIRuntimeSettingKeys lists all setting keys that require runtime application
@@ -49,6 +50,7 @@ var CLIRuntimeSettingKeys = []string{
 	"balance_model",
 	"swift_model",
 	"sandbox_mode",
+	"compression_threshold",
 	"memory_provider",
 	"tavily_api_key",
 	"context_mode",

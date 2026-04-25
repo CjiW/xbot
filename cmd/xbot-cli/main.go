@@ -99,6 +99,9 @@ func (app *cliApp) refreshRemoteValuesCache() {
 	if _, ok := vals["max_context_tokens"]; !ok {
 		vals["max_context_tokens"] = "200000" // default from config.go
 	}
+	if _, ok := vals["compression_threshold"]; !ok {
+		vals["compression_threshold"] = "0.9"
+	}
 	app.valuesCacheMu.Lock()
 	app.valuesCache = vals
 	app.valuesCacheMu.Unlock()
@@ -822,6 +825,12 @@ func main() {
 				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
 				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
+				"compression_threshold": func() string {
+					if app.cfg.Agent.CompressionThreshold > 0 {
+						return fmt.Sprintf("%g", app.cfg.Agent.CompressionThreshold)
+					}
+					return "0.9"
+				}(),
 				"max_output_tokens": func() string {
 					// Prefer subscription value (single source of truth)
 					if activeSub != nil && activeSub.MaxOutputTokens > 0 {

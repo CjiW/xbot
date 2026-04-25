@@ -66,6 +66,18 @@ var settingHandlerRegistry = map[string]settingHandler{
 			backend.SetSandbox(tools.GetSandbox(), value)
 		},
 	},
+	"compression_threshold": {
+		ApplyConfig: func(cfg *config.Config, value string) {
+			if f, err := strconv.ParseFloat(value, 64); err == nil && f > 0 {
+				cfg.Agent.CompressionThreshold = f
+			}
+		},
+		ApplyBackend: func(backend agent.AgentBackend, senderID, value string) {
+			if f, err := strconv.ParseFloat(value, 64); err == nil && f > 0 {
+				backend.SetCompressionThreshold(f)
+			}
+		},
+	},
 	"memory_provider": {
 		ApplyConfig: func(cfg *config.Config, value string) { cfg.Agent.MemoryProvider = value },
 	},

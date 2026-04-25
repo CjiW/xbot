@@ -243,6 +243,10 @@ func (b *LocalBackend) SetMaxContextTokens(n int) {
 	b.agent.SetMaxContextTokens(n)
 }
 
+func (b *LocalBackend) SetCompressionThreshold(f float64) {
+	b.agent.SetCompressionThreshold(f)
+}
+
 func (b *LocalBackend) SetSandbox(sb tools.Sandbox, mode string) {
 	b.agent.SetSandbox(sb, mode)
 }

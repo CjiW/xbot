@@ -470,6 +470,18 @@ func localeZH() *UILocale {
 			// Subscription management entry (display-only, triggers quick switch)
 			{Key: "subscription_manage", Label: "📦 订阅管理", Type: SettingTypeText, Category: "LLM"},
 			{
+				Key: "sandbox_mode", Label: "沙箱模式", Description: "命令执行隔离方式",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "none",
+				Options: []SettingOption{
+					{Label: "none — 直接执行（推荐）", Value: "none"},
+					{Label: "docker — 容器隔离", Value: "docker"},
+				},
+			},
+			{
+				Key: "compression_threshold", Label: "压缩阈值", Description: "上下文压缩触发阈值，占最大上下文的比例（默认 0.9）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "0.9",
+			},
+			{
 				Key: "context_mode", Label: "上下文模式", Description: "控制上下文管理策略",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",
 				Options: []SettingOption{
@@ -845,6 +857,18 @@ func localeEN() *UILocale {
 			// Subscription management entry (display-only, triggers quick switch)
 			{Key: "subscription_manage", Label: "📦 Subscriptions", Type: SettingTypeText, Category: "LLM"},
 			{
+				Key: "sandbox_mode", Label: "Sandbox Mode", Description: "Command execution isolation method",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "none",
+				Options: []SettingOption{
+					{Label: "none — direct execution (recommended)", Value: "none"},
+					{Label: "docker — container isolation", Value: "docker"},
+				},
+			},
+			{
+				Key: "compression_threshold", Label: "Compression Threshold", Description: "Context compression trigger ratio (default 0.9)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "0.9",
+			},
+			{
 				Key: "context_mode", Label: "Context Mode", Description: "Context management strategy",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",
 				Options: []SettingOption{
@@ -1219,6 +1243,18 @@ func localeJA() *UILocale {
 			},
 			// Subscription management entry (display-only, triggers quick switch)
 			{Key: "subscription_manage", Label: "📦 サブスクリプション管理", Type: SettingTypeText, Category: "LLM"},
+			{
+				Key: "sandbox_mode", Label: "サンドボックスモード", Description: "コマンド実行の分離方法",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "none",
+				Options: []SettingOption{
+					{Label: "none — 直接実行（推奨）", Value: "none"},
+					{Label: "docker — コンテナ分離", Value: "docker"},
+				},
+			},
+			{
+				Key: "compression_threshold", Label: "圧縮閾値", Description: "コンテキスト圧縮のトリガー比率（デフォルト 0.9）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "0.9",
+			},
 			{
 				Key: "context_mode", Label: "コンテキストモード", Description: "コンテキスト管理戦略",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",

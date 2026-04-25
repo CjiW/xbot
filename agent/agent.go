@@ -936,6 +936,12 @@ func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerMu.Unlock()
 }
 
+func (a *Agent) SetCompressionThreshold(f float64) {
+	a.contextManagerMu.Lock()
+	a.contextManagerConfig.CompressionThreshold = f
+	a.contextManagerMu.Unlock()
+}
+
 func (a *Agent) getMaxIterations() int {
 	a.contextManagerMu.RLock()
 	defer a.contextManagerMu.RUnlock()

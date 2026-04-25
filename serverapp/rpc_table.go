@@ -153,6 +153,9 @@ func registerSettingsHandlers(t rpcTable, h *rpcContext) {
 		if _, ok := result["context_mode"]; !ok {
 			result["context_mode"] = h.cfg.Agent.ContextMode
 		}
+		if _, ok := result["compression_threshold"]; !ok {
+			result["compression_threshold"] = fmt.Sprintf("%g", h.cfg.Agent.CompressionThreshold)
+		}
 		return result, nil
 	})
 	t["set_setting"] = rpc1void(func(ctx context.Context, p struct {
@@ -207,6 +210,12 @@ func registerSettingsHandlers(t rpcTable, h *rpcContext) {
 		N int `json:"n"`
 	}) error {
 		h.backend.SetMaxContextTokens(p.N)
+		return nil
+	}))
+	t["set_compression_threshold"] = h.requireAdmin(rpc1void(func(ctx context.Context, p struct {
+		Threshold float64 `json:"threshold"`
+	}) error {
+		h.backend.SetCompressionThreshold(p.Threshold)
 		return nil
 	}))
 }

@@ -460,6 +460,7 @@ func (b *fakeAgentBackend) SetCWD(string, string, string) error            { ret
 func (b *fakeAgentBackend) SetMaxIterations(int)                           {}
 func (b *fakeAgentBackend) SetMaxConcurrency(int)                          {}
 func (b *fakeAgentBackend) SetMaxContextTokens(int)                        {}
+func (b *fakeAgentBackend) SetCompressionThreshold(float64)                {}
 func (b *fakeAgentBackend) SetSandbox(tools.Sandbox, string)               {}
 func (b *fakeAgentBackend) GetCardBuilder() *tools.CardBuilder             { return nil }
 func (b *fakeAgentBackend) SetEventRouter(*event.Router)                   {}

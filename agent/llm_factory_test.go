@@ -686,3 +686,54 @@ func TestConfigSubToLLMSubscription(t *testing.T) {
 		t.Errorf("ThinkingMode = %q, want %q", sub.ThinkingMode, "enabled")
 	}
 }
+
+// --- chatKey tests ---
+
+func TestChatKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		senderID string
+		chatID   string
+		want     string
+	}{
+		{"normal", "user123", "chat456", "user123:chat456"},
+		{"empty senderID", "", "chat456", ":chat456"},
+		{"empty chatID", "user123", "", "user123:"},
+		{"both empty", "", "", ":"},
+		{"colons in values", "user:1", "chat:2", "user:1:chat:2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chatKey(tt.senderID, tt.chatID)
+			if got != tt.want {
+				t.Errorf("chatKey(%q, %q) = %q, want %q", tt.senderID, tt.chatID, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- parseOrDefault tests ---
+
+func TestParseOrDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		defaultVal int
+		want       int
+	}{
+		{"empty string returns default", "", 42, 42},
+		{"valid positive int", "100", 42, 100},
+		{"zero returns default", "0", 42, 42},
+		{"negative returns default", "-5", 42, 42},
+		{"non-numeric returns default", "abc", 42, 42},
+		{"whitespace-padded number", "  7", 42, 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseOrDefault(tt.input, tt.defaultVal)
+			if got != tt.want {
+				t.Errorf("parseOrDefault(%q, %d) = %d, want %d", tt.input, tt.defaultVal, got, tt.want)
+			}
+		})
+	}
+}

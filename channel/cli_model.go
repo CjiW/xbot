@@ -604,6 +604,9 @@ type cliModel struct {
 	lastTokenUsage         *CLITokenUsage // last known token usage from progress events
 	cachedMaxContextTokens int            // max context tokens (from settings/config, cached for View())
 	cachedMaxOutputTokens  int64          // max output tokens (from progress events, cached for View())
+	cachedCompressRatio    float64        // compression threshold ratio, cached for View()
+	ctxBarCache            string         // rendered context bar, invalidated on token data change
+	ctxBarCacheKey         string         // key for cache invalidation (promptTokens + width)
 
 	// === Runner Bridge ===
 	runnerBridge *RunnerBridge

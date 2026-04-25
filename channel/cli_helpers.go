@@ -1062,16 +1062,16 @@ func (m *cliModel) resolveMaxContextTokens() int {
 	return 0
 }
 
-// resolveMaxOutputTokens returns the max output tokens from settings values.
+// resolveCompressRatio returns the compression threshold ratio from settings.
 // Falls back to 0 if unavailable (renderContextUsage will use its own default).
-func (m *cliModel) resolveMaxOutputTokens() int64 {
+func (m *cliModel) resolveCompressRatio() float64 {
 	if m.channel == nil || m.channel.config.GetCurrentValues == nil {
 		return 0
 	}
 	values := m.channel.config.GetCurrentValues()
-	if v, ok := values["max_output_tokens"]; ok && v != "" {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
-			return int64(n)
+	if v, ok := values["compression_threshold"]; ok && v != "" {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 {
+			return f
 		}
 	}
 	return 0

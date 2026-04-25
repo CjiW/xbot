@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -821,8 +820,10 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 	if m.progress != nil {
 		fmt.Fprintf(&sb, "#%d", m.progress.Iteration)
 
-		// Phase hint (active tool is shown in progress block, skip here to avoid duplication)
+		// Phase hint
 		switch m.progress.Phase {
+		case "thinking":
+			sb.WriteString(" · " + m.pickVerb(m.ticker.ticks))
 		case "compressing":
 			sb.WriteString(" · " + m.locale.StatusCompressing)
 		case "retrying":
@@ -832,6 +833,8 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 				sb.WriteString(" · " + m.locale.StatusDone)
 			}
 		}
+	} else {
+		sb.WriteString(m.pickVerb(m.ticker.ticks) + "...")
 	}
 
 	// Total elapsed
@@ -876,14 +879,39 @@ func formatTokenCount(tu *CLITokenUsage) string {
 	return fmt.Sprintf("tokens: %d", tu.TotalTokens)
 }
 
-// renderContextUsage returns a context usage bar for the ready-status bar.
+// Pre-created styles for context bar (avoid per-frame allocation).
+var ctxBarStyles = struct {
+	fillGreen  lipgloss.Style
+	fillYellow lipgloss.Style
+	fillRed    lipgloss.Style
+	dim        lipgloss.Style
+	empty      lipgloss.Style
+	threshold  lipgloss.Style
+	label      lipgloss.Style
+	pctGreen   lipgloss.Style
+	pctYellow  lipgloss.Style
+	pctRed     lipgloss.Style
+}{
+	fillGreen:  lipgloss.NewStyle().Foreground(lipgloss.Color("#6bcb77")),
+	fillYellow: lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd93d")),
+	fillRed:    lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")),
+	dim:        lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Faint(true),
+	empty:      lipgloss.NewStyle().Foreground(lipgloss.Color("#333333")),
+	threshold:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")).Bold(true),
+	label:      lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")),
+	pctGreen:   lipgloss.NewStyle().Foreground(lipgloss.Color("#6bcb77")),
+	pctYellow:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd93d")),
+	pctRed:     lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")),
+}
+
+// renderContextUsage returns a context usage bar for the status bar.
+// Uses cached rendering — only recomputes when token data or terminal width changes.
+//
 // Shows a segmented progress bar with:
 //   - Filled portion (prompt tokens used) — color-coded by fill ratio
 //   - Output reservation marker (right-side dim segment)
-//   - Compression threshold marker (75% of promptBudget)
+//   - Compression threshold marker
 //   - Numeric label: "prompt/budget"
-//
-// Returns empty string if no data is available.
 func (m *cliModel) renderContextUsage() string {
 	if m.lastTokenUsage == nil || m.cachedMaxContextTokens <= 0 {
 		return ""
@@ -894,27 +922,25 @@ func (m *cliModel) renderContextUsage() string {
 		return ""
 	}
 
-	// Determine maxOutputTokens: from progress events, settings, or default
+	// Cache key: re-render only when data changes
+	cacheKey := fmt.Sprintf("%d:%d:%d:%d", promptTokens, maxTokens, m.cachedMaxOutputTokens, m.width)
+	if cacheKey == m.ctxBarCacheKey && m.ctxBarCache != "" {
+		return m.ctxBarCache
+	}
+
 	maxOutputTokens := m.cachedMaxOutputTokens
 	if maxOutputTokens <= 0 {
-		maxOutputTokens = m.resolveMaxOutputTokens()
-	}
-	if maxOutputTokens <= 0 {
-		maxOutputTokens = 8192 // same default as engine_run.go
+		maxOutputTokens = 8192
 	}
 	promptBudget := maxTokens - maxOutputTokens
 	if promptBudget <= 0 {
 		promptBudget = maxTokens / 2
 	}
 
-	// Compression threshold: configurable, default 90% of promptBudget
-	compressRatio := 0.9
-	if m.channel != nil && m.channel.config.GetCurrentValues != nil {
-		if v := m.channel.config.GetCurrentValues()["compression_threshold"]; v != "" {
-			if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-				compressRatio = f
-			}
-		}
+	// Use cached compression ratio (set during progress events), not GetCurrentValues()
+	compressRatio := m.cachedCompressRatio
+	if compressRatio <= 0 {
+		compressRatio = 0.9
 	}
 	compressThreshold := int64(float64(promptBudget) * compressRatio)
 
@@ -927,7 +953,6 @@ func (m *cliModel) renderContextUsage() string {
 		barWidth = 12
 	}
 
-	// Calculate fill positions (relative to maxTokens for the bar)
 	promptFill := promptTokens
 	if promptFill > maxTokens {
 		promptFill = maxTokens
@@ -937,7 +962,6 @@ func (m *cliModel) renderContextUsage() string {
 		filledCells = barWidth
 	}
 
-	// Output reservation: cells from the right
 	outputCells := int(float64(barWidth) * float64(maxOutputTokens) / float64(maxTokens))
 	if outputCells < 1 {
 		outputCells = 1
@@ -946,7 +970,6 @@ func (m *cliModel) renderContextUsage() string {
 		outputCells = barWidth - 1
 	}
 
-	// Compression threshold marker position
 	compressPos := int(float64(barWidth) * float64(compressThreshold) / float64(maxTokens))
 	if compressPos < 1 {
 		compressPos = 1
@@ -955,78 +978,74 @@ func (m *cliModel) renderContextUsage() string {
 		compressPos = barWidth - 1
 	}
 
-	// Usage percentage for color coding (based on promptBudget, not maxTokens)
 	pct := float64(promptTokens) / float64(maxTokens) * 100
 
-	// Color based on overall fill
-	var fillColor lipgloss.Style
+	// Select pre-created style (no allocation)
+	var fillColor, pctStyle lipgloss.Style
 	switch {
 	case pct > 80:
-		fillColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")) // red
+		fillColor = ctxBarStyles.fillRed
+		pctStyle = ctxBarStyles.pctRed
 	case pct > 50:
-		fillColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd93d")) // yellow
+		fillColor = ctxBarStyles.fillYellow
+		pctStyle = ctxBarStyles.pctYellow
 	default:
-		fillColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#6bcb77")) // green
+		fillColor = ctxBarStyles.fillGreen
+		pctStyle = ctxBarStyles.pctGreen
 	}
-	dimColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Faint(true)
-	emptyColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#333333"))
-	thresholdColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")).Bold(true)
-	labelColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 
-	// Build bar: filled | empty, with output reservation on right and threshold marker
-	bar := make([]rune, barWidth)
-	for i := range bar {
-		bar[i] = '░'
-	}
-	// Fill used portion
-	for i := 0; i < filledCells && i < barWidth; i++ {
-		bar[i] = '█'
-	}
-	// Mark output reservation (from right edge) — overwrite with dim block
+	// Build bar runes first (single allocation)
 	outputStart := barWidth - outputCells
 	if outputStart < filledCells {
 		outputStart = filledCells
 	}
-	for i := outputStart; i < barWidth; i++ {
-		bar[i] = '▒'
-	}
 
-	// Render bar with colored segments
+	// Render bar segments as batch strings (3 segments max, not barWidth calls)
 	var barStr strings.Builder
-	for i, ch := range bar {
-		switch ch {
-		case '█':
-			barStr.WriteString(fillColor.Render("█"))
-		case '▒':
-			barStr.WriteString(dimColor.Render("▒"))
-		default:
-			// Threshold marker in empty area
-			if i == compressPos && i >= filledCells {
-				barStr.WriteString(thresholdColor.Render("┊"))
-			} else {
-				barStr.WriteString(emptyColor.Render("░"))
+	// Segment 1: filled area
+	if filledCells > 0 {
+		barStr.WriteString(fillColor.Render(strings.Repeat("█", filledCells)))
+	}
+	// Segment 2: empty area (may contain threshold marker)
+	emptyStart := filledCells
+	emptyEnd := outputStart
+	if emptyEnd > emptyStart {
+		if compressPos >= emptyStart && compressPos < emptyEnd {
+			// Split empty into two parts around threshold marker
+			before := compressPos - emptyStart
+			after := emptyEnd - compressPos - 1
+			if before > 0 {
+				barStr.WriteString(ctxBarStyles.empty.Render(strings.Repeat("░", before)))
 			}
+			barStr.WriteString(ctxBarStyles.threshold.Render("┊"))
+			if after > 0 {
+				barStr.WriteString(ctxBarStyles.empty.Render(strings.Repeat("░", after)))
+			}
+		} else {
+			barStr.WriteString(ctxBarStyles.empty.Render(strings.Repeat("░", emptyEnd-emptyStart)))
 		}
 	}
-
-	// Build label
-	usageStr := formatTokenCompact(promptTokens)
-	budgetStr := formatTokenCompact(promptBudget)
-	label := labelColor.Render(fmt.Sprintf("%s/%s", usageStr, budgetStr))
-
-	// Compact: just pct + bar on narrow terminals
-	if m.width < 100 {
-		return fmt.Sprintf("%s %s", fillColor.Render(fmt.Sprintf("%.0f%%", pct)), barStr.String())
+	// Segment 3: output reservation
+	if barWidth-outputStart > 0 {
+		barStr.WriteString(ctxBarStyles.dim.Render(strings.Repeat("▒", barWidth-outputStart)))
 	}
 
-	// Full: pct + bar + label + output hint
-	outStr := formatTokenCompact(maxOutputTokens)
-	return fmt.Sprintf("%s %s %s %s",
-		fillColor.Render(fmt.Sprintf("%.0f%%", pct)),
-		barStr.String(),
-		label,
-		dimColor.Render(fmt.Sprintf("out:%s", outStr)),
-	)
+	pctStr := pctStyle.Render(fmt.Sprintf("%.0f%%", pct))
+
+	var result string
+	if m.width < 100 {
+		result = fmt.Sprintf("%s %s", pctStr, barStr.String())
+	} else {
+		usageStr := formatTokenCompact(promptTokens)
+		budgetStr := formatTokenCompact(promptBudget)
+		label := ctxBarStyles.label.Render(fmt.Sprintf("%s/%s", usageStr, budgetStr))
+		outStr := formatTokenCompact(maxOutputTokens)
+		result = fmt.Sprintf("%s %s %s %s", pctStr, barStr.String(), label, ctxBarStyles.dim.Render(fmt.Sprintf("out:%s", outStr)))
+	}
+
+	m.ctxBarCache = result
+	m.ctxBarCacheKey = cacheKey
+	return result
 }
 
 // formatTokenCompact formats token counts as compact human-readable strings.

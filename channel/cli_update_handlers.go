@@ -375,6 +375,9 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	if m.cachedMaxContextTokens == 0 {
 		m.cachedMaxContextTokens = m.resolveMaxContextTokens()
 	}
+	if m.cachedCompressRatio == 0 {
+		m.cachedCompressRatio = m.resolveCompressRatio()
+	}
 
 	// Restore iteration history from reconnect/GetActiveProgress snapshot.
 	// When a CLI reconnects mid-turn, the server sends completed iterations

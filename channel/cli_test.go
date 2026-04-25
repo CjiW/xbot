@@ -957,7 +957,7 @@ func TestCLIModelRenderProgressStatus(t *testing.T) {
 		phase    string
 		expected string
 	}{
-		{"thinking", "#0"},
+		{"thinking", "Thinking"},
 		{"tool_exec", "#0"},
 		{"compressing", "compressing"},
 		{"retrying", "retrying"},
@@ -989,9 +989,8 @@ func TestCLIModelRenderProgressStatusNil(t *testing.T) {
 	toolStyle := lipgloss.NewStyle()
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
-	// nil progress: renderProgressStatus only shows spinner ticker, no verb
-	if result == "" {
-		t.Errorf("renderProgressStatus with nil progress should show spinner, got empty string")
+	if !strings.Contains(result, "Thinking") {
+		t.Errorf("renderProgressStatus with nil progress should show a thinking verb, got: %q", result)
 	}
 }
 

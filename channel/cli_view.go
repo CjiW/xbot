@@ -824,13 +824,13 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		// Phase hint (active tool is shown in progress block, skip here to avoid duplication)
 		switch m.progress.Phase {
 		case "compressing":
-		sb.WriteString(" · " + m.locale.StatusCompressing)
+			sb.WriteString(" · " + m.locale.StatusCompressing)
 		case "retrying":
-		sb.WriteString(" · " + m.locale.StatusRetrying)
+			sb.WriteString(" · " + m.locale.StatusRetrying)
 		default:
-		if len(m.progress.CompletedTools) > 0 {
-			sb.WriteString(" · " + m.locale.StatusDone)
-		}
+			if len(m.progress.CompletedTools) > 0 {
+				sb.WriteString(" · " + m.locale.StatusDone)
+			}
 		}
 	}
 

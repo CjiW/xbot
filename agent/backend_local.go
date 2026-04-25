@@ -659,6 +659,26 @@ func (b *LocalBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage, 
 	return channel.ConvertMessagesToHistory(msgs), nil
 }
 
+func (b *LocalBackend) GetTokenState(ch, chatID string) (int64, int64, error) {
+	ms := b.agent.MultiSession()
+	if ms == nil {
+		return 0, 0, nil
+	}
+	sess, err := ms.GetOrCreateSession(ch, chatID)
+	if err != nil {
+		return 0, 0, err
+	}
+	memSvc := sess.MemoryService()
+	if memSvc == nil {
+		return 0, 0, nil
+	}
+	pt, ct, err := memSvc.GetTokenState(context.Background(), sess.TenantID())
+	if err != nil {
+		return 0, 0, err
+	}
+	return pt, ct, nil
+}
+
 func (b *LocalBackend) TrimHistory(ch, chatID string, cutoff time.Time) error {
 	ms := b.agent.MultiSession()
 	if ms == nil {

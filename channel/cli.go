@@ -172,6 +172,22 @@ func (c *CLIChannel) Start() error {
 		}
 	}
 
+	// Restore token state from DB for context bar display.
+	// Without this, lastTokenUsage is nil after restart and the context
+	// bar never shows until the first LLM response of the new session.
+	if c.config.TokenStateLoader != nil {
+		if pt, ct := c.config.TokenStateLoader(); pt > 0 {
+			c.model.lastTokenUsage = &CLITokenUsage{
+				PromptTokens:     pt,
+				CompletionTokens: ct,
+				TotalTokens:      pt + ct,
+			}
+			log.WithField("prompt_tokens", pt).Info("Restored token state")
+		}
+	}
+	// Resolve max context tokens immediately (not lazily on first progress event)
+	c.model.cachedMaxContextTokens = c.model.resolveMaxContextTokens()
+
 	// 首次运行：打开 setup panel
 	if c.config.IsFirstRun {
 		c.model.openSetupPanel()

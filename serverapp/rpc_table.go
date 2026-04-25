@@ -137,6 +137,22 @@ func registerSettingsHandlers(t rpcTable, h *rpcContext) {
 		for _, k := range []string{"llm_provider", "llm_api_key", "llm_model", "llm_base_url"} {
 			delete(result, k)
 		}
+		// Inject config defaults for keys not present in user_settings.
+		// This ensures remote CLI clients see the actual runtime values
+		// (e.g. max_context_tokens=200000) even when the user never
+		// explicitly saved those settings.
+		if _, ok := result["max_context_tokens"]; !ok {
+			result["max_context_tokens"] = fmt.Sprintf("%d", h.cfg.Agent.MaxContextTokens)
+		}
+		if _, ok := result["max_iterations"]; !ok {
+			result["max_iterations"] = fmt.Sprintf("%d", h.cfg.Agent.MaxIterations)
+		}
+		if _, ok := result["max_concurrency"]; !ok {
+			result["max_concurrency"] = fmt.Sprintf("%d", h.cfg.Agent.MaxConcurrency)
+		}
+		if _, ok := result["context_mode"]; !ok {
+			result["context_mode"] = h.cfg.Agent.ContextMode
+		}
 		return result, nil
 	})
 	t["set_setting"] = rpc1void(func(ctx context.Context, p struct {
@@ -514,6 +530,35 @@ func registerSessionHandlers(t rpcTable, h *rpcContext) {
 		}
 		log.WithFields(log.Fields{"channel": p.Channel, "chat_id": p.ChatID, "count": len(history)}).Info("RPC get_history")
 		return history, nil
+	})
+	t["get_token_state"] = rpc1(func(ctx context.Context, p struct {
+		Channel string `json:"channel"`
+		ChatID  string `json:"chat_id"`
+	}) (any, error) {
+		bizID := rpcBizID(ctx)
+		if p.Channel == "" {
+			p.Channel = "cli"
+		}
+		if p.ChatID == "" {
+			p.ChatID = bizID
+		}
+		ms := backend.MultiSession()
+		if ms == nil {
+			return map[string]int64{"prompt_tokens": 0, "completion_tokens": 0}, nil
+		}
+		sess, err := ms.GetOrCreateSession(p.Channel, p.ChatID)
+		if err != nil {
+			return nil, err
+		}
+		memSvc := sess.MemoryService()
+		if memSvc == nil {
+			return map[string]int64{"prompt_tokens": 0, "completion_tokens": 0}, nil
+		}
+		pt, ct, err := memSvc.GetTokenState(ctx, sess.TenantID())
+		if err != nil {
+			return nil, err
+		}
+		return map[string]int64{"prompt_tokens": pt, "completion_tokens": ct}, nil
 	})
 	t["trim_history"] = rpc1void(func(ctx context.Context, p struct {
 		Channel string `json:"channel"`

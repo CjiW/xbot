@@ -606,6 +606,7 @@ func convertWsProgressToCLI(wp *channel.WsProgressPayload) *channel.CLIProgressP
 			CompletionTokens: wp.TokenUsage.CompletionTokens,
 			TotalTokens:      wp.TokenUsage.TotalTokens,
 			CacheHitTokens:   wp.TokenUsage.CacheHitTokens,
+			MaxOutputTokens:  wp.TokenUsage.MaxOutputTokens,
 		}
 	}
 	return payload
@@ -1294,6 +1295,27 @@ func (b *RemoteBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage,
 		return nil, err
 	}
 	return result, nil
+}
+
+// GetTokenState retrieves the last API token counts from the remote server.
+func (b *RemoteBackend) GetTokenState(ch, chatID string) (promptTokens, completionTokens int64, err error) {
+	raw, err := b.callRPC("get_token_state", map[string]string{
+		"channel": ch, "chat_id": chatID,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, 0, nil
+	}
+	var result struct {
+		PromptTokens     int64 `json:"prompt_tokens"`
+		CompletionTokens int64 `json:"completion_tokens"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return 0, 0, err
+	}
+	return result.PromptTokens, result.CompletionTokens, nil
 }
 
 func (b *RemoteBackend) TrimHistory(ch, chatID string, cutoff time.Time) error {

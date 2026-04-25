@@ -290,6 +290,7 @@ func (a *Agent) buildMainRunConfig(
 								CompletionTokens: s.TokenUsage.CompletionTokens,
 								TotalTokens:      s.TokenUsage.TotalTokens,
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+								MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
 							}
 						}
 						cliCh.SendProgress(chatID, payload)
@@ -349,6 +350,7 @@ func (a *Agent) buildMainRunConfig(
 								CompletionTokens: s.TokenUsage.CompletionTokens,
 								TotalTokens:      s.TokenUsage.TotalTokens,
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+								MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
 							}
 						}
 						remoteCLICh.SendProgress(chatID, payload)
@@ -401,6 +403,7 @@ func (a *Agent) buildMainRunConfig(
 								CompletionTokens: s.TokenUsage.CompletionTokens,
 								TotalTokens:      s.TokenUsage.TotalTokens,
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+								MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
 							}
 						}
 						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
@@ -485,6 +488,7 @@ func (a *Agent) buildMainRunConfig(
 								CompletionTokens: s.TokenUsage.CompletionTokens,
 								TotalTokens:      s.TokenUsage.TotalTokens,
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+								MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
 							}
 						}
 

@@ -170,6 +170,7 @@ func (a *Agent) wireSubAgentCLIProgress(key, originChatID string, cfg *RunConfig
 			cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
 				PromptTokens: s.TokenUsage.PromptTokens, CompletionTokens: s.TokenUsage.CompletionTokens,
 				TotalTokens: s.TokenUsage.TotalTokens, CacheHitTokens: s.TokenUsage.CacheHitTokens,
+				MaxOutputTokens: s.TokenUsage.MaxOutputTokens,
 			}
 		}
 

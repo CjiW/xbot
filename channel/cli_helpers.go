@@ -324,6 +324,17 @@ func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
 	// Apply the progress payload
 	m.progress = payload
 
+	// Cache token usage and max context for ready-status bar display
+	if payload.TokenUsage != nil && payload.TokenUsage.PromptTokens > 0 {
+		m.lastTokenUsage = payload.TokenUsage
+		if payload.TokenUsage.MaxOutputTokens > 0 {
+			m.cachedMaxOutputTokens = payload.TokenUsage.MaxOutputTokens
+		}
+	}
+	if m.cachedMaxContextTokens == 0 {
+		m.cachedMaxContextTokens = m.resolveMaxContextTokens()
+	}
+
 	// Restore StartedAt for active tools so live elapsed timers work.
 	for i := range m.progress.ActiveTools {
 		t := &m.progress.ActiveTools[i]
@@ -396,6 +407,13 @@ func (m *cliModel) removeAllToolSummaries() {
 func (m *cliModel) endAgentTurn(turnID uint64) {
 	if turnID != m.agentTurnID {
 		return // new turn already started — stale signal, ignore
+	}
+	// Persist token usage for ready-status bar before clearing progress
+	if m.progress != nil && m.progress.TokenUsage != nil {
+		m.lastTokenUsage = m.progress.TokenUsage
+		if m.progress.TokenUsage.MaxOutputTokens > 0 {
+			m.cachedMaxOutputTokens = m.progress.TokenUsage.MaxOutputTokens
+		}
 	}
 	m.lastCompletedTools = nil
 	m.iterationHistory = nil
@@ -1025,4 +1043,34 @@ func (m *cliModel) handleUserList() {
 	}
 	sb.WriteString("\n`/user add <name>` to create · `/user del <name>` to delete")
 	m.showSystemMsg(sb.String(), feedbackInfo)
+}
+
+// resolveMaxContextTokens returns the max context tokens from settings values.
+// Falls back to 0 if unavailable (context usage display will be hidden).
+func (m *cliModel) resolveMaxContextTokens() int {
+	if m.channel == nil || m.channel.config.GetCurrentValues == nil {
+		return 0
+	}
+	values := m.channel.config.GetCurrentValues()
+	if v, ok := values["max_context_tokens"]; ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// resolveMaxOutputTokens returns the max output tokens from settings values.
+// Falls back to 0 if unavailable (renderContextUsage will use its own default).
+func (m *cliModel) resolveMaxOutputTokens() int64 {
+	if m.channel == nil || m.channel.config.GetCurrentValues == nil {
+		return 0
+	}
+	values := m.channel.config.GetCurrentValues()
+	if v, ok := values["max_output_tokens"]; ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return int64(n)
+		}
+	}
+	return 0
 }

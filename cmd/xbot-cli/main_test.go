@@ -545,6 +545,9 @@ func (b *fakeAgentBackend) GetMemoryStats(context.Context, string, string, strin
 func (b *fakeAgentBackend) GetHistory(string, string) ([]channel.HistoryMessage, error) {
 	return nil, nil
 }
+func (b *fakeAgentBackend) GetTokenState(string, string) (int64, int64, error) {
+	return 0, 0, nil
+}
 func (b *fakeAgentBackend) TrimHistory(string, string, time.Time) error { return nil }
 func (b *fakeAgentBackend) ResetTokenState()                            {}
 func (b *fakeAgentBackend) GetChannelConfigs() (map[string]map[string]string, error) {

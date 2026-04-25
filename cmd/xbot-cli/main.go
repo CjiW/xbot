@@ -97,7 +97,7 @@ func (app *cliApp) refreshRemoteValuesCache() {
 		vals["max_concurrency"] = "3"
 	}
 	if _, ok := vals["max_context_tokens"]; !ok {
-		vals["max_context_tokens"] = "0"
+		vals["max_context_tokens"] = "200000" // default from config.go
 	}
 	app.valuesCacheMu.Lock()
 	app.valuesCache = vals
@@ -1265,6 +1265,17 @@ func main() {
 				}
 				return channel.ConvertMessagesToHistory(msgs), nil
 			}
+			// Restore token state from DB so the context bar shows immediately
+			// on startup (not just after the first LLM call of the new session).
+			cliMemSvc := sqlite.NewMemoryService(app.db)
+			cliCfg.TokenStateLoader = func() (promptTokens, completionTokens int64) {
+				pt, ct, err := cliMemSvc.GetTokenState(context.Background(), cliTenantID)
+				if err != nil {
+					log.WithError(err).Warn("Failed to load token state")
+					return 0, 0
+				}
+				return pt, ct
+			}
 		}
 	}
 	// Remote mode: history loaded after backend.Start() via cliCh.LoadHistory()
@@ -1296,6 +1307,15 @@ func main() {
 				channelName = "cli"
 			}
 			return backend.GetHistory(channelName, chatID)
+		}
+		// Restore token state from server DB so context bar shows on startup
+		cliCfg.TokenStateLoader = func() (promptTokens, completionTokens int64) {
+			pt, ct, err := backend.GetTokenState("cli", absWorkDir)
+			if err != nil {
+				log.WithError(err).Warn("Failed to load token state from server")
+				return 0, 0
+			}
+			return pt, ct
 		}
 	}
 

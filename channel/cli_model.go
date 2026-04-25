@@ -600,6 +600,11 @@ type cliModel struct {
 	cachedModelName string      // cached model name for View() performance
 	modelCount      int         // cached model list length for View() performance
 
+	// Context usage display (persisted across turns for ready-status bar)
+	lastTokenUsage         *CLITokenUsage // last known token usage from progress events
+	cachedMaxContextTokens int            // max context tokens (from settings/config, cached for View())
+	cachedMaxOutputTokens  int64          // max output tokens (from progress events, cached for View())
+
 	// === Runner Bridge ===
 	runnerBridge *RunnerBridge
 }

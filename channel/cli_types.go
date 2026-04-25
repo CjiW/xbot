@@ -224,6 +224,7 @@ type CLITokenUsage struct {
 	CompletionTokens int64
 	TotalTokens      int64
 	CacheHitTokens   int64
+	MaxOutputTokens  int64 // output token reservation (for context bar display)
 }
 
 // CLITodoItem represents a TODO item for CLI display.
@@ -536,6 +537,7 @@ type CLIChannelConfig struct {
 	DebugCaptureMs       int                                                                                                            // --debug-capture-ms 200: UI capture interval in ms (default 1000)
 	HistoryLoader        func() ([]HistoryMessage, error)                                                                               // 会话恢复：加载历史消息
 	DynamicHistoryLoader func(channelName, chatID string) ([]HistoryMessage, error)                                                     // /su 切换用户后加载目标用户历史
+	TokenStateLoader     func() (promptTokens, completionTokens int64)                                                                  // 会话恢复：从 DB 加载上次 Run 的 token 计数
 	AgentSessionDumpFn   func(chatID string) ([]HistoryMessage, error)                                                                  // agent session 切换时从 Agent 内存加载消息
 	GetCurrentValues     func() map[string]string                                                                                       // 获取当前配置值（用于 settings panel 初始值）
 	ApplySettings        func(values map[string]string)                                                                                 // 应用设置变更（写 config.json + 更新运行时状态）

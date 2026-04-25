@@ -198,6 +198,7 @@ func (b fakeBackend) KillBgTask(_ string) error                                 
 func (b fakeBackend) CleanupCompletedBgTasks(_ string)                                   {}
 func (b fakeBackend) ListTenants() ([]agent.TenantInfo, error)                           { return nil, nil }
 func (b fakeBackend) GetHistory(_, _ string) ([]channel.HistoryMessage, error)           { return nil, nil }
+func (b fakeBackend) GetTokenState(_, _ string) (int64, int64, error)                    { return 0, 0, nil }
 func (b fakeBackend) TrimHistory(_, _ string, _ time.Time) error                         { return nil }
 func (b fakeBackend) ResetTokenState()                                                   {}
 func (b fakeBackend) GetChannelConfigs() (map[string]map[string]string, error)           { return nil, nil }

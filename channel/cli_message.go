@@ -633,6 +633,13 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 	// Empty content with no waiting user: end turn and flush queue,
 	// but don't append a blank message.
 	if content == "" && !msg.WaitingUser && len(msg.ToolsUsed) == 0 {
+		// Persist token usage before clearing progress
+		if m.progress != nil && m.progress.TokenUsage != nil {
+			m.lastTokenUsage = m.progress.TokenUsage
+			if m.progress.TokenUsage.MaxOutputTokens > 0 {
+				m.cachedMaxOutputTokens = m.progress.TokenUsage.MaxOutputTokens
+			}
+		}
 		m.streamingMsgIdx = -1
 		m.progress = nil
 		m.endAgentTurn(turnID)

@@ -259,6 +259,10 @@ func (m *cliModel) View() tea.View {
 				}
 				readyParts = append(readyParts, modelHint)
 			}
+			// Context usage percentage (from last LLM API response)
+			if ctxHint := m.renderContextUsage(); ctxHint != "" {
+				readyParts = append(readyParts, ctxHint)
+			}
 			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
 		}
 		// 临时状态提示（自动过期）
@@ -833,10 +837,13 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		sb.WriteString(formatElapsed(elapsed))
 	}
 
-	// §18 Token 使用量显示
-	if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.TotalTokens > 0 {
+	// §18 Context usage bar (replaces raw token count)
+	if ctxHint := m.renderContextUsage(); ctxHint != "" {
+		sb.WriteString(" · ")
+		sb.WriteString(ctxHint)
+	} else if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.TotalTokens > 0 {
+		// Fallback: raw token count when context bar data is not yet available
 		tu := m.progress.TokenUsage
-		// §20 tokenStyle → s.TokenUsage
 		sb.WriteString(" · ")
 		sb.WriteString(s.TokenUsage.Render(formatTokenCount(tu)))
 	}
@@ -860,6 +867,171 @@ func formatTokenCount(tu *CLITokenUsage) string {
 		return "tokens: " + strings.Join(parts, " ") + fmt.Sprintf(" = %d", tu.TotalTokens)
 	}
 	return fmt.Sprintf("tokens: %d", tu.TotalTokens)
+}
+
+// renderContextUsage returns a context usage bar for the ready-status bar.
+// Shows a segmented progress bar with:
+//   - Filled portion (prompt tokens used) — color-coded by fill ratio
+//   - Output reservation marker (right-side dim segment)
+//   - Compression threshold marker (75% of promptBudget)
+//   - Numeric label: "prompt/budget"
+//
+// Returns empty string if no data is available.
+func (m *cliModel) renderContextUsage() string {
+	if m.lastTokenUsage == nil || m.cachedMaxContextTokens <= 0 {
+		return ""
+	}
+	promptTokens := m.lastTokenUsage.PromptTokens
+	maxTokens := int64(m.cachedMaxContextTokens)
+	if promptTokens <= 0 || maxTokens <= 0 {
+		return ""
+	}
+
+	// Determine maxOutputTokens: from progress events, settings, or default
+	maxOutputTokens := m.cachedMaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = m.resolveMaxOutputTokens()
+	}
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 8192 // same default as engine_run.go
+	}
+	promptBudget := maxTokens - maxOutputTokens
+	if promptBudget <= 0 {
+		promptBudget = maxTokens / 2
+	}
+
+	// Compression threshold: 75% of promptBudget (matches trigger.go)
+	compressThreshold := int64(float64(promptBudget) * 0.75)
+
+	// Bar width: adapt to terminal width
+	barWidth := 20
+	if m.width > 120 {
+		barWidth = 30
+	}
+	if m.width < 80 {
+		barWidth = 12
+	}
+
+	// Calculate fill positions (relative to maxTokens for the bar)
+	promptFill := promptTokens
+	if promptFill > maxTokens {
+		promptFill = maxTokens
+	}
+	filledCells := int(float64(barWidth) * float64(promptFill) / float64(maxTokens))
+	if filledCells > barWidth {
+		filledCells = barWidth
+	}
+
+	// Output reservation: cells from the right
+	outputCells := int(float64(barWidth) * float64(maxOutputTokens) / float64(maxTokens))
+	if outputCells < 1 {
+		outputCells = 1
+	}
+	if outputCells > barWidth-1 {
+		outputCells = barWidth - 1
+	}
+
+	// Compression threshold marker position
+	compressPos := int(float64(barWidth) * float64(compressThreshold) / float64(maxTokens))
+	if compressPos < 1 {
+		compressPos = 1
+	}
+	if compressPos >= barWidth {
+		compressPos = barWidth - 1
+	}
+
+	// Usage percentage for color coding (based on promptBudget, not maxTokens)
+	pct := float64(promptTokens) / float64(maxTokens) * 100
+
+	// Color based on overall fill
+	var fillColor lipgloss.Style
+	switch {
+	case pct > 80:
+		fillColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")) // red
+	case pct > 50:
+		fillColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd93d")) // yellow
+	default:
+		fillColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#6bcb77")) // green
+	}
+	dimColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Faint(true)
+	emptyColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#333333"))
+	thresholdColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")).Bold(true)
+	labelColor := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+
+	// Build bar: filled | empty, with output reservation on right and threshold marker
+	bar := make([]rune, barWidth)
+	for i := range bar {
+		bar[i] = '░'
+	}
+	// Fill used portion
+	for i := 0; i < filledCells && i < barWidth; i++ {
+		bar[i] = '█'
+	}
+	// Mark output reservation (from right edge) — overwrite with dim block
+	outputStart := barWidth - outputCells
+	if outputStart < filledCells {
+		outputStart = filledCells
+	}
+	for i := outputStart; i < barWidth; i++ {
+		bar[i] = '▒'
+	}
+
+	// Render bar with colored segments
+	var barStr strings.Builder
+	for i, ch := range bar {
+		switch {
+		case ch == '█':
+			barStr.WriteString(fillColor.Render("█"))
+		case ch == '▒':
+			barStr.WriteString(dimColor.Render("▒"))
+		default:
+			// Check if this is the threshold position
+			if i == compressPos && i >= filledCells {
+				barStr.WriteString(thresholdColor.Render("┊"))
+			} else {
+				barStr.WriteString(emptyColor.Render("░"))
+			}
+		}
+		// Insert threshold marker inside filled area (as overlay)
+		if i == compressPos && compressPos < filledCells {
+			// Already rendered as fill, just note it in label
+		}
+	}
+
+	// Build label
+	usageStr := formatTokenCompact(promptTokens)
+	budgetStr := formatTokenCompact(promptBudget)
+	label := labelColor.Render(fmt.Sprintf("%s/%s", usageStr, budgetStr))
+
+	// Compact: just pct + bar on narrow terminals
+	if m.width < 100 {
+		return fmt.Sprintf("%s %s", fillColor.Render(fmt.Sprintf("%.0f%%", pct)), barStr.String())
+	}
+
+	// Full: pct + bar + label + output hint
+	outStr := formatTokenCompact(maxOutputTokens)
+	return fmt.Sprintf("%s %s %s %s",
+		fillColor.Render(fmt.Sprintf("%.0f%%", pct)),
+		barStr.String(),
+		label,
+		dimColor.Render(fmt.Sprintf("out:%s", outStr)),
+	)
+}
+
+// formatTokenCompact formats token counts as compact human-readable strings.
+// e.g. 12500 → "12.5K", 128000 → "128K", 500 → "500"
+func formatTokenCompact(tokens int64) string {
+	if tokens >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(tokens)/1_000_000)
+	}
+	if tokens >= 1000 {
+		val := float64(tokens) / 1000
+		if val == float64(int(val)) {
+			return fmt.Sprintf("%dK", int(val))
+		}
+		return fmt.Sprintf("%.1fK", val)
+	}
+	return fmt.Sprintf("%d", tokens)
 }
 
 // ---------------------------------------------------------------------------

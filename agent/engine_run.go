@@ -392,6 +392,7 @@ func (s *runState) updateTokenUsage() {
 		CompletionTokens: s.lastCompletionTokens,
 		TotalTokens:      s.lastPromptTokens + s.lastCompletionTokens,
 		CacheHitTokens:   int64(s.localCachedTokens),
+		MaxOutputTokens:  int64(s.cfg.MaxOutputTokens),
 	}
 }
 
@@ -417,6 +418,9 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
 		s.localCachedTokens += int(response.Usage.CacheHitTokens)
 		s.updateTokenUsage()
+		// Push updated token usage to CLI immediately so the context
+		// bar reflects the latest prompt token count on each iteration.
+		s.notifyProgress("")
 	}
 
 	if err != nil && llm.IsInputTooLongError(err) && len(s.messages) > 3 {

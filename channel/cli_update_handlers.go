@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -298,6 +299,106 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 	return m, nil, false
 }
 
+// restoreIterationHistory converts IterationHistory from a reconnect snapshot
+// into local iteration history, bootstrapping tool StartedAt timestamps.
+func (m *cliModel) restoreIterationHistory(payload *CLIProgressPayload) {
+	if payload == nil || len(payload.IterationHistory) == 0 || len(m.iterationHistory) > 0 {
+		return
+	}
+	for _, ih := range payload.IterationHistory {
+		snap := cliIterationSnapshot{
+			Iteration: ih.Iteration,
+			Thinking:  ih.Thinking,
+			Reasoning: ih.Reasoning,
+			Tools:     ih.CompletedTools,
+		}
+		for i := range snap.Tools {
+			t := &snap.Tools[i]
+			if t.StartedAt.IsZero() && t.Elapsed > 0 {
+				t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+			}
+		}
+		m.iterationHistory = append(m.iterationHistory, snap)
+	}
+	if len(m.iterationHistory) > 0 {
+		lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+		if lastIter > m.lastSeenIteration {
+			m.lastSeenIteration = lastIter
+		}
+	}
+	m.removeAllToolSummaries()
+}
+
+// carryForwardProgressState preserves transient state across progress updates
+// (StartedAt timers, CompletedTools, Reasoning/Thinking content, SubAgent trees).
+func (m *cliModel) carryForwardProgressState(prev *CLIProgressPayload) {
+	if m.progress == nil {
+		return
+	}
+
+	// Preserve StartedAt across progress updates so live timers don't reset.
+	startedAtMap := make(map[string]time.Time)
+	if prev != nil {
+		for _, t := range prev.ActiveTools {
+			if !t.StartedAt.IsZero() {
+				startedAtMap[t.Name] = t.StartedAt
+			}
+		}
+	}
+	for i := range m.progress.ActiveTools {
+		t := &m.progress.ActiveTools[i]
+		if sa, ok := startedAtMap[t.Name]; ok {
+			t.StartedAt = sa
+		} else if t.StartedAt.IsZero() {
+			if t.Elapsed > 0 {
+				t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+			} else {
+				t.StartedAt = time.Now()
+			}
+		}
+	}
+
+	if prev == nil {
+		return
+	}
+	sameIter := m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0
+
+	// Carry forward CompletedTools from previous progress within the same iteration.
+	if len(m.progress.CompletedTools) == 0 && len(prev.CompletedTools) > 0 && sameIter {
+		m.progress.CompletedTools = prev.CompletedTools
+	}
+
+	// Carry forward Reasoning/Thinking content.
+	if m.progress.Reasoning == "" && prev.Reasoning != "" && sameIter {
+		m.progress.Reasoning = prev.Reasoning
+	}
+	if m.progress.Thinking == "" && prev.Thinking != "" && sameIter {
+		m.progress.Thinking = prev.Thinking
+	}
+	if m.progress.ReasoningStreamContent == "" && prev.ReasoningStreamContent != "" && sameIter {
+		if m.progress.StreamContent == "" {
+			m.progress.ReasoningStreamContent = prev.ReasoningStreamContent
+		}
+	}
+
+	// Preserve SubAgent tree within the same iteration (not across iterations).
+	if m.progress.Phase == "done" {
+		return
+	}
+	iterationChanged := m.progress.Iteration != prev.Iteration && m.progress.Iteration > 0
+	if iterationChanged {
+		m.progress.SubAgents = nil
+	} else {
+		newDepth := maxTreeDepth(m.progress.SubAgents)
+		prevDepth := maxTreeDepth(prev.SubAgents)
+		if len(m.progress.SubAgents) == 0 && len(prev.SubAgents) > 0 {
+			m.progress.SubAgents = prev.SubAgents
+		} else if newDepth < prevDepth && newDepth > 0 {
+			m.progress.SubAgents = prev.SubAgents
+		}
+	}
+}
+
 // handleProgressMsg processes progress update events from the agent.
 func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	// Filter by session: only process progress for the currently viewed session.
@@ -377,119 +478,10 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	}
 
 	// Restore iteration history from reconnect/GetActiveProgress snapshot.
-	// When a CLI reconnects mid-turn, the server sends completed iterations
-	// in IterationHistory. Convert them to cliIterationSnapshot for rendering.
-	if m.progress != nil && len(m.progress.IterationHistory) > 0 && len(m.iterationHistory) == 0 {
-		for _, ih := range m.progress.IterationHistory {
-			snap := cliIterationSnapshot{
-				Iteration: ih.Iteration,
-				Thinking:  ih.Thinking,
-				Reasoning: ih.Reasoning,
-				Tools:     ih.CompletedTools,
-			}
-			// Restore StartedAt for tools that have Elapsed but zero StartedAt.
-			for i := range snap.Tools {
-				t := &snap.Tools[i]
-				if t.StartedAt.IsZero() && t.Elapsed > 0 {
-					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
-				}
-			}
-			m.iterationHistory = append(m.iterationHistory, snap)
-		}
-		// Set lastSeenIteration to the latest restored iteration so we don't
-		// re-snapshot it when the next progress event arrives.
-		if len(m.iterationHistory) > 0 {
-			lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
-			if lastIter > m.lastSeenIteration {
-				m.lastSeenIteration = lastIter
-			}
-		}
-		// Deduplicate: remove ALL tool_summary messages. When progress is
-		// active, the progress block owns iteration display — any static
-		// tool_summary would duplicate content with mismatched iteration numbers.
-		m.removeAllToolSummaries()
-	}
+	m.restoreIterationHistory(m.progress)
 
-	// Preserve StartedAt across progress updates so live timers don't reset.
-	// Each structured progress event replaces ActiveTools entirely (StartedAt=zero),
-	// so we must carry forward the previous StartedAt values by matching tool name.
-	startedAtMap := make(map[string]time.Time)
-	if prev != nil {
-		for _, t := range prev.ActiveTools {
-			if !t.StartedAt.IsZero() {
-				startedAtMap[t.Name] = t.StartedAt
-			}
-		}
-	}
-	if m.progress != nil {
-		for i := range m.progress.ActiveTools {
-			t := &m.progress.ActiveTools[i]
-			// Restore from previous progress if available
-			if prev, ok := startedAtMap[t.Name]; ok {
-				t.StartedAt = prev
-			} else if t.StartedAt.IsZero() {
-				// First appearance: bootstrap from Elapsed or now
-				if t.Elapsed > 0 {
-					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
-				} else {
-					t.StartedAt = time.Now()
-				}
-			}
-		}
-		// Carry forward CompletedTools from previous progress within the same iteration.
-		// Progress events may arrive without CompletedTools (e.g. a thinking-phase event
-		// after tool completion), which would cause completed tools to flicker/disappear.
-		if len(m.progress.CompletedTools) == 0 && prev != nil && len(prev.CompletedTools) > 0 {
-			if m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0 {
-				m.progress.CompletedTools = prev.CompletedTools
-			}
-		}
-		// Carry forward Reasoning/Thinking from previous progress within the same iteration.
-		// When a tool completes, the server sends a new progress event (Phase="tool") that
-		// may not include Reasoning — replacing progress would clear it mid-iteration.
-		if prev != nil {
-			sameIter := m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0
-			if m.progress.Reasoning == "" && prev.Reasoning != "" && sameIter {
-				m.progress.Reasoning = prev.Reasoning
-			}
-			if m.progress.Thinking == "" && prev.Thinking != "" && sameIter {
-				m.progress.Thinking = prev.Thinking
-			}
-			// ReasoningStreamContent: carry forward if new payload doesn't have it
-			// and we're still in reasoning streaming phase (no StreamContent yet).
-			if m.progress.ReasoningStreamContent == "" && prev.ReasoningStreamContent != "" && sameIter {
-				if m.progress.StreamContent == "" {
-					m.progress.ReasoningStreamContent = prev.ReasoningStreamContent
-				}
-			}
-		}
-	}
-	// Preserve SubAgent tree across progress updates within the SAME iteration.
-	// Progress events may arrive with incomplete subagent data (missing deep
-	// nodes) or no subagent data at all. We preserve the deepest tree seen
-	// during the current turn to prevent the TUI from losing deep agent nodes.
-	// PhaseDone is the exception — it intentionally clears the tree.
-	// When iteration changes, the tree MUST be cleared — there are no cross-iteration
-	// active tools, and stale SubAgent markers in progressLines from previous
-	// iterations would cause phantom agents to persist.
-	if m.progress != nil && m.progress.Phase != "done" && prev != nil {
-		iterationChanged := m.progress.Iteration != prev.Iteration && m.progress.Iteration > 0
-		if iterationChanged {
-			// New iteration started — clear stale SubAgent tree
-			m.progress.SubAgents = nil
-		} else {
-			newDepth := maxTreeDepth(m.progress.SubAgents)
-			prevDepth := maxTreeDepth(prev.SubAgents)
-			if len(m.progress.SubAgents) == 0 && len(prev.SubAgents) > 0 {
-				// New payload has no tree — carry forward old tree
-				m.progress.SubAgents = prev.SubAgents
-			} else if newDepth < prevDepth && newDepth > 0 {
-				// New tree is shallower than old — carry forward old tree
-				// (deeper nodes are still running even if this event didn't include them)
-				m.progress.SubAgents = prev.SubAgents
-			}
-		}
-	}
+	m.carryForwardProgressState(prev)
+
 	// Update bg task count from callback
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()
@@ -572,27 +564,18 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			// Skip if handleAgentMessage already processed (m.typing == false
 			// means the reply arrived and cleaned up iteration state).
 			if m.typing && m.lastSeenIteration >= 0 {
-				alreadySnapped := false
-				for _, s := range m.iterationHistory {
-					if s.Iteration == m.lastSeenIteration {
-						alreadySnapped = true
-						break
-					}
-				}
+				alreadySnapped := slices.ContainsFunc(m.iterationHistory, func(s cliIterationSnapshot) bool {
+					return s.Iteration == m.lastSeenIteration
+				})
 				if !alreadySnapped {
 					var finalTools []CLIToolProgress
 					// Check progress.CompletedTools first (set by progressFinalizer)
 					finalTools = append(finalTools, msg.payload.CompletedTools...)
 					// Also include any from lastCompletedTools (race safety)
 					for _, t := range m.lastCompletedTools {
-						dup := false
-						for _, existing := range finalTools {
-							if existing.Name == t.Name && existing.Label == t.Label {
-								dup = true
-								break
-							}
-						}
-						if !dup {
+						if !slices.ContainsFunc(finalTools, func(existing CLIToolProgress) bool {
+							return existing.Name == t.Name && existing.Label == t.Label
+						}) {
 							finalTools = append(finalTools, t)
 						}
 					}

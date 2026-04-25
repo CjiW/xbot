@@ -857,7 +857,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 	// Queue indicator (persistent during typing, not just temp status)
 	if len(m.messageQueue) > 0 {
 		sb.WriteString(" · ")
-		sb.WriteString(fmt.Sprintf(m.locale.QueuePending, len(m.messageQueue)))
+		fmt.Fprintf(&sb, m.locale.QueuePending, len(m.messageQueue))
 	}
 
 	leftText := sb.String()
@@ -1045,8 +1045,7 @@ func (m *cliModel) renderContextUsage() string {
 		usageStr := formatTokenCompact(promptTokens)
 		budgetStr := formatTokenCompact(promptBudget)
 		label := ctxBarStyles.label.Render(fmt.Sprintf("%s/%s", usageStr, budgetStr))
-		outStr := formatTokenCompact(maxOutputTokens)
-		result = fmt.Sprintf("%s %s %s %s", pctStr, barStr.String(), label, ctxBarStyles.dim.Render(fmt.Sprintf("out:%s", outStr)))
+		result = fmt.Sprintf("%s %s %s", pctStr, barStr.String(), label)
 	}
 
 	m.ctxBarCache = result

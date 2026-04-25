@@ -13,6 +13,11 @@ import (
 	"xbot/llm"
 )
 
+const (
+	tipFileCreated   = "文件已创建。建议用 Read 验证内容。"
+	tipEditCompleted = "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"
+)
+
 // ============================================================================
 // FileCreateTool — 创建新文件（2 params: path, content）
 // ============================================================================
@@ -81,7 +86,7 @@ func (t *FileCreateTool) sandboxCreate(ctx *ToolContext, path, content string) (
 		return nil, err
 	}
 	summary := fmt.Sprintf("File created successfully: %s", path)
-	return &ToolResult{Summary: summary, Tips: "文件已创建。建议用 Read 验证内容。"}, nil
+	return &ToolResult{Summary: summary, Tips: tipFileCreated}, nil
 }
 
 func (t *FileCreateTool) executeLocal(ctx *ToolContext, params FileCreateParams) (*ToolResult, error) {
@@ -112,7 +117,7 @@ func (t *FileCreateTool) executeLocal(ctx *ToolContext, params FileCreateParams)
 	}
 
 	summary := fmt.Sprintf("File created successfully: %s", filePath)
-	return &ToolResult{Summary: summary, Tips: "文件已创建。建议用 Read 验证内容。"}, nil
+	return &ToolResult{Summary: summary, Tips: tipFileCreated}, nil
 }
 
 // ============================================================================
@@ -222,7 +227,7 @@ func (t *FileReplaceTool) executeInSandbox(ctx *ToolContext, path string, params
 		return nil, err
 	}
 
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: tipEditCompleted}, nil
 }
 
 func (t *FileReplaceTool) executeLocal(ctx *ToolContext, params FileReplaceParams) (*ToolResult, error) {
@@ -251,7 +256,7 @@ func (t *FileReplaceTool) executeLocal(ctx *ToolContext, params FileReplaceParam
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: tipEditCompleted}, nil
 }
 
 // ============================================================================

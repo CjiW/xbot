@@ -417,6 +417,269 @@ func TestSeedLocalDBSubscriptionsOnlyWhenDBEmpty(t *testing.T) {
 	}
 }
 
+func TestSaveCLIConfig_WritesLLMCredentialsWhenNoSubscriptions(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XBOT_HOME", dir)
+	cfgPath := filepath.Join(dir, "config.json")
+
+	// Seed disk config with NO subscriptions — the legacy/first-run path.
+	diskCfg := &config.Config{
+		Admin: config.AdminConfig{Token: "admin-secret"},
+		Web:   config.WebConfig{Port: 9090, Enable: true},
+	}
+	if err := config.SaveToFile(cfgPath, diskCfg); err != nil {
+		t.Fatalf("seed disk config: %v", err)
+	}
+
+	// Runtime cfg carries LLM credentials and agent settings.
+	appCfg := &config.Config{
+		LLM: config.LLMConfig{
+			Provider:        "openai",
+			BaseURL:         "https://api.openai.com/v1",
+			APIKey:          "sk-test-key",
+			Model:           "gpt-4.1",
+			MaxOutputTokens: 4096,
+			ThinkingMode:    "enabled",
+		},
+		Agent: config.AgentConfig{MaxIterations: 42},
+	}
+
+	if err := saveCLIConfig(appCfg); err != nil {
+		t.Fatalf("saveCLIConfig: %v", err)
+	}
+
+	loaded := config.LoadFromFile(cfgPath)
+	if loaded == nil {
+		t.Fatal("LoadFromFile returned nil")
+	}
+
+	// LLM credentials MUST be written because there are no subscriptions.
+	if loaded.LLM.Provider != "openai" {
+		t.Errorf("LLM.Provider = %q, want %q", loaded.LLM.Provider, "openai")
+	}
+	if loaded.LLM.BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("LLM.BaseURL = %q, want %q", loaded.LLM.BaseURL, "https://api.openai.com/v1")
+	}
+	if loaded.LLM.APIKey != "sk-test-key" {
+		t.Errorf("LLM.APIKey = %q, want %q", loaded.LLM.APIKey, "sk-test-key")
+	}
+	if loaded.LLM.Model != "gpt-4.1" {
+		t.Errorf("LLM.Model = %q, want %q", loaded.LLM.Model, "gpt-4.1")
+	}
+	if loaded.LLM.MaxOutputTokens != 4096 {
+		t.Errorf("LLM.MaxOutputTokens = %d, want %d", loaded.LLM.MaxOutputTokens, 4096)
+	}
+	if loaded.LLM.ThinkingMode != "enabled" {
+		t.Errorf("LLM.ThinkingMode = %q, want %q", loaded.LLM.ThinkingMode, "enabled")
+	}
+
+	// Agent should also be persisted.
+	if loaded.Agent.MaxIterations != 42 {
+		t.Errorf("Agent.MaxIterations = %d, want %d", loaded.Agent.MaxIterations, 42)
+	}
+
+	// Other sections from disk should be preserved.
+	if loaded.Admin.Token != "admin-secret" {
+		t.Errorf("Admin.Token = %q, want %q", loaded.Admin.Token, "admin-secret")
+	}
+	if loaded.Web.Port != 9090 || !loaded.Web.Enable {
+		t.Errorf("Web should be preserved, got %+v", loaded.Web)
+	}
+}
+
+func TestSaveCLIConfig_TierModelsAlwaysPersisted(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XBOT_HOME", dir)
+	cfgPath := filepath.Join(dir, "config.json")
+
+	// Disk config has subscriptions — LLM credentials should NOT be written,
+	// but tier models should always be persisted.
+	diskCfg := &config.Config{
+		LLM: config.LLMConfig{
+			VanguardModel: "old-vanguard",
+			BalanceModel:  "old-balance",
+			SwiftModel:    "old-swift",
+		},
+		Subscriptions: []config.SubscriptionConfig{{
+			ID: "sub1", Name: "sub1", Provider: "openai",
+			BaseURL: "https://sub.example/v1", APIKey: "sub-key",
+			Model: "sub-model", Active: true,
+		}},
+		Admin: config.AdminConfig{ChatID: "ou_999"},
+	}
+	if err := config.SaveToFile(cfgPath, diskCfg); err != nil {
+		t.Fatalf("seed disk config: %v", err)
+	}
+
+	// Runtime cfg updates tier models.
+	appCfg := &config.Config{
+		LLM: config.LLMConfig{
+			Provider:      "openai",
+			BaseURL:       "https://runtime.example/v1",
+			APIKey:        "runtime-key",
+			Model:         "runtime-model",
+			VanguardModel: "new-vanguard",
+			BalanceModel:  "new-balance",
+			SwiftModel:    "new-swift",
+		},
+		Agent: config.AgentConfig{MaxConcurrency: 5},
+	}
+
+	if err := saveCLIConfig(appCfg); err != nil {
+		t.Fatalf("saveCLIConfig: %v", err)
+	}
+
+	loaded := config.LoadFromFile(cfgPath)
+	if loaded == nil {
+		t.Fatal("LoadFromFile returned nil")
+	}
+
+	// Tier models must always be persisted regardless of subscriptions.
+	if loaded.LLM.VanguardModel != "new-vanguard" {
+		t.Errorf("VanguardModel = %q, want %q", loaded.LLM.VanguardModel, "new-vanguard")
+	}
+	if loaded.LLM.BalanceModel != "new-balance" {
+		t.Errorf("BalanceModel = %q, want %q", loaded.LLM.BalanceModel, "new-balance")
+	}
+	if loaded.LLM.SwiftModel != "new-swift" {
+		t.Errorf("SwiftModel = %q, want %q", loaded.LLM.SwiftModel, "new-swift")
+	}
+
+	// LLM credentials must NOT be written because subscriptions exist.
+	if loaded.LLM.Provider != "" {
+		t.Errorf("LLM.Provider should NOT be overwritten when subscriptions exist, got %q", loaded.LLM.Provider)
+	}
+	if loaded.LLM.BaseURL != "" {
+		t.Errorf("LLM.BaseURL should NOT be overwritten when subscriptions exist, got %q", loaded.LLM.BaseURL)
+	}
+	if loaded.LLM.APIKey != "" {
+		t.Errorf("LLM.APIKey should NOT be overwritten when subscriptions exist, got %q", loaded.LLM.APIKey)
+	}
+	if loaded.LLM.Model != "" {
+		t.Errorf("LLM.Model should NOT be overwritten when subscriptions exist, got %q", loaded.LLM.Model)
+	}
+
+	// Agent should be persisted.
+	if loaded.Agent.MaxConcurrency != 5 {
+		t.Errorf("Agent.MaxConcurrency = %d, want %d", loaded.Agent.MaxConcurrency, 5)
+	}
+
+	// Disk subscriptions and other sections must remain untouched.
+	if len(loaded.Subscriptions) != 1 || loaded.Subscriptions[0].ID != "sub1" {
+		t.Errorf("Subscriptions should be preserved, got %+v", loaded.Subscriptions)
+	}
+	if loaded.Admin.ChatID != "ou_999" {
+		t.Errorf("Admin.ChatID = %q, want %q", loaded.Admin.ChatID, "ou_999")
+	}
+}
+
+func TestSaveCLIConfig_ParsesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XBOT_HOME", dir)
+	cfgPath := filepath.Join(dir, "config.json")
+
+	// Write a valid config.json with existing settings across multiple sections.
+	diskCfg := &config.Config{
+		CLI: config.CLIConfig{ServerURL: "ws://localhost:7777", Token: "existing-token"},
+		LLM: config.LLMConfig{
+			Provider:      "anthropic",
+			BaseURL:       "https://api.anthropic.com",
+			APIKey:        "sk-ant-existing",
+			Model:         "claude-3",
+			VanguardModel: "claude-opus",
+		},
+		Agent: config.AgentConfig{
+			MaxIterations:  10,
+			MaxConcurrency: 3,
+			ContextMode:    "full",
+		},
+		Admin:   config.AdminConfig{Token: "admin-tok", ChatID: "ou_admin"},
+		Web:     config.WebConfig{Port: 8080, Enable: true},
+		Server:  config.ServerConfig{Port: 7777},
+		Sandbox: config.SandboxConfig{Mode: "docker"},
+		Subscriptions: []config.SubscriptionConfig{{
+			ID: "existing-sub", Name: "prod", Provider: "anthropic",
+			BaseURL: "https://prod.example/v1", APIKey: "prod-key",
+			Model: "claude-prod", Active: true,
+		}},
+	}
+	if err := config.SaveToFile(cfgPath, diskCfg); err != nil {
+		t.Fatalf("seed disk config: %v", err)
+	}
+
+	// Call saveCLIConfig with new agent settings only.
+	appCfg := &config.Config{
+		LLM: config.LLMConfig{
+			VanguardModel: "claude-opus-4",
+			BalanceModel:  "claude-sonnet-4",
+			SwiftModel:    "claude-haiku-4",
+		},
+		Agent: config.AgentConfig{
+			MaxIterations:  99,
+			MaxConcurrency: 12,
+			MemoryProvider: "redis",
+		},
+	}
+
+	if err := saveCLIConfig(appCfg); err != nil {
+		t.Fatalf("saveCLIConfig: %v", err)
+	}
+
+	loaded := config.LoadFromFile(cfgPath)
+	if loaded == nil {
+		t.Fatal("LoadFromFile returned nil")
+	}
+
+	// Agent settings must be updated from appCfg.
+	if loaded.Agent.MaxIterations != 99 {
+		t.Errorf("Agent.MaxIterations = %d, want 99", loaded.Agent.MaxIterations)
+	}
+	if loaded.Agent.MaxConcurrency != 12 {
+		t.Errorf("Agent.MaxConcurrency = %d, want 12", loaded.Agent.MaxConcurrency)
+	}
+	if loaded.Agent.MemoryProvider != "redis" {
+		t.Errorf("Agent.MemoryProvider = %q, want %q", loaded.Agent.MemoryProvider, "redis")
+	}
+
+	// Tier models must be updated.
+	if loaded.LLM.VanguardModel != "claude-opus-4" {
+		t.Errorf("VanguardModel = %q, want %q", loaded.LLM.VanguardModel, "claude-opus-4")
+	}
+	if loaded.LLM.BalanceModel != "claude-sonnet-4" {
+		t.Errorf("BalanceModel = %q, want %q", loaded.LLM.BalanceModel, "claude-sonnet-4")
+	}
+	if loaded.LLM.SwiftModel != "claude-haiku-4" {
+		t.Errorf("SwiftModel = %q, want %q", loaded.LLM.SwiftModel, "claude-haiku-4")
+	}
+
+	// Existing CLI settings must be preserved (appCfg.CLI is zero, so no overwrite).
+	if loaded.CLI.ServerURL != "ws://localhost:7777" {
+		t.Errorf("CLI.ServerURL = %q, want %q", loaded.CLI.ServerURL, "ws://localhost:7777")
+	}
+	if loaded.CLI.Token != "existing-token" {
+		t.Errorf("CLI.Token = %q, want %q", loaded.CLI.Token, "existing-token")
+	}
+
+	// Admin, Web, Server, Sandbox, Feishu must all be untouched.
+	if loaded.Admin.Token != "admin-tok" || loaded.Admin.ChatID != "ou_admin" {
+		t.Errorf("Admin should be preserved, got %+v", loaded.Admin)
+	}
+	if loaded.Web.Port != 8080 || !loaded.Web.Enable {
+		t.Errorf("Web should be preserved, got %+v", loaded.Web)
+	}
+	if loaded.Server.Port != 7777 {
+		t.Errorf("Server.Port = %d, want 7777", loaded.Server.Port)
+	}
+	if loaded.Sandbox.Mode != "docker" {
+		t.Errorf("Sandbox.Mode = %q, want %q", loaded.Sandbox.Mode, "docker")
+	}
+
+	// Subscription must remain untouched.
+	if len(loaded.Subscriptions) != 1 || loaded.Subscriptions[0].ID != "existing-sub" {
+		t.Errorf("Subscriptions should be preserved, got %+v", loaded.Subscriptions)
+	}
+}
+
 type fakeAgentBackend struct {
 	factory      *agent.LLMFactory
 	defaultModel string

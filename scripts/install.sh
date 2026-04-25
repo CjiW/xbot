@@ -52,20 +52,22 @@ resolve_version() {
 }
 
 # Non-interactive: use MODE env var. Interactive: prompt user.
+# Sets MODE variable directly (no command substitution) so that prompts
+# always reach the user's terminal, even when piped (curl | bash).
 ask_mode() {
+    # Env var takes priority (for non-interactive / CI usage)
     if [ -n "${MODE:-}" ]; then
         case "$MODE" in
-            standalone|server-client) echo "$MODE" ;;
+            standalone|server-client) ;;
             *) error "Invalid MODE='${MODE}'. Use 'standalone' or 'server-client'." ;;
         esac
         return
     fi
-    # When piped (curl | bash), stdin is not a terminal.
-    # Default to standalone in that case.
-    if [ ! -t 0 ]; then
-        info "Non-interactive mode (stdin is pipe). Defaulting to standalone."
-        info "Use MODE=server-client or run interactively to change."
-        echo "standalone"
+    # In piped mode, stdin is the curl pipe. We need /dev/tty to talk to the user.
+    if ! [ -c /dev/tty ] 2>/dev/null || ! [ -r /dev/tty ] 2>/dev/null; then
+        info "Non-interactive mode (no /dev/tty). Defaulting to standalone."
+        info "Set MODE=server-client to install server-client mode."
+        MODE=standalone
         return
     fi
     echo ""
@@ -73,11 +75,11 @@ ask_mode() {
     echo "  1) standalone      - CLI runs locally in-process"
     echo "  2) server-client   - install local server service, CLI connects remotely"
     printf "Select [1/2] (default 1): "
-    read -r mode </dev/tty
-    case "${mode:-1}" in
-        1) echo "standalone" ;;
-        2) echo "server-client" ;;
-        *) error "Invalid selection: ${mode}" ;;
+    local choice
+    read -r choice </dev/tty || choice=1
+    case "${choice:-1}" in
+        2) MODE=server-client ;;
+        *) MODE=standalone ;;
     esac
 }
 
@@ -398,11 +400,11 @@ main() {
     info "Config:    ${CONFIG_PATH}"
     echo ""
 
-    MODE=$(ask_mode)
+    ask_mode
     TOKEN=$(random_token)
     PORT="$DEFAULT_PORT"
-    if [ "$MODE" = "server-client" ] && [ -z "${NONINTERACTIVE:-}" ]; then
-        printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: " >&2
+    if [ "$MODE" = "server-client" ] && [ -z "${NONINTERACTIVE:-}" ] && [ -e /dev/tty ]; then
+        printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: "
         read -r input_port </dev/tty
         PORT="${input_port:-$DEFAULT_PORT}"
     fi

@@ -393,6 +393,10 @@ func setSecondsEnv(key string, dst *time.Duration) {
 }
 
 // applyEnvOverrides 用环境变量覆盖配置（与 README / .env.example 中的变量名一致，优先级高于 config.json）。
+//
+// 策略：环境变量始终覆盖 config.json 的值（不做零值检测）。
+// 这保证了可预测的行为：用户设置环境变量就意味着覆盖，无需关心 config.json 里写了什么。
+// 默认值填充在 Load() 函数中，只对 config.json 和环境变量都未设置的字段生效。
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -462,12 +466,12 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Agent.MemoryProvider = v
 	}
 	if v := os.Getenv("AGENT_MAX_ITERATIONS"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxIterations == 0 {
+		if i, err := strconv.Atoi(v); err == nil {
 			cfg.Agent.MaxIterations = i
 		}
 	}
 	if v := os.Getenv("AGENT_MAX_CONCURRENCY"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxConcurrency == 0 {
+		if i, err := strconv.Atoi(v); err == nil {
 			cfg.Agent.MaxConcurrency = i
 		}
 	}
@@ -484,7 +488,7 @@ func applyEnvOverrides(cfg *Config) {
 		}
 	}
 	if v := os.Getenv("AGENT_MAX_CONTEXT_TOKENS"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxContextTokens == 0 {
+		if i, err := strconv.Atoi(v); err == nil {
 			cfg.Agent.MaxContextTokens = i
 		}
 	}
@@ -499,7 +503,7 @@ func applyEnvOverrides(cfg *Config) {
 		}
 	}
 	if v := os.Getenv("MAX_SUBAGENT_DEPTH"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxSubAgentDepth == 0 {
+		if i, err := strconv.Atoi(v); err == nil {
 			cfg.Agent.MaxSubAgentDepth = i
 		}
 	}
@@ -517,12 +521,12 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Sandbox.HostWorkDir = v
 	}
 	if v := os.Getenv("SANDBOX_IDLE_TIMEOUT_MINUTES"); v != "" {
-		if min, err := strconv.Atoi(v); err == nil && cfg.Sandbox.IdleTimeout == 0 {
+		if min, err := strconv.Atoi(v); err == nil {
 			cfg.Sandbox.IdleTimeout = time.Duration(min) * time.Minute
 		}
 	}
 	if v := os.Getenv("SANDBOX_WS_PORT"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil && cfg.Sandbox.WSPort == 0 {
+		if i, err := strconv.Atoi(v); err == nil {
 			cfg.Sandbox.WSPort = i
 		}
 	}

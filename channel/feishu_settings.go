@@ -1143,8 +1143,9 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		"content": fmt.Sprintf("**最大上下文 (k)**　当前: %s", maxContextDisplay),
 	})
 	elements = append(elements, map[string]any{
-		"tag": "form",
-		"name": []map[string]any{
+		"tag":  "form",
+		"name": "max_context_form",
+		"elements": []map[string]any{
 			{
 				"tag":           "input",
 				"name":          "max_context_k",
@@ -1179,8 +1180,9 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		"content": fmt.Sprintf("**最大输出 Token (k)**　当前: %s", maxOutputDisplay),
 	})
 	elements = append(elements, map[string]any{
-		"tag": "form",
-		"name": []map[string]any{
+		"tag":  "form",
+		"name": "max_output_form",
+		"elements": []map[string]any{
 			{
 				"tag":           "input",
 				"name":          "max_output_k",

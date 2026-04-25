@@ -942,7 +942,7 @@ func migrateCLIUserSettingsFromGlobalIfNeeded(cfg *config.Config, backend agent.
 }
 
 // saveServerConfig persists only the config sections the server actually modifies.
-// It reads the current disk config first, overwrites ONLY LLM and Agent,
+// It reads the current disk config first, overwrites ONLY the fields the server owns,
 // then writes back — all other sections are preserved untouched.
 //
 // ⚠️ IMPORTANT: Do NOT add more sections here without careful review.
@@ -964,9 +964,28 @@ func saveServerConfig(cfg *config.Config) error {
 			return fmt.Errorf("config file parse error, not overwriting")
 		}
 	}
-	// Server only ever modifies these two sections:
-	merged.LLM = cfg.LLM     // via applyRuntimeSetting / rebuildLLMFromSubscription
-	merged.Agent = cfg.Agent // via applyRuntimeSetting (max_iterations, max_concurrency, etc.)
+	// Agent settings: always write back (max_iterations, max_concurrency, etc.)
+	merged.Agent = cfg.Agent
+
+	// LLM tier model mappings: always write back (vanguard/balance/swift models).
+	// These are global preferences, not subscription credentials.
+	merged.LLM.VanguardModel = cfg.LLM.VanguardModel
+	merged.LLM.BalanceModel = cfg.LLM.BalanceModel
+	merged.LLM.SwiftModel = cfg.LLM.SwiftModel
+
+	// LLM credentials (Provider, BaseURL, APIKey, Model, MaxOutputTokens, ThinkingMode):
+	// Single source of truth is user_llm_subscriptions DB, NOT config.json.
+	// Only write credentials to config.json if there are no DB subscriptions
+	// (first-run / legacy mode where config.json is the only data source).
+	if len(merged.Subscriptions) == 0 {
+		merged.LLM.Provider = cfg.LLM.Provider
+		merged.LLM.BaseURL = cfg.LLM.BaseURL
+		merged.LLM.APIKey = cfg.LLM.APIKey
+		merged.LLM.Model = cfg.LLM.Model
+		merged.LLM.MaxOutputTokens = cfg.LLM.MaxOutputTokens
+		merged.LLM.ThinkingMode = cfg.LLM.ThinkingMode
+	}
+
 	return config.SaveToFile(path, merged)
 }
 

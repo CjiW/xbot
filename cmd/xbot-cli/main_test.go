@@ -278,12 +278,16 @@ func TestSaveCLIConfigPreservesDiskFields(t *testing.T) {
 		t.Fatal("LoadFromFile returned nil")
 	}
 
-	// LLM and Agent should be updated from appCfg.
-	if loaded.LLM.Model != "gpt-4.1" {
-		t.Fatalf("LLM.Model should be updated to gpt-4.1, got %q", loaded.LLM.Model)
-	}
+	// Agent settings should be updated from appCfg.
 	if loaded.Agent.MaxIterations != 123 || loaded.Agent.MaxConcurrency != 7 {
 		t.Fatalf("Agent fields should be updated, got %+v", loaded.Agent)
+	}
+	// LLM credentials should NOT be written back when config.json has subscriptions
+	// (single source of truth is the subscription system, not cfg.LLM).
+	// Only tier models (vanguard/balance/swift) are written back.
+	// The disk subscription's model should remain unchanged.
+	if loaded.LLM.Model != "" {
+		t.Fatalf("LLM.Model should NOT be written back when subscriptions exist, got %q", loaded.LLM.Model)
 	}
 
 	// All other sections must be UNTOUCHED from disk.

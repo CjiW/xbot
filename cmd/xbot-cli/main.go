@@ -135,9 +135,28 @@ func saveCLIConfig(cfg *config.Config) error {
 			return fmt.Errorf("config file parse error, not overwriting")
 		}
 	}
-	// CLI only ever modifies these sections:
-	merged.LLM = cfg.LLM     // via settings panel / subscription switch
-	merged.Agent = cfg.Agent // via settings panel (max_iterations, etc.)
+	// Agent settings: always write back (max_iterations, max_concurrency, etc.)
+	merged.Agent = cfg.Agent
+
+	// LLM tier model mappings: always write back (vanguard/balance/swift models).
+	// These are global preferences, not subscription credentials.
+	merged.LLM.VanguardModel = cfg.LLM.VanguardModel
+	merged.LLM.BalanceModel = cfg.LLM.BalanceModel
+	merged.LLM.SwiftModel = cfg.LLM.SwiftModel
+
+	// LLM credentials (Provider, BaseURL, APIKey, Model, MaxOutputTokens, ThinkingMode):
+	// Single source of truth is user_llm_subscriptions DB, NOT config.json.
+	// Only write credentials to config.json if there are no DB subscriptions
+	// (first-run / legacy mode where config.json is the only data source).
+	if len(merged.Subscriptions) == 0 {
+		merged.LLM.Provider = cfg.LLM.Provider
+		merged.LLM.BaseURL = cfg.LLM.BaseURL
+		merged.LLM.APIKey = cfg.LLM.APIKey
+		merged.LLM.Model = cfg.LLM.Model
+		merged.LLM.MaxOutputTokens = cfg.LLM.MaxOutputTokens
+		merged.LLM.ThinkingMode = cfg.LLM.ThinkingMode
+	}
+
 	// CLI remote connection settings: only write if non-empty (e.g. first setup)
 	if cfg.CLI.ServerURL != "" || cfg.CLI.Token != "" {
 		merged.CLI = cfg.CLI

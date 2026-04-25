@@ -399,3 +399,137 @@ func TestInvalidate_DoesNotAffectOtherUsers(t *testing.T) {
 		t.Errorf("userB model after Invalidate(userA) = %q, want claude-3-opus", modelB)
 	}
 }
+
+// TestGetLLMForModel_ConfigSubExactMatch verifies the config.json subscription path:
+// when configSubsFn returns a subscription whose Model matches the resolved tier model,
+// GetLLMForModel should use that subscription (usedCustom=true).
+func TestGetLLMForModel_ConfigSubExactMatch(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+	f.defaultThinkingMode = "auto"
+
+	// Configure tier so "vanguard" resolves to "gpt-4o"
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "gpt-4o",
+	})
+
+	// Set up configSubsFn with a matching subscription
+	f.SetConfigSubs(func() []config.SubscriptionConfig {
+		return []config.SubscriptionConfig{
+			{
+				ID:       "sub-1",
+				Name:     "test-sub",
+				Provider: "openai",
+				BaseURL:  "https://api.test/v1",
+				APIKey:   "sk-test",
+				Model:    "gpt-4o",
+			},
+		}
+	})
+
+	client, model, _, _, usedCustom := f.GetLLMForModel("user1", "vanguard")
+	if !usedCustom {
+		t.Error("usedCustom should be true when config sub matches resolved model")
+	}
+	if model != "gpt-4o" {
+		t.Errorf("model = %q, want %q", model, "gpt-4o")
+	}
+	if client == nil {
+		t.Error("client should not be nil when config sub matches")
+	}
+}
+
+// TestGetLLMForModel_ConfigSubNoMatch verifies that when configSubsFn returns
+// subscriptions but none match the resolved tier model, it falls back to the
+// default LLM (usedCustom=false, model=default-model).
+func TestGetLLMForModel_ConfigSubNoMatch(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+	f.defaultThinkingMode = "auto"
+
+	// Configure tier so "vanguard" resolves to "gpt-4o"
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "gpt-4o",
+	})
+
+	// Config sub has a different model — no match
+	f.SetConfigSubs(func() []config.SubscriptionConfig {
+		return []config.SubscriptionConfig{
+			{
+				ID:       "sub-1",
+				Name:     "other-sub",
+				Provider: "openai",
+				BaseURL:  "https://api.test/v1",
+				APIKey:   "sk-test",
+				Model:    "other-model",
+			},
+		}
+	})
+
+	client, model, _, _, usedCustom := f.GetLLMForModel("user1", "vanguard")
+	if usedCustom {
+		t.Error("usedCustom should be false when no config sub matches resolved model")
+	}
+	if model != "default-model" {
+		t.Errorf("model = %q, want %q (fallback to default)", model, "default-model")
+	}
+	if client == nil {
+		t.Error("client should not be nil (fallback default client)")
+	}
+}
+
+// TestGetLLMForModel_ConfigSubSkipsEmptyCredentials verifies that config
+// subscriptions with matching Model but empty BaseURL or APIKey are skipped,
+// and the function falls through to the default LLM.
+func TestGetLLMForModel_ConfigSubSkipsEmptyCredentials(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+	f.defaultThinkingMode = "auto"
+
+	// Configure tier so "vanguard" resolves to "gpt-4o"
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "gpt-4o",
+	})
+
+	// Sub-tests for empty BaseURL and empty APIKey
+	tests := []struct {
+		name string
+		sub  config.SubscriptionConfig
+	}{
+		{
+			name: "empty BaseURL",
+			sub: config.SubscriptionConfig{
+				ID:       "sub-empty-url",
+				Name:     "no-url",
+				Provider: "openai",
+				BaseURL:  "",
+				APIKey:   "sk-test",
+				Model:    "gpt-4o",
+			},
+		},
+		{
+			name: "empty APIKey",
+			sub: config.SubscriptionConfig{
+				ID:       "sub-empty-key",
+				Name:     "no-key",
+				Provider: "openai",
+				BaseURL:  "https://api.test/v1",
+				APIKey:   "",
+				Model:    "gpt-4o",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.SetConfigSubs(func() []config.SubscriptionConfig {
+				return []config.SubscriptionConfig{tt.sub}
+			})
+
+			_, model, _, _, usedCustom := f.GetLLMForModel("user1", "vanguard")
+			if usedCustom {
+				t.Error("usedCustom should be false when config sub has empty credentials")
+			}
+			if model != "default-model" {
+				t.Errorf("model = %q, want %q (fallback to default)", model, "default-model")
+			}
+		})
+	}
+}

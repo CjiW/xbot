@@ -261,3 +261,85 @@ func TestApplyCompress_NilTrackerAndPersistence(t *testing.T) {
 		t.Errorf("expected InputTokens=100, got %d", got.CompressOutput.InputTokens)
 	}
 }
+
+func TestApplyCompress_NilSyncMessages(t *testing.T) {
+	result := sampleCompressResult()
+	cm := &mockContextManager{
+		compressFn: func(_ context.Context, _ []llm.ChatMessage, _ llm.LLM, _ string) (*CompressResult, error) {
+			return result, nil
+		},
+	}
+
+	params := CompressPipelineParams{
+		CM:           cm,
+		Messages:     []llm.ChatMessage{llm.NewUserMessage("hello")},
+		LLMClient:    &mockLLM{},
+		Model:        "test-model",
+		SyncMessages: nil, // explicitly nil — newMessages should be result.LLMView directly
+		AccumulateUsage: func(_ *CompressResult) {
+			// no-op, just ensure it doesn't block
+		},
+	}
+
+	got, err := ApplyCompress(context.Background(), params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	// Verify content matches LLMView
+	if len(got.NewMessages) != len(result.LLMView) {
+		t.Fatalf("expected %d messages, got %d", len(result.LLMView), len(got.NewMessages))
+	}
+
+	// Verify same slice identity — when SyncMessages is nil the result
+	// should use result.LLMView directly (same underlying array), not a copy.
+	if len(got.NewMessages) > 0 && len(result.LLMView) > 0 {
+		if &got.NewMessages[0] != &result.LLMView[0] {
+			t.Error("NewMessages should share the same underlying array as LLMView when SyncMessages is nil")
+		}
+	}
+	if cap(got.NewMessages) != cap(result.LLMView) {
+		t.Errorf("NewMessages cap=%d, want cap=%d (same as LLMView)", cap(got.NewMessages), cap(result.LLMView))
+	}
+}
+
+func TestApplyCompress_NilAccumulateUsage(t *testing.T) {
+	result := sampleCompressResult()
+	cm := &mockContextManager{
+		compressFn: func(_ context.Context, _ []llm.ChatMessage, _ llm.LLM, _ string) (*CompressResult, error) {
+			return result, nil
+		},
+	}
+
+	// AccumulateUsage is nil — the function must not panic and should
+	// still produce a correct result.
+	params := CompressPipelineParams{
+		CM:              cm,
+		Messages:        []llm.ChatMessage{llm.NewUserMessage("hello")},
+		LLMClient:       &mockLLM{},
+		Model:           "test-model",
+		AccumulateUsage: nil,
+		SyncMessages:    nil,
+	}
+
+	// If AccumulateUsage nil-handling is broken, this will panic.
+	got, err := ApplyCompress(context.Background(), params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if len(got.NewMessages) != len(result.LLMView) {
+		t.Errorf("expected %d messages, got %d", len(result.LLMView), len(got.NewMessages))
+	}
+	if got.NewTokenCount <= 0 {
+		t.Errorf("expected positive NewTokenCount, got %d", got.NewTokenCount)
+	}
+	if got.CompressOutput != result {
+		t.Error("CompressOutput should point to the original result")
+	}
+}

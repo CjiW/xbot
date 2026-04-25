@@ -223,3 +223,114 @@ func TestRewriteAfterCompress_NilSession(t *testing.T) {
 		t.Errorf("expected count unchanged at 3, got %d", b.LastPersistedCount())
 	}
 }
+
+func TestRewriteAfterCompress_NilSession_EmptyView(t *testing.T) {
+	b := NewPersistenceBridge(nil, 5)
+
+	ok, err := b.RewriteAfterCompress(nil, 10)
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if !ok {
+		t.Error("expected ok=true for nil session with empty view")
+	}
+	// Count must NOT be updated when session is nil
+	if b.LastPersistedCount() != 5 {
+		t.Errorf("expected count unchanged at 5, got %d", b.LastPersistedCount())
+	}
+}
+
+func TestRewriteAfterCompress_NilSession_WithMixedMessages(t *testing.T) {
+	b := NewPersistenceBridge(nil, 2)
+
+	sessionView := []llm.ChatMessage{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "compressed summary"},
+		{Role: "assistant", Content: "response"},
+	}
+
+	ok, err := b.RewriteAfterCompress(sessionView, 8)
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if !ok {
+		t.Error("expected ok=true for nil session with mixed messages")
+	}
+	// Count must NOT be updated — nil session means no persistence happened
+	if b.LastPersistedCount() != 2 {
+		t.Errorf("expected count unchanged at 2, got %d", b.LastPersistedCount())
+	}
+}
+
+func TestRewriteAfterCompress_NilSession_ZeroMsgCount(t *testing.T) {
+	b := NewPersistenceBridge(nil, 0)
+
+	sessionView := []llm.ChatMessage{
+		{Role: "user", Content: "hello"},
+	}
+
+	ok, err := b.RewriteAfterCompress(sessionView, 0)
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if !ok {
+		t.Error("expected ok=true for nil session")
+	}
+	if b.LastPersistedCount() != 0 {
+		t.Errorf("expected count unchanged at 0, got %d", b.LastPersistedCount())
+	}
+}
+
+func TestRewriteAfterCompress_NilSession_LargeMsgCount(t *testing.T) {
+	b := NewPersistenceBridge(nil, 100)
+
+	sessionView := []llm.ChatMessage{
+		{Role: "user", Content: "summary"},
+	}
+
+	ok, err := b.RewriteAfterCompress(sessionView, 500)
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if !ok {
+		t.Error("expected ok=true for nil session")
+	}
+	// Count should NOT jump to 500 — nil session means nothing was written
+	if b.LastPersistedCount() != 100 {
+		t.Errorf("expected count unchanged at 100, got %d", b.LastPersistedCount())
+	}
+}
+
+func TestAssertNoSystemPersist(t *testing.T) {
+	t.Run("system message returns error", func(t *testing.T) {
+		msg := llm.ChatMessage{Role: "system", Content: "you are a bot"}
+		err := assertNoSystemPersist(msg)
+		if err == nil {
+			t.Error("expected error for system message, got nil")
+		}
+	})
+
+	t.Run("user message returns nil", func(t *testing.T) {
+		msg := llm.ChatMessage{Role: "user", Content: "hello"}
+		err := assertNoSystemPersist(msg)
+		if err != nil {
+			t.Errorf("expected nil for user message, got %v", err)
+		}
+	})
+
+	t.Run("assistant message returns nil", func(t *testing.T) {
+		msg := llm.ChatMessage{Role: "assistant", Content: "hi"}
+		err := assertNoSystemPersist(msg)
+		if err != nil {
+			t.Errorf("expected nil for assistant message, got %v", err)
+		}
+	})
+
+	t.Run("tool message returns nil", func(t *testing.T) {
+		msg := llm.ChatMessage{Role: "tool", Content: "result"}
+		err := assertNoSystemPersist(msg)
+		if err != nil {
+			t.Errorf("expected nil for tool message, got %v", err)
+		}
+	})
+}

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 
@@ -123,11 +125,7 @@ func (mc *MessageContext) BuildSystemPrompt() string {
 		return ""
 	}
 
-	keys := make([]string, 0, len(mc.SystemParts))
-	for k := range mc.SystemParts {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(mc.SystemParts))
 
 	var total int
 	for _, k := range keys {
@@ -238,16 +236,11 @@ func (p *MessagePipeline) Use(mw ...MessageMiddleware) {
 func (p *MessagePipeline) Remove(name string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	n := 0
-	filtered := p.middlewares[:0]
-	for _, mw := range p.middlewares {
-		if mw.Name() == name {
-			n++
-		} else {
-			filtered = append(filtered, mw)
-		}
-	}
-	p.middlewares = filtered
+	before := len(p.middlewares)
+	p.middlewares = slices.DeleteFunc(p.middlewares, func(mw MessageMiddleware) bool {
+		return mw.Name() == name
+	})
+	n := before - len(p.middlewares)
 	return n
 }
 

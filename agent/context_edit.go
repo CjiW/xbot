@@ -111,7 +111,7 @@ func (e *ContextEditor) SetTenantID(tenantID int64) {
 }
 
 // HandleRequest 处理 context_edit 请求，直接修改 messages slice。
-func (e *ContextEditor) HandleRequest(action string, params map[string]interface{}) (string, error) {
+func (e *ContextEditor) HandleRequest(action string, params map[string]any) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	msgs := e.messages
@@ -139,7 +139,7 @@ func (e *ContextEditor) HandleRequest(action string, params map[string]interface
 }
 
 // applyEdit 执行编辑操作并修改 messages slice。
-func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, params map[string]interface{}) (string, error) {
+func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, params map[string]any) (string, error) {
 	req := ContextEditRequest{
 		Action: ContextEditAction(action),
 	}
@@ -269,7 +269,7 @@ func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, par
 		e.Store.Record(result)
 	}
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(map[string]any{
 		"action":      req.Action,
 		"message_idx": req.MessageIdx,
 		"role":        msg.Role,
@@ -415,7 +415,7 @@ func listMessagesByTurn(messages []llm.ChatMessage) string {
 }
 
 // deleteTurn 删除整个对话轮次（user 消息 + 所有关联的 assistant/tool 消息）。
-func (e *ContextEditor) deleteTurn(messages []llm.ChatMessage, params map[string]interface{}) (string, error) {
+func (e *ContextEditor) deleteTurn(messages []llm.ChatMessage, params map[string]any) (string, error) {
 	turnIdx, ok := params["turn_idx"].(float64)
 	if !ok {
 		return "", fmt.Errorf("turn_idx is required for delete_turn action")
@@ -464,7 +464,7 @@ func (e *ContextEditor) deleteTurn(messages []llm.ChatMessage, params map[string
 		})
 	}
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(map[string]any{
 		"action":     "delete_turn",
 		"turn_idx":   idx,
 		"msg_count":  deletedMsgCount,

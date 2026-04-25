@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -290,13 +291,9 @@ func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
 // owns iteration display entirely, and any static tool_summary from
 // ConvertMessagesToHistory would duplicate content with mismatched iteration numbers.
 func (m *cliModel) removeAllToolSummaries() {
-	filtered := m.messages[:0] // reuse backing array
-	for _, msg := range m.messages {
-		if msg.role != "tool_summary" {
-			filtered = append(filtered, msg)
-		}
-	}
-	m.messages = filtered
+	m.messages = slices.DeleteFunc(m.messages, func(msg cliMessage) bool {
+		return msg.role == "tool_summary"
+	})
 	m.renderCacheValid = false
 }
 

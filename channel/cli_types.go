@@ -317,7 +317,7 @@ type iterToolSnap struct {
 // e.g. after server restart. Produces labels like "Shell(tail -100 file.log)" or "Read(path)".
 func formatToolLabel(name, argsJSON string) string {
 	const maxLen = 60
-	var args map[string]interface{}
+	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return name
 	}

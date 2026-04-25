@@ -117,8 +117,8 @@ func (a *AnthropicLLM) getMaxTokens() int {
 // --- 请求/响应类型（Anthropic Messages API）---
 
 type anthropicMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"` // string or []contentBlock
+	Role    string `json:"role"`
+	Content any    `json:"content"` // string or []contentBlock
 }
 
 type anthropicTextBlock struct {
@@ -141,9 +141,9 @@ type anthropicToolResultBlock struct {
 }
 
 type anthropicTool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	InputSchema interface{} `json:"input_schema"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	InputSchema any    `json:"input_schema"`
 }
 
 type anthropicThinking struct {
@@ -164,7 +164,7 @@ type anthropicReq struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
 	Messages  []anthropicMessage `json:"messages"`
-	System    interface{}        `json:"system,omitempty"`
+	System    any                `json:"system,omitempty"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
 	Thinking  *anthropicThinking `json:"thinking,omitempty"`
@@ -223,7 +223,7 @@ func toAnthropicMessages(messages []ChatMessage, thinkingEnabled bool) []anthrop
 			i++
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
-				blocks := make([]interface{}, 0, 2+len(msg.ToolCalls))
+				blocks := make([]any, 0, 2+len(msg.ToolCalls))
 				// Anthropic requires thinking block before tool_use blocks when thinking is enabled
 				if thinkingEnabled {
 					blocks = append(blocks, anthropicThinkingBlock{
@@ -254,7 +254,7 @@ func toAnthropicMessages(messages []ChatMessage, thinkingEnabled bool) []anthrop
 				msgs = append(msgs, anthropicMessage{Role: "assistant", Content: blocks})
 			} else if thinkingEnabled || msg.ReasoningContent != "" {
 				// Text-only assistant message: need blocks for thinking + text
-				blocks := make([]interface{}, 0, 2)
+				blocks := make([]any, 0, 2)
 				blocks = append(blocks, anthropicThinkingBlock{
 					Type:     "thinking",
 					Thinking: msg.ReasoningContent,
@@ -279,7 +279,7 @@ func toAnthropicMessages(messages []ChatMessage, thinkingEnabled bool) []anthrop
 				})
 				i++
 			}
-			blocks := make([]interface{}, 0, len(results))
+			blocks := make([]any, 0, len(results))
 			for _, r := range results {
 				blocks = append(blocks, r)
 			}
@@ -296,10 +296,10 @@ func toAnthropicMessages(messages []ChatMessage, thinkingEnabled bool) []anthrop
 func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
 	out := make([]anthropicTool, 0, len(tools))
 	for _, tool := range tools {
-		properties := make(map[string]interface{})
+		properties := make(map[string]any)
 		required := make([]string, 0)
 		for _, p := range tool.Parameters() {
-			prop := map[string]interface{}{
+			prop := map[string]any{
 				"type":        p.Type,
 				"description": p.Description,
 			}
@@ -314,7 +314,7 @@ func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
 		out = append(out, anthropicTool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
-			InputSchema: map[string]interface{}{
+			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": properties,
 				"required":   required,
@@ -329,7 +329,7 @@ func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
 // - 单条无缓存 system 时返回 string（向后兼容，避免不必要的数组序列化）
 // - 有 CacheHint="static" 时返回带 cache_control 的 blocks 数组
 // - 混合 static 和非 static 时返回 blocks 数组
-func buildAnthropicSystem(messages []ChatMessage) interface{} {
+func buildAnthropicSystem(messages []ChatMessage) any {
 	var blocks []anthropicSystemBlock
 	for _, msg := range messages {
 		if msg.Role != "system" {

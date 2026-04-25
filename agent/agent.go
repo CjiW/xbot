@@ -381,7 +381,7 @@ func (a *Agent) SetChannelFinder(fn func(name string) (channel.Channel, bool)) {
 // IsProcessing returns true if there is an active Run for the given sender.
 func (a *Agent) IsProcessing(senderID string) bool {
 	found := false
-	a.chatCancelCh.Range(func(key, _ interface{}) bool {
+	a.chatCancelCh.Range(func(key, _ any) bool {
 		if k, ok := key.(string); ok && strings.HasSuffix(k, ":"+senderID) {
 			found = true
 			return false
@@ -2154,14 +2154,6 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	return a.pipeline.Run(mc), nil
 }
 
-// max returns the larger of a and b.
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // summarizeRetryError 将 LLM 错误简化为用户友好的描述。
 func summarizeRetryError(err error) string {
 	if err == nil {
@@ -2488,7 +2480,7 @@ func formatToolProgress(name string, args string) string {
 	const maxLen = 80
 
 	// Helper to get a string field from parsed JSON
-	get := func(m map[string]interface{}, key string) string {
+	get := func(m map[string]any, key string) string {
 		if v, ok := m[key]; ok {
 			if s, ok := v.(string); ok {
 				return s
@@ -2500,7 +2492,7 @@ func formatToolProgress(name string, args string) string {
 	}
 
 	// Try to parse JSON args
-	var m map[string]interface{}
+	var m map[string]any
 	parsed := json.Unmarshal([]byte(args), &m) == nil
 
 	// Helper to truncate and format the final result (rune-safe for multibyte chars)

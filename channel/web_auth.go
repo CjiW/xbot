@@ -650,12 +650,12 @@ func (wc *WebChannel) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"invite_only": wc.config.InviteOnly,
 	})
 }
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
@@ -663,7 +663,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 // jsonErrorResponse writes a JSON-formatted error response (for consistent API errors).
 func jsonErrorResponse(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]interface{}{
+	writeJSON(w, status, map[string]any{
 		"ok":    false,
 		"error": message,
 	})

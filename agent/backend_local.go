@@ -85,7 +85,7 @@ func (b *LocalBackend) IsRemote() bool { return false }
 func (b *LocalBackend) IsProcessing(ch, chatID string) bool {
 	prefix := ch + ":" + chatID + ":"
 	found := false
-	b.agent.chatCancelCh.Range(func(key, _ interface{}) bool {
+	b.agent.chatCancelCh.Range(func(key, _ any) bool {
 		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
 			found = true
 			return false

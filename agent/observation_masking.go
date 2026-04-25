@@ -433,15 +433,15 @@ func (s *ObservationMaskStore) RecallMasked(id string) (string, string, error) {
 }
 
 // ListMasked 列出所有已遮蔽的 observation（摘要信息）。
-func (s *ObservationMaskStore) ListMasked() []map[string]interface{} {
+func (s *ObservationMaskStore) ListMasked() []map[string]any {
 	entries := s.List()
-	result := make([]map[string]interface{}, len(entries))
+	result := make([]map[string]any, len(entries))
 	for i, e := range entries {
 		argsPreview := e.Arguments
 		if len([]rune(argsPreview)) > 60 {
 			argsPreview = string([]rune(argsPreview)[:60]) + "..."
 		}
-		result[i] = map[string]interface{}{
+		result[i] = map[string]any{
 			"id":           e.ID,
 			"tool_name":    e.ToolName,
 			"args_preview": argsPreview,
@@ -605,7 +605,7 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 		}
 	}
 
-	log.WithFields(map[string]interface{}{
+	log.WithFields(map[string]any{
 		"masked_count":  maskedTotal,
 		"kept_groups":   keepGroups,
 		"total_groups":  len(groups),

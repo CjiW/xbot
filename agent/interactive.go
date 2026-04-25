@@ -56,7 +56,7 @@ const interactiveSessionTTL = 30 * time.Minute
 // sync.Map 本身并发安全，调用方不需要持有任何额外的锁。
 func (a *Agent) cleanupExpiredSessions() {
 	now := time.Now()
-	a.interactiveSubAgents.Range(func(k, v interface{}) bool {
+	a.interactiveSubAgents.Range(func(k, v any) bool {
 		ia, ok := v.(*interactiveAgent)
 		if !ok || ia == nil {
 			a.interactiveSubAgents.Delete(k)
@@ -1204,7 +1204,7 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 func (a *Agent) GetActiveInteractiveRoles(channel, chatID string) []string {
 	var roles []string
 	prefix := channel + ":" + chatID + "/"
-	a.interactiveSubAgents.Range(func(k, v interface{}) bool {
+	a.interactiveSubAgents.Range(func(k, v any) bool {
 		key, ok := k.(string)
 		if !ok {
 			return true

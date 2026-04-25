@@ -31,6 +31,16 @@ import (
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
 
+// toStringValue converts any value to string. Strings are passed through,
+// other types are JSON-marshaled.
+func toStringValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	data, _ := json.Marshal(v)
+	return string(data)
+}
+
 // FeishuConfig 飞书渠道配置
 type FeishuConfig struct {
 	AppID             string   // App ID
@@ -1999,13 +2009,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			if key == "card_id" {
 				continue
 			}
-			switch v := value.(type) {
-			case string:
-				responseData[key] = v
-			default:
-				data, _ := json.Marshal(v)
-				responseData[key] = string(data)
-			}
+			responseData[key] = toStringValue(value)
 		}
 		// Also merge any actionData (from Value), FormValue takes precedence
 		for k, v := range actionData {
@@ -2015,13 +2019,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			if _, exists := responseData[k]; exists {
 				continue // FormValue data takes precedence
 			}
-			switch val := v.(type) {
-			case string:
-				responseData[k] = val
-			default:
-				data, _ := json.Marshal(val)
-				responseData[k] = string(data)
-			}
+			responseData[k] = toStringValue(v)
 		}
 		actionName = "form_submit"
 
@@ -2032,13 +2030,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 				if key == "card_id" {
 					continue
 				}
-				switch v := value.(type) {
-				case string:
-					responseData[key] = v
-				default:
-					data, _ := json.Marshal(v)
-					responseData[key] = string(data)
-				}
+				responseData[key] = toStringValue(value)
 			}
 			actionName = "form_submit"
 		}
@@ -2052,13 +2044,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			if _, exists := responseData[k]; exists {
 				continue
 			}
-			switch val := v.(type) {
-			case string:
-				responseData[k] = val
-			default:
-				data, _ := json.Marshal(val)
-				responseData[k] = string(data)
-			}
+			responseData[k] = toStringValue(v)
 		}
 
 	case "select_static", "multi_select_static":
@@ -2132,13 +2118,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			if k == "card_id" {
 				continue
 			}
-			switch val := v.(type) {
-			case string:
-				responseData[k] = val
-			default:
-				data, _ := json.Marshal(val)
-				responseData[k] = string(data)
-			}
+			responseData[k] = toStringValue(v)
 		}
 
 		// Clear active card since user interacted with it
@@ -2238,13 +2218,7 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 		if k == "card_id" || k == "form_name" {
 			continue
 		}
-		switch val := v.(type) {
-		case string:
-			responseData[k] = val
-		default:
-			data, _ := json.Marshal(val)
-			responseData[k] = string(data)
-		}
+		responseData[k] = toStringValue(v)
 	}
 
 	log.WithFields(log.Fields{
@@ -3091,7 +3065,7 @@ func (f *FeishuChannel) BuildSettingsUI(ctx context.Context, schema []SettingDef
 }
 
 // BuildProgressUI builds a Feishu card for progress display.
-func (f *FeishuChannel) BuildProgressUI(ctx context.Context, progress interface{}) string {
+func (f *FeishuChannel) BuildProgressUI(ctx context.Context, progress any) string {
 	// Use text-based progress for now
 	var sb strings.Builder
 	sb.WriteString("## 📊 进度\n\n")
@@ -3151,7 +3125,7 @@ func (f *FeishuChannel) BuildMySkillsUI(ctx context.Context, skills []string, se
 }
 
 // BuildBrowseMarketUI builds a marketplace browse panel for Feishu.
-func (f *FeishuChannel) BuildBrowseMarketUI(ctx context.Context, entries interface{}, senderID string) string {
+func (f *FeishuChannel) BuildBrowseMarketUI(ctx context.Context, entries any, senderID string) string {
 	var sb strings.Builder
 	sb.WriteString("## 🏪 市场浏览\n\n")
 

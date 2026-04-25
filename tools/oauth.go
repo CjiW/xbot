@@ -101,42 +101,42 @@ func (t *OAuthTool) buildAuthCard(provider, reason, authURL, state string) strin
 		providerDisplay = "飞书"
 	}
 
-	card := map[string]interface{}{
-		"config": map[string]interface{}{
+	card := map[string]any{
+		"config": map[string]any{
 			"wide_screen_mode": true,
 		},
-		"header": map[string]interface{}{
+		"header": map[string]any{
 			"template": "blue",
-			"title": map[string]interface{}{
+			"title": map[string]any{
 				"content": "授权 " + providerDisplay + " 访问",
 				"tag":     "plain_text",
 			},
 		},
-		"elements": []interface{}{
-			map[string]interface{}{
+		"elements": []any{
+			map[string]any{
 				"tag": "div",
-				"text": map[string]interface{}{
+				"text": map[string]any{
 					"tag":     "lark_md",
 					"content": "需要授权 **" + providerDisplay + "** 才能继续操作。\n\n点击下方按钮完成授权。",
 				},
 			},
-			map[string]interface{}{
+			map[string]any{
 				"tag": "action",
-				"actions": []interface{}{
-					map[string]interface{}{
+				"actions": []any{
+					map[string]any{
 						"tag":  "button",
-						"text": map[string]interface{}{"tag": "plain_text", "content": "点击授权"},
+						"text": map[string]any{"tag": "plain_text", "content": "点击授权"},
 						"type": "primary",
 						"url":  authURL,
 					},
 				},
 			},
-			map[string]interface{}{
+			map[string]any{
 				"tag": "hr",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"tag": "div",
-				"text": map[string]interface{}{
+				"text": map[string]any{
 					"tag":     "plain_text",
 					"content": "授权完成后，您可以继续之前的操作。",
 				},

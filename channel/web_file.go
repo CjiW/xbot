@@ -102,7 +102,7 @@ func (wc *WebChannel) handleCloudUpload(w http.ResponseWriter, r *http.Request, 
 		"provider": wc.ossProvider.Name(),
 	}).Info("File uploaded to cloud OSS")
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"ok":         true,
 		"upload_key": key,
 		"name":       filename,

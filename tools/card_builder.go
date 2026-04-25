@@ -3,6 +3,8 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,14 +278,7 @@ func (s *CardSession) containerIDs() string {
 	if len(s.Containers) == 0 {
 		return "none"
 	}
-	ids := ""
-	for id := range s.Containers {
-		if ids != "" {
-			ids += ", "
-		}
-		ids += id
-	}
-	return ids
+	return strings.Join(slices.Collect(maps.Keys(s.Containers)), ", ")
 }
 
 // NextElementID generates a unique element ID within this session.

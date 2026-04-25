@@ -63,7 +63,7 @@ type LLMListModelsResponse struct {
 	Models []string `json:"models"`
 }
 
-// ToolDefJSON is a serializable tool definition (avoids interface{} for JSON marshaling).
+// ToolDefJSON is a serializable tool definition (avoids any for JSON marshaling).
 type ToolDefJSON struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`

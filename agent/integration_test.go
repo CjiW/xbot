@@ -1064,14 +1064,3 @@ func TestIntegration_MessagesMutationByRun(t *testing.T) {
 		}
 	}
 }
-
-// ============================================================================
-// Helper for min (Go 1.20 compat)
-// ============================================================================
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

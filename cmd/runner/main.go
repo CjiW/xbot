@@ -83,7 +83,7 @@ func main() {
 	}()
 
 	// 创建 handler
-	runnerLogf := func(format string, args ...interface{}) {
+	runnerLogf := func(format string, args ...any) {
 		log.Printf(format, args...)
 	}
 	handler := runnerclient.NewHandler(exec,

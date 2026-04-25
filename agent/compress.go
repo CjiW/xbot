@@ -177,7 +177,7 @@ func summarizeToolCall(name, args string) string {
 // extractJSONString extracts a string value for the given key from a JSON object.
 // Returns empty string if not found or parsing fails.
 func extractJSONString(jsonStr, key string) string {
-	var obj map[string]interface{}
+	var obj map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &obj); err != nil {
 		return ""
 	}
@@ -568,7 +568,7 @@ Output the structured working state directly.`
 	sessionView = append(sessionView, tailDialogue...)
 
 	newTokens, _ := llm.CountMessagesTokens(llmView, model)
-	log.Ctx(ctx).WithFields(map[string]interface{}{
+	log.Ctx(ctx).WithFields(map[string]any{
 		"original_tokens": originalTokens,
 		"new_tokens":      newTokens,
 		"tail_messages":   len(tail),

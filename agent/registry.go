@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -440,13 +441,9 @@ func (rm *RegistryManager) ListMy(senderID string, entryType string) (published 
 	}
 
 	if entryType != "" {
-		var filtered []sqlite.SharedEntry
-		for _, e := range published {
-			if e.Type == entryType {
-				filtered = append(filtered, e)
-			}
-		}
-		published = filtered
+		published = slices.DeleteFunc(published, func(e sqlite.SharedEntry) bool {
+			return e.Type != entryType
+		})
 	}
 
 	seen := make(map[string]bool)

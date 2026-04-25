@@ -270,7 +270,7 @@ func extractPathsFromToolArgs(toolName, argsJSON string) []string {
 	if argsJSON == "" {
 		return nil
 	}
-	var args map[string]interface{}
+	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil
 	}

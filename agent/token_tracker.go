@@ -1,0 +1,126 @@
+package agent
+
+import (
+	"xbot/llm"
+)
+
+// TokenTracker manages token accounting for a single Run() execution.
+// It replaces the scattered lastPromptTokens/lastCompletionTokens/lastMsgCountAtLLMCall
+// fields that were previously on runState.
+type TokenTracker struct {
+	promptTokens     int64
+	completionTokens int64
+	msgCountAtCall   int // boundary for delta estimation (len(messages) at last LLM call)
+	hadLLMCall       bool
+	restoredFromDB   bool // true when initialized from previous Run's persisted token counts
+}
+
+// NewTokenTracker creates a TokenTracker, optionally seeded with token counts
+// restored from the previous Run (via SaveTokenState / DB).
+func NewTokenTracker(lastPromptTokens, lastCompletionTokens int64) *TokenTracker {
+	return &TokenTracker{
+		promptTokens:     lastPromptTokens,
+		completionTokens: lastCompletionTokens,
+		restoredFromDB:   lastPromptTokens > 0,
+	}
+}
+
+// RecordLLMCall records the token counts returned by an LLM API call.
+// msgCount is len(messages) at the time of the call, used as a boundary
+// for delta estimation in EstimateTotal.
+func (t *TokenTracker) RecordLLMCall(prompt, completion int64, msgCount int) {
+	t.promptTokens = prompt
+	t.completionTokens = completion
+	t.msgCountAtCall = msgCount
+	t.hadLLMCall = true
+}
+
+// ResetAfterCompress resets token state after context compression.
+// newPromptTokens is the locally-estimated token count of the compressed messages.
+// msgCount is the new len(messages) after compression.
+func (t *TokenTracker) ResetAfterCompress(newPromptTokens int64, msgCount int) {
+	t.promptTokens = newPromptTokens
+	t.completionTokens = 0
+	t.msgCountAtCall = msgCount
+}
+
+// MarkRestoredFromDB marks that token counts were restored from DB/session.
+func (t *TokenTracker) MarkRestoredFromDB() {
+	t.restoredFromDB = true
+}
+
+// DetectTruncation checks if messages were truncated (e.g. by Ctrl+K / rewind)
+// since the last LLM call. If so, re-estimates token counts from remaining messages
+// and returns (true, previousPromptTokens). Otherwise returns (false, 0).
+func (t *TokenTracker) DetectTruncation(messages []llm.ChatMessage, model string) (reEstimated bool, prevPromptTokens int64) {
+	if t.msgCountAtCall <= 0 || len(messages) >= t.msgCountAtCall {
+		return false, 0
+	}
+	prevPromptTokens = t.promptTokens
+	estimated, estErr := llm.CountMessagesTokens(messages, model)
+	if estErr != nil || estimated <= 0 {
+		return false, 0
+	}
+	t.promptTokens = int64(estimated)
+	t.completionTokens = 0
+	t.msgCountAtCall = len(messages)
+	return true, prevPromptTokens
+}
+
+// EstimateTotal returns an estimated total token count for the given messages
+// and a source string describing the estimation method.
+//
+// Estimation strategy (4 paths):
+//  1. "api+completion+tool_delta" — In-Run, had LLM call + tool messages after it
+//  2. "api+completion" — In-Run, had LLM call, no new tool messages
+//  3. "restored" — No in-Run LLM call yet, but restored from previous Run
+//  4. "local_estimate_fallback" or "no_data" — No API data at all
+func (t *TokenTracker) EstimateTotal(messages []llm.ChatMessage, model string) (total int64, source string) {
+	if t.promptTokens > 0 && t.msgCountAtCall > 0 {
+		// In-Run path: we've had at least one LLM call in this Run.
+		total = t.promptTokens + t.completionTokens
+		source = "api+completion"
+		if len(messages) > t.msgCountAtCall+1 {
+			toolMsgs := messages[t.msgCountAtCall+1:]
+			deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, model)
+			if deltaErr != nil {
+				source = "api+completion+tool_delta_err"
+			} else {
+				total += int64(deltaTokens)
+				source = "api+completion+tool_delta"
+			}
+		}
+		return total, source
+	}
+
+	if t.promptTokens > 0 {
+		// Restored from previous Run (DB or in-memory) — use API prompt_tokens as baseline.
+		// Do NOT add completionTokens: those are output tokens from the
+		// previous Run, not part of the current context size.
+		return t.promptTokens, "restored"
+	}
+
+	// No API token data available. Use local estimation with 1.5x safety margin.
+	estimated, estErr := llm.CountMessagesTokens(messages, model)
+	if estErr == nil && estimated > 0 {
+		return int64(float64(estimated) * 1.5), "local_estimate_fallback"
+	}
+	return 0, "no_data"
+}
+
+// SaveState calls saveFn if the tracker has recorded at least one LLM call
+// and has positive prompt tokens (i.e. there is meaningful state to save).
+func (t *TokenTracker) SaveState(saveFn func(promptTokens, completionTokens int64)) {
+	if saveFn == nil || !t.hadLLMCall || t.promptTokens <= 0 {
+		return
+	}
+	saveFn(t.promptTokens, t.completionTokens)
+}
+
+// --- Getters ---
+
+func (t *TokenTracker) PromptTokens() int64     { return t.promptTokens }
+func (t *TokenTracker) CompletionTokens() int64 { return t.completionTokens }
+func (t *TokenTracker) MsgCountAtCall() int     { return t.msgCountAtCall }
+func (t *TokenTracker) HadLLMCall() bool        { return t.hadLLMCall }
+func (t *TokenTracker) RestoredFromDB() bool    { return t.restoredFromDB }

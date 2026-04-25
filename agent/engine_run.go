@@ -54,11 +54,7 @@ type runState struct {
 	lastPersistedCount int
 
 	// Token tracking
-	lastPromptTokens      int64
-	lastCompletionTokens  int64
-	lastMsgCountAtLLMCall int
-	restoredFromDB        bool
-	hadLLMCall            bool
+	tokenTracker *TokenTracker
 
 	// Loop state
 	toolsUsed            []string
@@ -135,9 +131,7 @@ func newRunState(cfg RunConfig) *runState {
 		messages:                 messages,
 		initialMsgCount:          len(messages),
 		lastPersistedCount:       len(messages),
-		lastPromptTokens:         cfg.LastPromptTokens,
-		lastCompletionTokens:     cfg.LastCompletionTokens,
-		restoredFromDB:           cfg.LastPromptTokens > 0,
+		tokenTracker:             NewTokenTracker(cfg.LastPromptTokens, cfg.LastCompletionTokens),
 	}
 }
 
@@ -154,11 +148,11 @@ func (s *runState) initProgress() {
 		// event carries real data instead of nil. Without this, the CLI
 		// context bar shows nothing (or estimated values from maybeCompress)
 		// until the first callLLM completes.
-		if s.lastPromptTokens > 0 {
+		if s.tokenTracker.PromptTokens() > 0 {
 			s.structuredProgress.TokenUsage = &TokenUsageSnapshot{
-				PromptTokens:     s.lastPromptTokens,
-				CompletionTokens: s.lastCompletionTokens,
-				TotalTokens:      s.lastPromptTokens + s.lastCompletionTokens,
+				PromptTokens:     s.tokenTracker.PromptTokens(),
+				CompletionTokens: s.tokenTracker.CompletionTokens(),
+				TotalTokens:      s.tokenTracker.PromptTokens() + s.tokenTracker.CompletionTokens(),
 				MaxOutputTokens:  int64(s.cfg.MaxOutputTokens),
 			}
 		}
@@ -331,11 +325,9 @@ func (s *runState) buildOutput(ob *bus.OutboundMessage) *RunOutput {
 	if len(s.iterationSnapshots) > 0 {
 		out.IterationHistory = s.iterationSnapshots
 	}
-	out.LastPromptTokens = s.lastPromptTokens
-	out.LastCompletionTokens = s.lastCompletionTokens
-	if s.cfg.SaveTokenState != nil && s.hadLLMCall && s.lastPromptTokens > 0 {
-		s.cfg.SaveTokenState(s.lastPromptTokens, s.lastCompletionTokens)
-	}
+	out.LastPromptTokens = s.tokenTracker.PromptTokens()
+	out.LastCompletionTokens = s.tokenTracker.CompletionTokens()
+	s.tokenTracker.SaveState(s.cfg.SaveTokenState)
 	return out
 }
 
@@ -393,16 +385,16 @@ func (s *runState) assertSystemMessages(ctx context.Context) *RunOutput {
 	return nil
 }
 
-// updateTokenUsage syncs the current lastPromptTokens/lastCompletionTokens into
+// updateTokenUsage syncs the current tokenTracker state into
 // structuredProgress.TokenUsage so that progress events carry accurate token counts.
 func (s *runState) updateTokenUsage() {
 	if s.structuredProgress == nil {
 		return
 	}
 	s.structuredProgress.TokenUsage = &TokenUsageSnapshot{
-		PromptTokens:     s.lastPromptTokens,
-		CompletionTokens: s.lastCompletionTokens,
-		TotalTokens:      s.lastPromptTokens + s.lastCompletionTokens,
+		PromptTokens:     s.tokenTracker.PromptTokens(),
+		CompletionTokens: s.tokenTracker.CompletionTokens(),
+		TotalTokens:      s.tokenTracker.PromptTokens() + s.tokenTracker.CompletionTokens(),
 		CacheHitTokens:   int64(s.localCachedTokens),
 		MaxOutputTokens:  int64(s.cfg.MaxOutputTokens),
 	}
@@ -422,10 +414,7 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 
 	s.localLLMCalls++
 	if response != nil {
-		s.lastPromptTokens = response.Usage.PromptTokens
-		s.lastCompletionTokens = response.Usage.CompletionTokens
-		s.lastMsgCountAtLLMCall = len(s.messages)
-		s.hadLLMCall = true
+		s.tokenTracker.RecordLLMCall(response.Usage.PromptTokens, response.Usage.CompletionTokens, len(s.messages))
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
 		s.localCachedTokens += int(response.Usage.CacheHitTokens)
@@ -469,9 +458,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 
 	s.messages = s.syncMessages(result.LLMView)
 	newCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
-	s.lastPromptTokens = int64(newCount)
-	s.lastCompletionTokens = 0
-	s.lastMsgCountAtLLMCall = len(s.messages)
+	s.tokenTracker.ResetAfterCompress(int64(newCount), len(s.messages))
 	if s.autoNotify {
 		s.progressLines = append(s.progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newCount))
 		s.notifyProgress("")
@@ -507,10 +494,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 	response, err := generateResponse(retryNotifyCtx, s.cfg.LLMClient, s.cfg.Model, s.messages, toolDefs, s.cfg.ThinkingMode, s.cfg.Stream, s.cfg.StreamContentFunc, s.cfg.StreamReasoningFunc)
 	s.localLLMCalls++
 	if response != nil {
-		s.lastPromptTokens = response.Usage.PromptTokens
-		s.lastCompletionTokens = response.Usage.CompletionTokens
-		s.lastMsgCountAtLLMCall = len(s.messages)
-		s.hadLLMCall = true
+		s.tokenTracker.RecordLLMCall(response.Usage.PromptTokens, response.Usage.CompletionTokens, len(s.messages))
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
 		s.localCachedTokens += int(response.Usage.CacheHitTokens)
@@ -601,7 +585,7 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 		if response.FinishReason == llm.FinishReasonContextWindowExceeded {
 			log.Ctx(ctx).WithFields(log.Fields{
 				"msg_count":          len(s.messages),
-				"last_prompt_tokens": s.lastPromptTokens,
+				"last_prompt_tokens": s.tokenTracker.PromptTokens(),
 				"finish_reason":      response.FinishReason,
 			}).Warn("Model context window exceeded, forcing compression and retry")
 			cm := s.cfg.ContextManager
@@ -617,9 +601,7 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 					s.accumulateCompressUsage(result)
 					s.messages = s.syncMessages(result.LLMView)
 					newCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
-					s.lastPromptTokens = int64(newCount)
-					s.lastCompletionTokens = 0
-					s.lastMsgCountAtLLMCall = len(s.messages)
+					s.tokenTracker.ResetAfterCompress(int64(newCount), len(s.messages))
 					if s.cfg.Session != nil {
 						if clearErr := s.cfg.Session.Clear(); clearErr != nil {
 							log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for context_window_exceeded compression")
@@ -744,7 +726,7 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	}
 	if maxTokens <= 0 {
 		log.Ctx(ctx).WithFields(log.Fields{
-			"last_prompt_tokens": s.lastPromptTokens,
+			"last_prompt_tokens": s.tokenTracker.PromptTokens(),
 			"msg_count":          len(s.messages),
 		}).Info("maybeCompress skipped: maxTokens=0")
 		return
@@ -764,80 +746,27 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	}
 
 	// Truncation detection: if messages were truncated (e.g. by Ctrl+K / rewind)
-	// since the last LLM call, the cached lastPromptTokens is stale because it
+	// since the last LLM call, the cached promptTokens is stale because it
 	// was measured against a longer message list. Re-estimate from remaining messages.
-	if s.lastMsgCountAtLLMCall > 0 && len(s.messages) < s.lastMsgCountAtLLMCall {
-		prevTokens := s.lastPromptTokens
-		estimated, estErr := llm.CountMessagesTokens(s.messages, s.cfg.Model)
-		if estErr == nil && estimated > 0 {
-			s.lastPromptTokens = int64(estimated)
-			s.lastCompletionTokens = 0
-			s.lastMsgCountAtLLMCall = len(s.messages)
-			s.updateTokenUsage()
-			log.Ctx(ctx).WithFields(log.Fields{
-				"prev_prompt_tokens": prevTokens,
-				"new_prompt_tokens":  s.lastPromptTokens,
-				"prev_msg_count":     s.lastMsgCountAtLLMCall,
-				"new_msg_count":      len(s.messages),
-			}).Info("maybeCompress: truncated messages detected, re-estimated token count")
-		}
+	if reEstimated, prevTokens := s.tokenTracker.DetectTruncation(s.messages, s.cfg.Model); reEstimated {
+		s.updateTokenUsage()
+		log.Ctx(ctx).WithFields(log.Fields{
+			"prev_prompt_tokens": prevTokens,
+			"new_prompt_tokens":  s.tokenTracker.PromptTokens(),
+			"new_msg_count":      s.tokenTracker.MsgCountAtCall(),
+		}).Info("maybeCompress: truncated messages detected, re-estimated token count")
 	}
 
-	// Token estimation strategy:
-	// - API prompt_tokens (exact) covers messages[0..lastMsgCount] + tool defs
-	// - API completion_tokens (exact) covers the assistant message content/reasoning/tool_calls
-	// - Local estimation only for tool result messages appended after the last LLM call
-	//
-	// restoredFromDB path: lastPromptTokens is from the PREVIOUS Run's last API call.
-	// We use it as-is — no local estimation fallback.
-	totalTokens := int64(0)
-	var tokenSource string
-	if s.lastPromptTokens > 0 && s.lastMsgCountAtLLMCall > 0 {
-		// In-Run path: we've had at least one LLM call in this Run.
-		totalTokens = s.lastPromptTokens + s.lastCompletionTokens
-		tokenSource = "api+completion"
-		if len(s.messages) > s.lastMsgCountAtLLMCall+1 {
-			toolMsgs := s.messages[s.lastMsgCountAtLLMCall+1:]
-			deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, s.cfg.Model)
-			if deltaErr != nil {
-				log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
-			} else {
-				totalTokens += int64(deltaTokens)
-			}
-			tokenSource = "api+completion+tool_delta"
-		}
-	} else if s.lastPromptTokens > 0 {
-		// Restored from previous Run (DB or in-memory) — use API prompt_tokens as baseline.
-		// Do NOT add lastCompletionTokens: those are output tokens from the
-		// previous Run, not part of the current context size.
-		totalTokens = s.lastPromptTokens
-		tokenSource = "restored"
-	} else {
-		// No API token data available. This can happen when:
-		// - First Run after upgrade (no SaveTokenState was ever called)
-		// - GetOrCreateSession failed during buildToolContextExtras (TenantID=0)
-		// - SaveTokenState callback is nil
-		// Use local estimation with 1.5x safety margin as fallback.
-		// This is less accurate than API token counts but infinitely better
-		// than totalTokens=0 which never compresses (→ context_window_exceeded).
-		estimated, estErr := llm.CountMessagesTokens(s.messages, s.cfg.Model)
-		if estErr == nil && estimated > 0 {
-			totalTokens = int64(float64(estimated) * 1.5)
-			tokenSource = "local_estimate_fallback"
-			if len(s.messages) > 3 {
-				log.Ctx(ctx).WithFields(log.Fields{
-					"estimated": estimated,
-					"adjusted":  totalTokens,
-					"msg_count": len(s.messages),
-				}).Warn("maybeCompress: no API token data, using local estimation with 1.5x margin")
-			}
-		} else {
-			if len(s.messages) > 3 {
-				log.Ctx(ctx).WithError(estErr).Error("maybeCompress: no API token data and local estimation failed, skipping compress check")
-			}
-			totalTokens = 0
-			tokenSource = "no_data"
-		}
+	totalTokens, tokenSource := s.tokenTracker.EstimateTotal(s.messages, s.cfg.Model)
+	if tokenSource == "local_estimate_fallback" && len(s.messages) > 3 {
+		log.Ctx(ctx).WithFields(log.Fields{
+			"estimated": totalTokens * 2 / 3, // reverse the 1.5x margin for display
+			"adjusted":  totalTokens,
+			"msg_count": len(s.messages),
+		}).Warn("maybeCompress: no API token data, using local estimation with 1.5x margin")
+	}
+	if tokenSource == "no_data" && len(s.messages) > 3 {
+		log.Ctx(ctx).Error("maybeCompress: no API token data and local estimation failed, skipping compress check")
 	}
 
 	compressThreshold := 0.9
@@ -866,8 +795,8 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		"msg_count":          len(s.messages),
 		"need":               needCompress,
 		"snipped":            snipped,
-		"base_prompt_tokens": s.lastPromptTokens,
-		"completion_tokens":  s.lastCompletionTokens,
+		"base_prompt_tokens": s.tokenTracker.PromptTokens(),
+		"completion_tokens":  s.tokenTracker.CompletionTokens(),
 		"source":             tokenSource,
 	}).Info("maybeCompress check")
 
@@ -1000,9 +929,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	// subsequent maybeCompress calls (in this Run and the next) don't fall
 	// back to the even-more-overestimated local counting path.
 	newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
-	s.lastPromptTokens = int64(newTokenCount)
-	s.lastCompletionTokens = 0
-	s.lastMsgCountAtLLMCall = len(s.messages)
+	s.tokenTracker.ResetAfterCompress(int64(newTokenCount), len(s.messages))
 	s.lastCompressIter = s.compressAttempts
 
 	// Emit PostCompact event (notification, non-blocking)

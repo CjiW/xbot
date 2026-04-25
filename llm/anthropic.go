@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
 	log "xbot/logger"
 )
 
@@ -63,7 +62,6 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "https://" + baseURL
 	}
-
 	a := &AnthropicLLM{
 		baseURL:   baseURL,
 		apiKey:    cfg.APIKey,
@@ -115,43 +113,36 @@ func (a *AnthropicLLM) getMaxTokens() int {
 }
 
 // --- 请求/响应类型（Anthropic Messages API）---
-
 type anthropicMessage struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"` // string or []contentBlock
 }
-
 type anthropicTextBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
-
 type anthropicToolUseBlock struct {
 	Type  string          `json:"type"`
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
 }
-
 type anthropicToolResultBlock struct {
 	Type      string `json:"type"`
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
 	IsError   bool   `json:"is_error,omitempty"`
 }
-
 type anthropicTool struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	InputSchema any    `json:"input_schema"`
 }
-
 type anthropicThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
 	Effort       string `json:"effort,omitempty"` // "low" | "medium" | "high" (for adaptive mode)
 }
-
 type anthropicSystemBlock struct {
 	Type         string `json:"type"` // "text"
 	Text         string `json:"text"`
@@ -159,7 +150,6 @@ type anthropicSystemBlock struct {
 		Type string `json:"type"` // "ephemeral"
 	} `json:"cache_control,omitempty"`
 }
-
 type anthropicReq struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
@@ -169,14 +159,12 @@ type anthropicReq struct {
 	Stream    bool               `json:"stream,omitempty"`
 	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
-
 type anthropicUsage struct {
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
-
 type anthropicContentBlock struct {
 	Type  string          `json:"type"`
 	Text  string          `json:"text,omitempty"`
@@ -186,7 +174,6 @@ type anthropicContentBlock struct {
 	// Thinking block fields
 	Thinking string `json:"thinking,omitempty"`
 }
-
 type anthropicResp struct {
 	ID           string                  `json:"id"`
 	Type         string                  `json:"type"`
@@ -204,13 +191,11 @@ type anthropicResp struct {
 // even if the original reasoning content was lost (e.g. after compression).
 func toAnthropicMessages(messages []ChatMessage, thinkingEnabled bool) []anthropicMessage {
 	var msgs []anthropicMessage
-
 	// anthropicThinkingBlock represents a thinking content block in assistant messages.
 	type anthropicThinkingBlock struct {
 		Type     string `json:"type"`
 		Thinking string `json:"thinking"`
 	}
-
 	i := 0
 	for i < len(messages) {
 		msg := messages[i]
@@ -288,7 +273,6 @@ func toAnthropicMessages(messages []ChatMessage, thinkingEnabled bool) []anthrop
 			i++
 		}
 	}
-
 	return msgs
 }
 
@@ -358,7 +342,6 @@ func buildAnthropicSystem(messages []ChatMessage) any {
 	}
 	return blocks
 }
-
 func (a *AnthropicLLM) setHeaders(req *http.Request) {
 	req.Header.Set("x-api-key", a.apiKey)
 	req.Header.Set("anthropic-version", anthropicAPIVersion)
@@ -378,7 +361,6 @@ func parseAnthropicThinking(thinkingMode string) *anthropicThinking {
 	if thinkingMode == "" || thinkingMode == "disabled" {
 		return nil
 	}
-
 	// 简单关键字
 	switch thinkingMode {
 	case "enabled":
@@ -386,7 +368,6 @@ func parseAnthropicThinking(thinkingMode string) *anthropicThinking {
 	case "adaptive":
 		return &anthropicThinking{Type: "adaptive", Effort: "high"}
 	}
-
 	// JSON 格式解析
 	var thinking anthropicThinking
 	if err := json.Unmarshal([]byte(thinkingMode), &thinking); err == nil {
@@ -394,7 +375,6 @@ func parseAnthropicThinking(thinkingMode string) *anthropicThinking {
 			return &thinking
 		}
 	}
-
 	// 无法解析，默认启用
 	return &anthropicThinking{Type: "enabled"}
 }
@@ -404,7 +384,6 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	if model == "" {
 		model = a.GetDefaultModel()
 	}
-
 	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":    "anthropic",
 		"model":       model,
@@ -412,7 +391,6 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		"msg_count":   len(messages),
 		"tools_count": len(tools),
 	}).Debug("[LLM] Starting non-stream request")
-
 	anthropicMsgs := toAnthropicMessages(messages, thinkingMode != "" && thinkingMode != "disabled")
 	body := anthropicReq{
 		Model:     model,
@@ -425,19 +403,16 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		body.Tools = toAnthropicTools(tools)
 	}
 	body.Thinking = parseAnthropicThinking(thinkingMode)
-
 	reqBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
-
 	url := a.baseURL + "/v1/messages"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
 	}
 	a.setHeaders(httpReq)
-
 	startTime := time.Now()
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
@@ -445,7 +420,6 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		return nil, fmt.Errorf("anthropic API request: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		log.Ctx(ctx).WithFields(log.Fields{
@@ -455,14 +429,12 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		}).Error("[LLM] API error")
 		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
 	}
-
 	var apiResp anthropicResp
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("anthropic: decode response: %w", err)
 	}
 	// Drain remaining body to allow connection reuse
 	io.Copy(io.Discard, resp.Body)
-
 	out := &LLMResponse{
 		Usage: TokenUsage{
 			PromptTokens:        int64(apiResp.Usage.InputTokens),
@@ -473,7 +445,6 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		},
 		FinishReason: mapStopReason(apiResp.StopReason),
 	}
-
 	var textParts []string
 	var reasoningParts []string
 	for _, block := range apiResp.Content {
@@ -495,7 +466,6 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	if len(reasoningParts) > 0 {
 		out.ReasoningContent = strings.Join(reasoningParts, "\n")
 	}
-
 	logFields := log.Fields{
 		"provider":      "anthropic",
 		"content_len":   len(out.Content),
@@ -510,10 +480,8 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		logFields["cache_creation_tokens"] = apiResp.Usage.CacheCreationInputTokens
 	}
 	log.Ctx(ctx).WithFields(logFields).Debug("[LLM] Non-stream response")
-
 	return out, nil
 }
-
 func mapStopReason(s string) FinishReason {
 	switch s {
 	case "end_turn":
@@ -532,7 +500,6 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 	if model == "" {
 		model = a.GetDefaultModel()
 	}
-
 	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":    "anthropic",
 		"model":       model,
@@ -540,7 +507,6 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		"msg_count":   len(messages),
 		"tools_count": len(tools),
 	}).Debug("[LLM] Starting stream request")
-
 	anthropicMsgs := toAnthropicMessages(messages, thinkingMode != "" && thinkingMode != "disabled")
 	body := anthropicReq{
 		Model:     model,
@@ -553,26 +519,22 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		body.Tools = toAnthropicTools(tools)
 	}
 	body.Thinking = parseAnthropicThinking(thinkingMode)
-
 	reqBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
-
 	url := a.baseURL + "/v1/messages"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
 	}
 	a.setHeaders(httpReq)
-
 	startTime := time.Now()
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		log.Ctx(ctx).WithError(err).WithField("provider", "anthropic").Error("[LLM] Request failed")
 		return nil, fmt.Errorf("anthropic streaming API request: %w", err)
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -583,7 +545,6 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		}).Error("[LLM] API error")
 		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
 	}
-
 	eventChan := make(chan StreamEvent, 100)
 	go a.processStream(ctx, resp, eventChan, startTime)
 	return eventChan, nil
@@ -611,14 +572,12 @@ type anthropicStreamEvent struct {
 func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, eventChan chan<- StreamEvent, startTime time.Time) {
 	defer close(eventChan)
 	defer resp.Body.Close()
-
 	reader := bufio.NewReader(resp.Body)
 	var currentIndex int
 	toolCallsByIndex := make(map[int]*ToolCall)
 	var lastUsage *TokenUsage
 	lastFinishReason := FinishReasonStop
 	doneSent := false
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -626,7 +585,6 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 			return
 		default:
 		}
-
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
@@ -638,7 +596,6 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 			eventChan <- StreamEvent{Type: EventError, Error: fmt.Sprintf("read stream: %v", err)}
 			return
 		}
-
 		line = strings.TrimSpace(line)
 		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
@@ -654,12 +611,10 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 			}
 			return
 		}
-
 		var ev anthropicStreamEvent
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			continue
 		}
-
 		switch ev.Type {
 		case "message_start":
 			// 可选：从 message.content 解析已有块（流式时通常为空）
@@ -689,7 +644,6 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					lastUsage.CacheCreationTokens = int64(ev.Message.Usage.CacheCreationInputTokens)
 				}
 			}
-
 		case "content_block_start":
 			if ev.ContentBlock != nil {
 				switch ev.ContentBlock.Type {
@@ -714,7 +668,6 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					// The thinking content will be delivered via thinking_delta events
 				}
 			}
-
 		case "content_block_delta":
 			if len(ev.Delta) == 0 {
 				continue
@@ -744,7 +697,6 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					}
 				}
 			}
-
 		case "message_delta":
 			if ev.Usage != nil {
 				if lastUsage == nil {
@@ -767,7 +719,6 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					lastFinishReason = mapStopReason(delta.StopReason)
 				}
 			}
-
 		case "message_stop":
 			doneSent = true
 			eventChan <- StreamEvent{Type: EventDone, FinishReason: lastFinishReason}

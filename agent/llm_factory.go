@@ -556,7 +556,7 @@ func (f *LLMFactory) GetLLMConcurrency(senderID string) int {
 // SetLLMConcurrency 设置用户的个人 LLM 并发上限配置。
 func (f *LLMFactory) SetLLMConcurrency(senderID string, personal int) error {
 	if f.settingsSvc == nil {
-		return fmt.Errorf("settings service not available")
+		return ErrSettingsUnavailable
 	}
 	return f.settingsSvc.SetSetting("feishu", senderID, "llm_max_concurrent_personal", fmt.Sprintf("%d", personal))
 }

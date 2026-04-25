@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -910,12 +911,9 @@ func (h *rpcContext) listTenants(ctx context.Context) (any, error) {
 		}
 		tenants = userTenants
 	}
-	var filtered []sqlite.TenantInfo
-	for _, t := range tenants {
-		if t.Channel != "agent" {
-			filtered = append(filtered, t)
-		}
-	}
+	tenants = slices.DeleteFunc(tenants, func(t sqlite.TenantInfo) bool {
+		return t.Channel == "agent"
+	})
 	type tenantJSON struct {
 		ID           int64  `json:"id"`
 		Channel      string `json:"channel"`
@@ -923,8 +921,8 @@ func (h *rpcContext) listTenants(ctx context.Context) (any, error) {
 		CreatedAt    string `json:"created_at"`
 		LastActiveAt string `json:"last_active_at"`
 	}
-	result := make([]tenantJSON, len(filtered))
-	for i, t := range filtered {
+	result := make([]tenantJSON, len(tenants))
+	for i, t := range tenants {
 		result[i] = tenantJSON{t.ID, t.Channel, t.ChatID, t.CreatedAt.Format(time.RFC3339), t.LastActiveAt.Format(time.RFC3339)}
 	}
 	return result, nil

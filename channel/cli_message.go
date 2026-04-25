@@ -634,11 +634,8 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 	// but don't append a blank message.
 	if content == "" && !msg.WaitingUser && len(msg.ToolsUsed) == 0 {
 		// Persist token usage before clearing progress
-		if m.progress != nil && m.progress.TokenUsage != nil {
-			m.lastTokenUsage = m.progress.TokenUsage
-			if m.progress.TokenUsage.MaxOutputTokens > 0 {
-				m.cachedMaxOutputTokens = m.progress.TokenUsage.MaxOutputTokens
-			}
+		if m.progress != nil {
+			m.cacheTokenUsage(m.progress.TokenUsage)
 		}
 		m.streamingMsgIdx = -1
 		m.progress = nil

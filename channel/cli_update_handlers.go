@@ -366,11 +366,8 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 
 	// Cache token usage for context bar display — every progress event
 	// carries fresh token counts from the agent's updateTokenUsage().
-	if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.PromptTokens > 0 {
-		m.lastTokenUsage = m.progress.TokenUsage
-		if m.progress.TokenUsage.MaxOutputTokens > 0 {
-			m.cachedMaxOutputTokens = m.progress.TokenUsage.MaxOutputTokens
-		}
+	if m.progress != nil {
+		m.cacheTokenUsage(m.progress.TokenUsage)
 	}
 	if m.cachedMaxContextTokens == 0 {
 		m.cachedMaxContextTokens = m.resolveMaxContextTokens()

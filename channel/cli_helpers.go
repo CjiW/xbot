@@ -327,12 +327,7 @@ func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
 	m.progress = payload
 
 	// Cache token usage and max context for ready-status bar display
-	if payload.TokenUsage != nil && payload.TokenUsage.PromptTokens > 0 {
-		m.lastTokenUsage = payload.TokenUsage
-		if payload.TokenUsage.MaxOutputTokens > 0 {
-			m.cachedMaxOutputTokens = payload.TokenUsage.MaxOutputTokens
-		}
-	}
+	m.cacheTokenUsage(payload.TokenUsage)
 	if m.cachedMaxContextTokens == 0 {
 		m.cachedMaxContextTokens = m.resolveMaxContextTokens()
 	}
@@ -411,11 +406,8 @@ func (m *cliModel) endAgentTurn(turnID uint64) {
 		return // new turn already started — stale signal, ignore
 	}
 	// Persist token usage for ready-status bar before clearing progress
-	if m.progress != nil && m.progress.TokenUsage != nil {
-		m.lastTokenUsage = m.progress.TokenUsage
-		if m.progress.TokenUsage.MaxOutputTokens > 0 {
-			m.cachedMaxOutputTokens = m.progress.TokenUsage.MaxOutputTokens
-		}
+	if m.progress != nil {
+		m.cacheTokenUsage(m.progress.TokenUsage)
 	}
 	m.lastCompletedTools = nil
 	m.iterationHistory = nil
@@ -1045,6 +1037,17 @@ func (m *cliModel) handleUserList() {
 	}
 	sb.WriteString("\n`/user add <name>` to create · `/user del <name>` to delete")
 	m.showSystemMsg(sb.String(), feedbackInfo)
+}
+
+// cacheTokenUsage caches token usage data for the context bar display.
+// Called from all progress paths to avoid duplication.
+func (m *cliModel) cacheTokenUsage(tu *CLITokenUsage) {
+	if tu != nil && tu.PromptTokens > 0 {
+		m.lastTokenUsage = tu
+		if tu.MaxOutputTokens > 0 {
+			m.cachedMaxOutputTokens = tu.MaxOutputTokens
+		}
+	}
 }
 
 // resolveMaxContextTokens returns the max context tokens from settings values.

@@ -923,7 +923,7 @@ func (m *cliModel) renderContextUsage() string {
 	}
 
 	// Cache key: re-render only when data changes
-	cacheKey := fmt.Sprintf("%d:%d:%d:%d", promptTokens, maxTokens, m.cachedMaxOutputTokens, m.width)
+	cacheKey := fmt.Sprintf("%d:%d:%d:%d:%g", promptTokens, maxTokens, m.cachedMaxOutputTokens, m.width, m.cachedCompressRatio)
 	if cacheKey == m.ctxBarCacheKey && m.ctxBarCache != "" {
 		return m.ctxBarCache
 	}

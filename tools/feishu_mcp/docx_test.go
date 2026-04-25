@@ -45,7 +45,7 @@ func TestDocxWrite(t *testing.T) {
 	tool := &DocxWriteTool{MCP: mcp}
 
 	// Test parameters
-	params := map[string]interface{}{
+	params := map[string]any{
 		"document_id": "",
 		"content": `# Test Heading
 

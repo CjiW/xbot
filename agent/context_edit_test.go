@@ -94,7 +94,7 @@ func TestContextEditor_Delete(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Delete message index 3 (Grep tool result)
-	result, err := editor.HandleRequest("delete", map[string]interface{}{
+	result, err := editor.HandleRequest("delete", map[string]any{
 		"message_idx": float64(3),
 		"reason":      "outdated search results",
 	})
@@ -133,7 +133,7 @@ func TestContextEditor_Truncate(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Truncate message index 2 (Read tool result) to 20 chars
-	result, err := editor.HandleRequest("truncate", map[string]interface{}{
+	result, err := editor.HandleRequest("truncate", map[string]any{
 		"message_idx": float64(2),
 		"max_chars":   float64(20),
 		"reason":      "file content no longer needed",
@@ -166,7 +166,7 @@ func TestContextEditor_Replace(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Replace text in message index 4 (Grep tool result)
-	result, err := editor.HandleRequest("replace", map[string]interface{}{
+	result, err := editor.HandleRequest("replace", map[string]any{
 		"message_idx": float64(4),
 		"old_text":    "Found 50 matches",
 		"new_text":    "Found matches (details removed)",
@@ -195,7 +195,7 @@ func TestContextEditor_ReplaceRegex(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Regex replace
-	result, err := editor.HandleRequest("replace", map[string]interface{}{
+	result, err := editor.HandleRequest("replace", map[string]any{
 		"message_idx": float64(4),
 		"old_text":    "regex:\\d+ matches",
 		"new_text":    "N matches",
@@ -214,7 +214,7 @@ func TestContextEditor_ReplaceRegexInvalid(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Invalid regex should error
-	_, err := editor.HandleRequest("replace", map[string]interface{}{
+	_, err := editor.HandleRequest("replace", map[string]any{
 		"message_idx": float64(4),
 		"old_text":    "regex:[invalid",
 		"new_text":    "N",
@@ -231,7 +231,7 @@ func TestContextEditor_ReplaceNotFound(t *testing.T) {
 	msgs := makeTestMessages()
 	editor.SetMessages(msgs)
 
-	_, err := editor.HandleRequest("replace", map[string]interface{}{
+	_, err := editor.HandleRequest("replace", map[string]any{
 		"message_idx": float64(4),
 		"old_text":    "this text does not exist",
 		"new_text":    "replacement",
@@ -249,7 +249,7 @@ func TestContextEditor_SafetyChecks(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Test: cannot delete last 3 messages
-	_, err := editor.HandleRequest("delete", map[string]interface{}{
+	_, err := editor.HandleRequest("delete", map[string]any{
 		"message_idx": float64(7), // last message
 		"reason":      "should fail",
 	})
@@ -261,7 +261,7 @@ func TestContextEditor_SafetyChecks(t *testing.T) {
 	}
 
 	// Test: out of range index
-	_, err = editor.HandleRequest("delete", map[string]interface{}{
+	_, err = editor.HandleRequest("delete", map[string]any{
 		"message_idx": float64(100),
 		"reason":      "out of range",
 	})
@@ -270,7 +270,7 @@ func TestContextEditor_SafetyChecks(t *testing.T) {
 	}
 
 	// Test: unknown action
-	_, err = editor.HandleRequest("explode", map[string]interface{}{})
+	_, err = editor.HandleRequest("explode", map[string]any{})
 	if err == nil {
 		t.Error("expected error: unknown action")
 	}
@@ -283,7 +283,7 @@ func TestContextEditor_TruncateAlreadySmall(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Try to truncate a short message to a large number
-	_, err := editor.HandleRequest("truncate", map[string]interface{}{
+	_, err := editor.HandleRequest("truncate", map[string]any{
 		"message_idx": float64(0),
 		"max_chars":   float64(10000),
 		"reason":      "already small",
@@ -298,7 +298,7 @@ func TestContextEditor_MissingMessageIdx(t *testing.T) {
 	editor := NewContextEditor(store)
 	editor.SetMessages(makeTestMessages())
 
-	_, err := editor.HandleRequest("delete", map[string]interface{}{
+	_, err := editor.HandleRequest("delete", map[string]any{
 		"reason": "missing idx",
 	})
 	if err == nil {
@@ -311,7 +311,7 @@ func TestContextEditor_ReplaceMissingOldText(t *testing.T) {
 	editor := NewContextEditor(store)
 	editor.SetMessages(makeTestMessages())
 
-	_, err := editor.HandleRequest("replace", map[string]interface{}{
+	_, err := editor.HandleRequest("replace", map[string]any{
 		"message_idx": float64(2),
 		"reason":      "missing old_text",
 	})
@@ -427,7 +427,7 @@ func TestContextEditor_DeleteTurn(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Delete turn 0 (user msg at idx 0 through assistant at idx 6 in visible, slice 1-6)
-	result, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+	result, err := editor.HandleRequest("delete_turn", map[string]any{
 		"turn_idx": float64(0),
 		"reason":   "old conversation",
 	})
@@ -474,7 +474,7 @@ func TestContextEditor_DeleteTurnLastProtected(t *testing.T) {
 	editor.SetMessages(msgs)
 
 	// Try to delete last turn (turn 1) — should fail
-	_, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+	_, err := editor.HandleRequest("delete_turn", map[string]any{
 		"turn_idx": float64(1),
 		"reason":   "should fail",
 	})
@@ -492,7 +492,7 @@ func TestContextEditor_DeleteTurnOutOfRange(t *testing.T) {
 	msgs := makeTestMessages()
 	editor.SetMessages(msgs)
 
-	_, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+	_, err := editor.HandleRequest("delete_turn", map[string]any{
 		"turn_idx": float64(99),
 		"reason":   "out of range",
 	})
@@ -507,7 +507,7 @@ func TestContextEditor_DeleteTurnMissingIdx(t *testing.T) {
 	msgs := makeTestMessages()
 	editor.SetMessages(msgs)
 
-	_, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+	_, err := editor.HandleRequest("delete_turn", map[string]any{
 		"reason": "missing turn_idx",
 	})
 	if err == nil {

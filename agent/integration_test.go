@@ -507,10 +507,10 @@ func TestIntegration_Offload_RecallAfterOffload(t *testing.T) {
 // ============================================================================
 
 // parseToolArgs parses JSON tool call arguments into a map.
-func parseToolArgs(args string) map[string]interface{} {
-	var m map[string]interface{}
+func parseToolArgs(args string) map[string]any {
+	var m map[string]any
 	if err := json.Unmarshal([]byte(args), &m); err != nil {
-		return map[string]interface{}{}
+		return map[string]any{}
 	}
 	return m
 }

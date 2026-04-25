@@ -250,3 +250,37 @@ var AllSettingDefs = []SettingDef{...}
 ---
 
 *审查完毕。修复工作将按 Phase 顺序执行。*
+
+---
+
+## 📋 修复进度 (2026-04-26)
+
+### ✅ Phase 1: LLM 凭证双写修复
+**Commit**: `0025206 fix: prevent LLM credential double-write between config.json and DB`
+- `saveCLIConfig` 和 `saveServerConfig` 不再将 `cfg.LLM` 凭证写回 config.json（当 subscriptions 存在时）
+- 只写 tier model 字段 (VanguardModel/BalanceModel/SwiftModel)
+- 消除了 `loadLLMFromDBSubscription → cfg.LLM → saveCLIConfig → config.json` 的数据循环
+
+### ✅ Phase 2: Setting Key Registry
+**Commit**: `c248bc8 refactor: unify setting key registry into channel/setting_keys.go`
+- 新建 `channel/setting_keys.go`：所有 28 个 setting key 的单一注册表
+- 从 `cli_helpers.go` 删除 4 个冗余 scope map + runtime key list
+- Scope 分类、runtime key 列表全部从 `AllSettingDefs` 自动推导
+
+### ✅ Phase 3: GetLLMForModel 简化
+**Commit**: `175a6b2 refactor: simplify GetLLMForModel — remove 7-level fallback chain`
+- 从 7 级 fallback 简化为 4 步精确查找
+- 移除 `guessProvider` 在查找路径中的使用（基于子串匹配不可靠）
+- 删除 76 行复杂的 fallback 逻辑
+
+### ✅ Phase 4: applyEnvOverrides 一致性
+**Commit**: `473bf4f fix: unify applyEnvOverrides strategy — env vars always override config.json`
+- 移除 6 个字段的零值检测（AGENT_MAX_ITERATIONS 等）
+- 统一策略：环境变量始终覆盖 config.json
+
+### ⏳ Phase 5: enable_auto_compress 别名消除
+**状态**: 未实施 — 需要数据库迁移，风险较高，建议单独 PR
+
+---
+
+*审查 + 修复完成。4 个 commits，+517/-247 行，所有测试通过。*

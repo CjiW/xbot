@@ -216,7 +216,7 @@ func TestMergeJSONPreserveUnknown(t *testing.T) {
 		t.Fatalf("mergeJSONPreserveUnknown: %v", err)
 	}
 
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(merged, &m); err != nil {
 		t.Fatalf("unmarshal merged: %v", err)
 	}

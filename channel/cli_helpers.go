@@ -21,12 +21,15 @@ var cliUserScopedSettingKeys = map[string]struct{}{
 	"runner_server":        {},
 	"runner_token":         {},
 	"runner_workspace":     {},
+	// Tier model mappings are per-user preferences (each user picks their own
+	// vanguard/balance/swift models). Persisted to user_settings DB so they
+	// survive restart and work in remote mode.
+	"vanguard_model": {},
+	"balance_model":  {},
+	"swift_model":    {},
 }
 
 var cliGlobalScopedSettingKeys = map[string]struct{}{
-	"vanguard_model":        {},
-	"balance_model":         {},
-	"swift_model":           {},
 	"sandbox_mode":          {},
 	"compression_threshold": {},
 	"memory_provider":       {},

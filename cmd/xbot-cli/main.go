@@ -105,6 +105,23 @@ func (app *cliApp) refreshRemoteValuesCache() {
 	app.valuesCacheMu.Lock()
 	app.valuesCache = vals
 	app.valuesCacheMu.Unlock()
+
+	// Sync tier model mappings to local LLMFactory so SubAgent model resolution
+	// works in remote mode (tier models are now user-scoped, persisted in DB).
+	if app.backend != nil && app.backend.LLMFactory() != nil {
+		llmCfg := app.cfg.LLM // start from current config
+		if v, ok := vals["vanguard_model"]; ok {
+			llmCfg.VanguardModel = v
+		}
+		if v, ok := vals["balance_model"]; ok {
+			llmCfg.BalanceModel = v
+		}
+		if v, ok := vals["swift_model"]; ok {
+			llmCfg.SwiftModel = v
+		}
+		app.cfg.LLM = llmCfg
+		app.backend.LLMFactory().SetModelTiers(llmCfg)
+	}
 }
 
 func saveCLIConfig(cfg *config.Config) error {

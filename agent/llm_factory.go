@@ -644,8 +644,29 @@ func (f *LLMFactory) GetMaxOutputTokens(senderID string) int {
 //
 // 返回: (LLM客户端, 实际模型名, maxContext, thinkingMode, 是否使用了非默认模型)
 func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, string, int, string, bool) {
-	resolvedModel, _ := f.resolveTierModel(targetModel)
+	resolvedModel, fromTier := f.resolveTierModel(targetModel)
 	if resolvedModel == "" {
+		client, model, maxCtx, tm := f.GetLLM(senderID)
+		return client, model, maxCtx, tm, false
+	}
+
+	// Tier-resolved models are cross-provider mappings (e.g. "vanguard" → "gpt-4.1-pro"
+	// while the user's primary LLM is GLM). Provider-guess matching is unsafe here
+	// because the tier model name may suggest a provider that doesn't match the
+	// subscription's actual endpoint. Only use exact matches for tier models.
+	// If no exact match is found, fall through to the default LLM (parent agent's).
+	if fromTier {
+		// Step 1: exact match only (no provider guess)
+		modelMap := f.buildModelSubscriptionMap(senderID)
+		if sub, ok := modelMap[resolvedModel]; ok {
+			client := f.createClientFromSub(sub, resolvedModel)
+			if client != nil {
+				log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "source": "tier-exact"}).Info("[LLM] GetLLMForModel: tier model found via exact match")
+				return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+			}
+		}
+		// No exact match — fall through to default LLM
+		log.WithFields(log.Fields{"model": resolvedModel, "tier": targetModel}).Warn("[LLM] GetLLMForModel: tier model not found in any subscription, falling back to parent LLM")
 		client, model, maxCtx, tm := f.GetLLM(senderID)
 		return client, model, maxCtx, tm, false
 	}

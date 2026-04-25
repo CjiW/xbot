@@ -234,8 +234,10 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		if err != nil {
 			log.WithError(err).Error("Failed to open HISTORY.md for append")
 		} else {
-			fmt.Fprintf(f, "%s\n", args.HistoryEntry)
-			f.Close()
+			defer f.Close()
+			if _, err := fmt.Fprintf(f, "%s\n", args.HistoryEntry); err != nil {
+				log.WithError(err).Error("Failed to write HISTORY.md entry")
+			}
 		}
 	}
 
@@ -261,15 +263,20 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 			continue
 		}
 		knowledgePath := filepath.Join(m.baseDir, "knowledge", ku.Path)
-		os.MkdirAll(filepath.Dir(knowledgePath), 0o755)
+		if err := os.MkdirAll(filepath.Dir(knowledgePath), 0o755); err != nil {
+			log.WithError(err).WithField("path", ku.Path).Error("Failed to create knowledge directory")
+			continue
+		}
 		switch ku.Action {
 		case "append":
 			f, err := os.OpenFile(knowledgePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {
 				log.WithError(err).WithField("path", ku.Path).Error("Failed to open knowledge file for append")
 			} else {
-				fmt.Fprintf(f, "%s\n", ku.Content)
-				f.Close()
+				defer f.Close()
+				if _, err := fmt.Fprintf(f, "%s\n", ku.Content); err != nil {
+					log.WithError(err).WithField("path", ku.Path).Error("Failed to write knowledge file")
+				}
 			}
 		default: // "create", "update", ""
 			if err := os.WriteFile(knowledgePath, []byte(ku.Content), 0o644); err != nil {

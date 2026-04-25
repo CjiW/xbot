@@ -961,7 +961,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		p.Sub.ID = p.ID
 		p.Sub.SenderID = existing.SenderID
 		p.Sub.IsDefault = existing.IsDefault // preserve is_default (client sends zero)
-		if strings.HasSuffix(p.Sub.APIKey, "****") {
+		if strings.HasSuffix(p.Sub.APIKey, "****") && len(p.Sub.APIKey) <= 20 {
+			log.WithField("sub_id", p.ID).Warn("[RPC] update_subscription: preserving existing API key (received masked)")
 			p.Sub.APIKey = existing.APIKey
 		}
 		if err := svc.Update(&p.Sub); err != nil {

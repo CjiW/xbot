@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -42,9 +41,9 @@ type coreMemoryAppendArgs struct {
 }
 
 func (t *CoreMemoryAppendTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args coreMemoryAppendArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
+	args, err := parseToolArgs[coreMemoryAppendArgs](input)
+	if err != nil {
+		return nil, err
 	}
 
 	if !isValidBlock(args.Block) {
@@ -122,9 +121,9 @@ type coreMemoryReplaceArgs struct {
 }
 
 func (t *CoreMemoryReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args coreMemoryReplaceArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
+	args, err := parseToolArgs[coreMemoryReplaceArgs](input)
+	if err != nil {
+		return nil, err
 	}
 
 	if !isValidBlock(args.Block) {
@@ -195,9 +194,9 @@ type rethinkArgs struct {
 }
 
 func (t *RethinkTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args rethinkArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
+	args, err := parseToolArgs[rethinkArgs](input)
+	if err != nil {
+		return nil, err
 	}
 
 	if !isValidBlock(args.Block) {
@@ -260,9 +259,9 @@ type archivalInsertArgs struct {
 }
 
 func (t *ArchivalMemoryInsertTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args archivalInsertArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
+	args, err := parseToolArgs[archivalInsertArgs](input)
+	if err != nil {
+		return nil, err
 	}
 	if args.Content == "" {
 		return NewResult("Content is empty, nothing to archive."), nil
@@ -315,9 +314,9 @@ type archivalSearchArgs struct {
 }
 
 func (t *ArchivalMemorySearchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args archivalSearchArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
+	args, err := parseToolArgs[archivalSearchArgs](input)
+	if err != nil {
+		return nil, err
 	}
 	if args.Query == "" {
 		return NewResult("Query is empty."), nil
@@ -396,9 +395,9 @@ type recallSearchArgs struct {
 }
 
 func (t *RecallMemorySearchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args recallSearchArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
+	args, err := parseToolArgs[recallSearchArgs](input)
+	if err != nil {
+		return nil, err
 	}
 	if args.StartDate == "" && args.EndDate == "" {
 		return NewResult("At least one of start_date or end_date must be provided."), nil

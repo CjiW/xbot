@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -163,9 +162,9 @@ type chatHistoryParams struct {
 func (t *ChatHistoryTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	log.WithField("ctx", fmt.Sprintf("%+v", ctx)).Debug("ChatHistory tool called")
 
-	var params chatHistoryParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	params, err := parseToolArgs[chatHistoryParams](input)
+	if err != nil {
+		return nil, err
 	}
 
 	limit := params.Limit

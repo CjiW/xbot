@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -52,15 +51,15 @@ func (t *ShellTool) Parameters() []llm.ToolParam {
 }
 
 func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, error) {
-	var params struct {
+	params, err := parseToolArgs[struct {
 		Command    string  `json:"command"`
 		Timeout    float64 `json:"timeout"`
 		Background bool    `json:"background"`
 		RunAs      string  `json:"run_as"`
 		Reason     string  `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}](input)
+	if err != nil {
+		return nil, err
 	}
 
 	if params.Command == "" {

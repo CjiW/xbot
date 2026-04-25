@@ -56,13 +56,13 @@ func (t *OAuthTool) Parameters() []llm.ToolParam {
 
 // Execute sends an OAuth authorization card.
 func (t *OAuthTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args struct {
+	args, err := parseToolArgs[struct {
 		Provider string   `json:"provider"`
 		Reason   string   `json:"reason"`
 		Scopes   []string `json:"scopes"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	}](input)
+	if err != nil {
+		return nil, err
 	}
 
 	if t.Manager == nil {

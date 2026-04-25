@@ -2,7 +2,6 @@ package tools
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -52,9 +51,9 @@ type FileCreateParams struct {
 }
 
 func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params FileCreateParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	params, err := parseToolArgs[FileCreateParams](input)
+	if err != nil {
+		return nil, err
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -74,7 +73,7 @@ func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 		sandboxPath := resolveSandboxPath(ctx, params.Path)
 		return t.sandboxCreate(ctx, sandboxPath, params.Content)
 	}
-	return t.executeLocal(ctx, params)
+	return t.executeLocal(ctx, *params)
 }
 
 func (t *FileCreateTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
@@ -175,9 +174,9 @@ type FileReplaceParams struct {
 }
 
 func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params FileReplaceParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	params, err := parseToolArgs[FileReplaceParams](input)
+	if err != nil {
+		return nil, err
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -203,9 +202,9 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 
 	if shouldUseSandbox(ctx) {
 		sandboxPath := resolveSandboxPath(ctx, params.Path)
-		return t.executeInSandbox(ctx, sandboxPath, params)
+		return t.executeInSandbox(ctx, sandboxPath, *params)
 	}
-	return t.executeLocal(ctx, params)
+	return t.executeLocal(ctx, *params)
 }
 
 func (t *FileReplaceTool) executeInSandbox(ctx *ToolContext, path string, params FileReplaceParams) (*ToolResult, error) {

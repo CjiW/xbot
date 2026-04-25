@@ -1106,9 +1106,10 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			})
 		}
 
-		elements = append(elements, buildSettingRow(
-			"当前模型",
+		elements = append(elements, buildSelectFormRow(
+			"**当前模型**",
 			currentModel,
+			"model_select_form",
 			map[string]any{
 				"tag":            "select_static",
 				"name":           "settings_model_select",
@@ -1121,7 +1122,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 					}),
 				},
 			},
-		))
+		)...)
 	}
 
 	// Max context setting (unit: k, stored as k*1000)
@@ -1153,11 +1154,18 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 				"placeholder":   map[string]any{"tag": "plain_text", "content": "如 400 = 400k"},
 				"initial_value": maxCtxInitial,
 			},
-		},
-		"value": map[string]string{
-			"action_data": mustMapToJSON(map[string]string{
-				"action": "settings_set_max_context",
-			}),
+			{
+				"tag":         "button",
+				"name":        "max_context_submit",
+				"text":        map[string]any{"tag": "plain_text", "content": "保存"},
+				"type":        "primary",
+				"action_type": "form_submit",
+				"value": map[string]string{
+					"action_data": mustMapToJSON(map[string]string{
+						"action": "settings_set_max_context",
+					}),
+				},
+			},
 		},
 	})
 
@@ -1190,11 +1198,18 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 				"placeholder":   map[string]any{"tag": "plain_text", "content": "如 16 = 16k，0 = 默认"},
 				"initial_value": maxOutInitial,
 			},
-		},
-		"value": map[string]string{
-			"action_data": mustMapToJSON(map[string]string{
-				"action": "settings_set_max_output_tokens",
-			}),
+			{
+				"tag":         "button",
+				"name":        "max_output_submit",
+				"text":        map[string]any{"tag": "plain_text", "content": "保存"},
+				"type":        "primary",
+				"action_type": "form_submit",
+				"value": map[string]string{
+					"action_data": mustMapToJSON(map[string]string{
+						"action": "settings_set_max_output_tokens",
+					}),
+				},
+			},
 		},
 	})
 
@@ -1219,9 +1234,10 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		"tag":     "markdown",
 		"content": "**个人 LLM 并发限制**",
 	})
-	elements = append(elements, buildSettingRow(
+	elements = append(elements, buildSelectFormRow(
 		"并发上限",
 		fmt.Sprintf("%d", personalConc),
+		"concurrency_form",
 		map[string]any{
 			"tag":            "select_static",
 			"name":           "settings_llm_conc_personal",
@@ -1234,7 +1250,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 				}),
 			},
 		},
-	))
+	)...)
 
 	// Thinking mode setting
 	currentThinkingMode := ""
@@ -1246,9 +1262,10 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		thinkingModeDisplay = thinkingModeLabel(currentThinkingMode)
 	}
 
-	elements = append(elements, buildSettingRow(
+	elements = append(elements, buildSelectFormRow(
 		"思考模式",
 		thinkingModeDisplay,
+		"thinking_mode_form",
 		map[string]any{
 			"tag":            "select_static",
 			"name":           "settings_thinking_mode_select",
@@ -1261,7 +1278,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 				}),
 			},
 		},
-	))
+	)...)
 
 	// --- Model tier section ---
 	elements = append(elements, map[string]any{"tag": "hr"})
@@ -1315,9 +1332,10 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		}
 		// Always render — even with only one option (the current value).
 		// Previously the section was entirely hidden when allModels was empty.
-		elements = append(elements, buildSettingRow(
+		elements = append(elements, buildSelectFormRow(
 			tier.label,
 			tierDisplay,
+			"tier_"+tier.key+"_form",
 			map[string]any{
 				"tag":            "select_static",
 				"name":           "settings_tier_" + tier.key + "_select",
@@ -1331,7 +1349,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 					}),
 				},
 			},
-		))
+		)...)
 	}
 
 	// --- Subscription management section ---
@@ -1965,37 +1983,24 @@ func parsePageOpts(parsed map[string]string) SettingsCardOpts {
 
 // --- Layout helpers ---
 
-func buildSettingRow(label, currentDisplay string, control map[string]any) map[string]any {
+// buildSelectFormRow wraps a select_static component inside a form so that
+// Feishu card callbacks work correctly. select_static MUST be inside a form
+// to trigger callbacks — placing it in column_set silently breaks interaction.
+// The label is rendered as a markdown element before the form.
+func buildSelectFormRow(label, currentDisplay, formName string, selectControl map[string]any) []map[string]any {
 	leftContent := label
 	if currentDisplay != "" {
 		leftContent = fmt.Sprintf("%s　**%s**", label, currentDisplay)
 	}
-	return map[string]any{
-		"tag":                "column_set",
-		"flex_mode":          "none",
-		"horizontal_spacing": "default",
-		"columns": []map[string]any{
-			{
-				"tag":            "column",
-				"width":          "weighted",
-				"weight":         1,
-				"vertical_align": "center",
-				"elements": []map[string]any{
-					{
-						"tag":     "markdown",
-						"content": leftContent,
-					},
-				},
-			},
-			{
-				"tag":            "column",
-				"width":          "weighted",
-				"weight":         1,
-				"vertical_align": "center",
-				"elements": []map[string]any{
-					control,
-				},
-			},
+	return []map[string]any{
+		{
+			"tag":     "markdown",
+			"content": leftContent,
+		},
+		{
+			"tag":      "form",
+			"name":     formName,
+			"elements": []map[string]any{selectControl},
 		},
 	}
 }

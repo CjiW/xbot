@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -771,4 +772,10 @@ func (b *LocalBackend) SetChannelConfig(channel string, values map[string]string
 
 func (b *LocalBackend) Run(ctx context.Context) error {
 	return b.agent.Run(ctx)
+}
+
+// CallRPC is not available in standalone mode (LocalBackend).
+// CLI callbacks use DB directly instead of going through RPC.
+func (b *LocalBackend) CallRPC(method string, params any) (json.RawMessage, error) {
+	return nil, fmt.Errorf("RPC not available in standalone mode")
 }

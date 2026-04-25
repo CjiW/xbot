@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -552,7 +553,10 @@ func (b *fakeAgentBackend) GetChannelConfigs() (map[string]map[string]string, er
 func (b *fakeAgentBackend) SetChannelConfig(channel string, values map[string]string) error {
 	return nil
 }
-func (b *fakeAgentBackend) Close() error              { return nil }
+func (b *fakeAgentBackend) Close() error { return nil }
+func (b *fakeAgentBackend) CallRPC(string, any) (json.RawMessage, error) {
+	return nil, fmt.Errorf("not implemented")
+}
 func (b *fakeAgentBackend) Run(context.Context) error { return nil }
 
 func TestCLISettingHandlersCoversAllRuntimeKeys(t *testing.T) {

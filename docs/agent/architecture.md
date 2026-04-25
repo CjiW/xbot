@@ -90,6 +90,17 @@ The `AgentBackend` interface (`agent/backend.go`) abstracts where the agent loop
 Server entry can now be launched either from the root binary (`main.go`) or from the CLI binary via
 `xbot-cli serve [--config path]`. Both paths call the same reusable server startup logic in `serverapp/`.
 
+The `serverapp/` package is structured as:
+- `server.go` — `Run()` startup, channel registration, graceful shutdown
+- `rpc.go` — generic RPC dispatch helpers (`rpc0`, `rpc1`, `rpc1void`, etc.)
+- `rpc_table.go` — RPC method registry + auth helpers (`requireAdmin`, `ownOrAdmin`)
+- `rpc_*.go` — handler groups by domain (settings, llm, subscription, session, tasks)
+- `callbacks.go` — shared Runner/Registry/LLM callback builders (used by Web + Feishu)
+- `setting_handlers.go` — runtime setting registry for server-side effects
+
+Adding a new CLI RPC: define a typed handler method on `rpcContext` in the appropriate `rpc_*.go`,
+then register it with one line in `buildRPCTable()` in `rpc_table.go`. No switch-case to update.
+
 Both implement the same `AgentBackend` interface, so CLI code works identically regardless of mode.
 Management methods (LLMFactory, SettingsService, etc.) return nil for RemoteBackend until the
 WS protocol is extended with RPC support.

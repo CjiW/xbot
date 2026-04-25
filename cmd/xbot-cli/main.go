@@ -1121,6 +1121,69 @@ func main() {
 			}
 			return app.backend.SetChannelConfig(channelName, values)
 		},
+		CreateWebUserFn: func(username string) (string, error) {
+			if app.backend == nil {
+				return "", fmt.Errorf("agent not initialized")
+			}
+			if app.backend.IsRemote() {
+				result, err := app.backend.CallRPC("create_web_user", map[string]string{"username": username})
+				if err != nil {
+					return "", err
+				}
+				var resp struct {
+					Password string `json:"password"`
+				}
+				if err := json.Unmarshal(result, &resp); err != nil {
+					return "", err
+				}
+				return resp.Password, nil
+			}
+			db := app.backend.MultiSession().DB().Conn()
+			_, password, err := channel.CreateWebUser(db, username)
+			return password, err
+		},
+		ListWebUsersFn: func() ([]map[string]any, error) {
+			if app.backend == nil {
+				return nil, fmt.Errorf("agent not initialized")
+			}
+			if app.backend.IsRemote() {
+				result, err := app.backend.CallRPC("list_web_users", nil)
+				if err != nil {
+					return nil, err
+				}
+				var users []channel.WebUserInfo
+				if err := json.Unmarshal(result, &users); err != nil {
+					return nil, err
+				}
+				out := make([]map[string]any, len(users))
+				for i, u := range users {
+					out[i] = map[string]any{"id": u.ID, "username": u.Username, "created_at": u.CreatedAt}
+				}
+				return out, nil
+			}
+			users, err := channel.ListWebUsers(app.backend.MultiSession().DB().Conn())
+			if err != nil {
+				return nil, err
+			}
+			out := make([]map[string]any, len(users))
+			for i, u := range users {
+				out[i] = map[string]any{"id": u.ID, "username": u.Username, "created_at": u.CreatedAt}
+			}
+			return out, nil
+		},
+		DeleteWebUserFn: func(username string) error {
+			if app.backend == nil {
+				return fmt.Errorf("agent not initialized")
+			}
+			if app.backend.IsRemote() {
+				_, err := app.backend.CallRPC("delete_web_user", map[string]string{"username": username})
+				return err
+			}
+			return channel.DeleteWebUser(app.backend.MultiSession().DB().Conn(), username)
+		},
+		IsAdminFn: func() bool {
+			return true // standalone mode: CLI user is always admin
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

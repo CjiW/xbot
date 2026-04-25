@@ -587,6 +587,13 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	case "/channel":
 		m.openChannelPanel()
 
+	case "/user":
+		userArg := ""
+		if len(parts) > 1 {
+			userArg = strings.TrimSpace(strings.Join(parts[1:], " "))
+		}
+		m.handleUserCommand(userArg)
+
 	default:
 		// 🥚 彩蛋 #7: /version 三连检测
 		if command == "/version" {

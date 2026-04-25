@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"xbot/agent/hooks"
@@ -280,6 +281,11 @@ type AgentBackend interface {
 	// SetChannelConfig updates a channel's configuration in config.json.
 	// channel: "web", "feishu", "qq", or "napcat".
 	SetChannelConfig(channel string, values map[string]string) error
+
+	// CallRPC sends a raw RPC call to the server (RemoteBackend forwards via WS).
+	// LocalBackend returns an error (not available in standalone mode, but
+	// CLI callbacks use DB directly instead of going through this).
+	CallRPC(method string, params any) (json.RawMessage, error)
 
 	// Close shuts down the agent, releasing all resources.
 	Close() error

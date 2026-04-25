@@ -61,6 +61,20 @@ func formatErrorForUser(err error) string {
 	return fmt.Sprintf("处理消息时发生错误: %v", err)
 }
 
+// sessionKey builds the canonical session key from channel and chatID.
+// Used throughout the agent for tracking message state, cancellation, etc.
+func sessionKey(channel, chatID string) string {
+	return channel + ":" + chatID
+}
+
+// resolveMemoryProvider returns the effective memory provider, defaulting to "flat".
+func resolveMemoryProvider(cfg string) string {
+	if cfg == "" {
+		return "flat"
+	}
+	return cfg
+}
+
 func resolveGlobalSkillsDirs(legacySkillsDir string) []string {
 	if legacySkillsDir == "" {
 		return nil
@@ -518,12 +532,7 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	agentStore := NewAgentStore(cfg.WorkDir, agentsDir, cfg.Sandbox)
 
 	// 确定记忆模式
-	memoryProvider := cfg.MemoryProvider
-	if memoryProvider == "" {
-		memoryProvider = "flat"
-	}
-
-	registry := tools.DefaultRegistry(memoryProvider)
+	registry := tools.DefaultRegistry(resolveMemoryProvider(cfg.MemoryProvider))
 
 	// 创建聊天历史存储
 	chatHistory := tools.NewChatHistoryStore(200) // 每个群组保留最近 200 条
@@ -555,16 +564,12 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 
 // initSession 初始化多租户会话管理器。
 func initSession(cfg Config) (*session.MultiTenantSession, error) {
-	memoryProvider := cfg.MemoryProvider
-	if memoryProvider == "" {
-		memoryProvider = "flat"
-	}
 	multiSession, err := session.NewMultiTenant(
 		cfg.DBPath,
 		session.WithMCPTimeout(cfg.MCPInactivityTimeout),
 		session.WithCleanupInterval(cfg.MCPCleanupInterval),
 		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
-		session.WithMemoryProvider(memoryProvider),
+		session.WithMemoryProvider(resolveMemoryProvider(cfg.MemoryProvider)),
 		session.WithPersonaIsolation(cfg.PersonaIsolation),
 		session.WithEmbeddingConfig(session.EmbeddingConfig{
 			Provider:   cfg.EmbeddingProvider,
@@ -590,10 +595,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	mcpConfigPath := filepath.Join(a.xbotHome, "mcp.json")
 	contextMode := resolveContextMode(cfg)
 
-	memoryProvider := cfg.MemoryProvider
-	if memoryProvider == "" {
-		memoryProvider = "flat"
-	}
+	memoryProvider := resolveMemoryProvider(cfg.MemoryProvider)
 
 	multiSession.SetMCPConfigPath(mcpConfigPath)
 
@@ -616,7 +618,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// Flat 模式：注册 flat memory tools（memory_read/write/list）
-	if memoryProvider == "flat" || memoryProvider == "" {
+	if memoryProvider == "flat" {
 		for _, tool := range tools.FlatMemoryTools() {
 			registry.RegisterCore(tool)
 		}
@@ -1115,6 +1117,28 @@ func (a *Agent) sendAck(channel, chatID string) {
 	}
 }
 
+// resetSessionState clears outbound message tracking state for the given session key.
+// Called at the start of each new message to ensure clean state.
+func (a *Agent) resetSessionState(key string) {
+	a.sessionMsgIDs.Delete(key)
+	a.sessionFinalSent.Delete(key)
+}
+
+// injectCLIUserMessage sends a user message to the CLI channel if available.
+// Used by background notification handlers to display messages in the CLI UI.
+func (a *Agent) injectCLIUserMessage(channelName, content string) {
+	if a.channelFinder == nil {
+		return
+	}
+	ch, ok := a.channelFinder(channelName)
+	if !ok {
+		return
+	}
+	if cliCh, ok := ch.(*channel.CLIChannel); ok {
+		cliCh.InjectUserMessage(content)
+	}
+}
+
 // Run 启动 Agent 循环，持续消费入站消息。
 // 消息按 chat (channel:chatID) 分组，同一 chat 内顺序处理，不同 chat 并行处理。
 // 全局并发数由 AGENT_MAX_CONCURRENCY 控制（默认 3），避免 LLM 并发过高。
@@ -1360,9 +1384,8 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 				clipanic.Go("agent.chatWorker.concurrentCommand", func() {
 					// 清除 sessionFinalSent：command 不走 processMessage，
 					// 需要手动清除否则 sendMessage 会被拦截
-					cmdKey := m.Channel + ":" + m.ChatID
-					a.sessionMsgIDs.Delete(cmdKey)
-					a.sessionFinalSent.Delete(cmdKey)
+					cmdKey := sessionKey(m.Channel, m.ChatID)
+					a.resetSessionState(cmdKey)
 
 					response, err := c.Execute(ctx, a, m)
 					if err != nil {
@@ -1464,7 +1487,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			defer func() {
 				reqCancel()
 				a.chatCancelCh.Delete(cancelKey)
-				key := msg.Channel + ":" + msg.ChatID
+				key := sessionKey(msg.Channel, msg.ChatID)
 				a.lastProgressSnapshot.Delete(key)
 				a.iterationHistories.Delete(key)
 				<-sem // 释放槽位
@@ -1597,9 +1620,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 初始化 session 消息跟踪：清除旧的已发消息 ID，记录入站消息 ID 用于首条回复
-	key := msg.Channel + ":" + msg.ChatID
-	a.sessionMsgIDs.Delete(key)
-	a.sessionFinalSent.Delete(key)
+	key := sessionKey(msg.Channel, msg.ChatID)
+	a.resetSessionState(key)
 	if msg.Metadata != nil && msg.Metadata["message_id"] != "" {
 		a.sessionReplyTo.Store(key, msg.Metadata["message_id"])
 	} else {
@@ -1725,7 +1747,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// Wire drain callback so Run loop can inject bg notifications as tool messages.
 	// Only return notifications matching THIS session's key. Other sessions' notifications
 	// are put back into the pending list to prevent cross-session contamination.
-	currentSessionKey := msg.Channel + ":" + msg.ChatID
+	currentSessionKey := sessionKey(msg.Channel, msg.ChatID)
 	cfg.DrainBgNotifications = a.wireBgNotificationDrain(currentSessionKey)
 
 	// Emit SessionStart event (notification, non-blocking)
@@ -1788,9 +1810,8 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
 
 	// 清除旧的 session 状态，确保 cron 消息可以正常发送
-	key := msg.Channel + ":" + msg.ChatID
-	a.sessionMsgIDs.Delete(key)
-	a.sessionFinalSent.Delete(key)
+	key := sessionKey(msg.Channel, msg.ChatID)
+	a.resetSessionState(key)
 
 	// 使用创建者的工作区路径
 	senderID := msg.SenderID
@@ -1892,8 +1913,8 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		log.Ctx(ctx).WithError(err).Warn("Failed to configure session MCP scope")
 	}
 	if len(newTools) > 0 {
-		sessionKey := msg.Channel + ":" + msg.ChatID
-		a.tools.ActivateTools(sessionKey, newTools)
+		sessKey := sessionKey(msg.Channel, msg.ChatID)
+		a.tools.ActivateTools(sessKey, newTools)
 		log.Ctx(ctx).WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
 	}
 
@@ -1989,7 +2010,7 @@ func (a *Agent) RegisterCoreTool(tool tools.Tool) {
 // sendMessage 向 IM 渠道发送消息。
 // 通过 directSend 直连或 bus.Outbound 广播。
 func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[string]string) error {
-	key := channel + ":" + chatID
+	key := sessionKey(channel, chatID)
 
 	// 工具已发送最终回复 → 跳过后续所有消息（进度更新、LLM 最终回复等）
 	if _, sent := a.sessionFinalSent.Load(key); sent {
@@ -2011,10 +2032,6 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
-		if msg.Metadata == nil {
-			msg.Metadata = make(map[string]string)
-		}
-
 		// Always include update_message_id for patch support.
 		// For cards: feishu.go will attempt patch first; if cross-type conflict occurs,
 		// it falls back to creating a new message and deleting the old progress message.
@@ -2145,15 +2162,7 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 		"chat_id": chatID,
 	}).Info("Bg task notification: injecting as user message")
 
-	// Notify CLI to display the user message in the chat UI
-	if a.channelFinder != nil {
-		if ch, ok := a.channelFinder(channelName); ok {
-			if cliCh, ok := ch.(*channel.CLIChannel); ok {
-				cliCh.InjectUserMessage(content)
-			}
-		}
-	}
-
+	a.injectCLIUserMessage(channelName, content)
 	a.injectInbound(channelName, chatID, "user", content)
 }
 

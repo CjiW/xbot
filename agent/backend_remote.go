@@ -966,7 +966,10 @@ func (b *RemoteBackend) SetLLMConcurrency(senderID string, personal int) error {
 // ---------------------------------------------------------------------------
 
 func (b *RemoteBackend) GetDefaultModel() string {
-	s, _ := b.callRPCString("get_default_model", nil)
+	s, err := b.callRPCString("get_default_model", nil)
+	if err != nil {
+		log.WithError(err).Warn("RemoteBackend: GetDefaultModel RPC failed")
+	}
 	return s
 }
 

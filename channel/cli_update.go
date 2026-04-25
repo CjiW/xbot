@@ -425,6 +425,10 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 
 	case idleTickMsg:
 		// Low-frequency idle tick: rotate placeholder and keep alive
+		// Remote mode: keep retrying model name fetch until we get one.
+		if m.cachedModelName == "" && m.remoteMode {
+			m.refreshCachedModelName()
+		}
 		if !m.typing && m.progress == nil {
 			m.updatePlaceholder()
 			cmds = append(cmds, idleTickCmd())
@@ -471,6 +475,11 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 	case splashDoneMsg:
 		// §14 启动画面结束确认
 		m.splashDone = true
+		// Remote mode: retry model name fetch — the initial call in cli.go:76
+		// may have failed if the WS RPC wasn't fully ready yet.
+		if m.cachedModelName == "" && m.remoteMode {
+			m.refreshCachedModelName()
+		}
 		if m.typing && m.progress != nil && !m.fastTickActive {
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())

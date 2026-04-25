@@ -994,22 +994,18 @@ func (m *cliModel) renderContextUsage() string {
 	// Render bar with colored segments
 	var barStr strings.Builder
 	for i, ch := range bar {
-		switch {
-		case ch == '█':
+		switch ch {
+		case '█':
 			barStr.WriteString(fillColor.Render("█"))
-		case ch == '▒':
+		case '▒':
 			barStr.WriteString(dimColor.Render("▒"))
 		default:
-			// Check if this is the threshold position
+			// Threshold marker in empty area
 			if i == compressPos && i >= filledCells {
 				barStr.WriteString(thresholdColor.Render("┊"))
 			} else {
 				barStr.WriteString(emptyColor.Render("░"))
 			}
-		}
-		// Insert threshold marker inside filled area (as overlay)
-		if i == compressPos && compressPos < filledCells {
-			// Already rendered as fill, just note it in label
 		}
 	}
 

@@ -989,7 +989,7 @@ func TestCLIModelRenderProgressStatusNil(t *testing.T) {
 	toolStyle := lipgloss.NewStyle()
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
-	// Spinner + verbs removed; nil progress should still show spinner ticker
+	// nil progress: renderProgressStatus only shows spinner ticker, no verb
 	if result == "" {
 		t.Errorf("renderProgressStatus with nil progress should show spinner, got empty string")
 	}
@@ -1089,9 +1089,11 @@ func TestCLIModelRenderProgressBlockThinking(t *testing.T) {
 	model.typingStartTime = time.Now()
 
 	result := model.renderProgressBlock()
-	// Thinking spinner + verbs removed; progress block returns empty for pure thinking
-	if result != "" {
-		t.Errorf("renderProgressBlock should be empty for thinking phase (spinner removed), got: %q", result)
+	if !strings.Contains(result, "Thinking") {
+		t.Errorf("renderProgressBlock should show a thinking verb, got: %q", result)
+	}
+	if !strings.Contains(result, "Progress") {
+		t.Errorf("renderProgressBlock should show Progress header, got: %q", result)
 	}
 }
 

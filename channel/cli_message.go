@@ -1043,7 +1043,7 @@ func (m *cliModel) renderProgressBlock() string {
 				continue
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			pulseIcon := "●"
+			pulseIcon := m.ticker.viewFrames(pulseFrames)
 			// Calculate live elapsed time
 			var elapsedMs int64
 			if !tool.StartedAt.IsZero() {
@@ -1102,14 +1102,19 @@ func (m *cliModel) renderProgressBlock() string {
 		} else if !hasTools {
 			switch m.progress.Phase {
 			case "thinking":
-				// spinner + verbs removed per user request
+				sb.WriteString("  ")
+				sb.WriteString(m.ticker.view())
+				sb.WriteString(thinkingStyle.Render(" " + m.pickVerb(m.ticker.ticks) + "..."))
+				sb.WriteString("\n")
 			case "compressing":
 				sb.WriteString("  ")
-				sb.WriteString(thinkingStyle.Render("compressing..."))
+				sb.WriteString(m.ticker.viewFrames(orbitFrames))
+				sb.WriteString(thinkingStyle.Render(" compressing..."))
 				sb.WriteString("\n")
 			case "retrying":
 				sb.WriteString("  ")
-				sb.WriteString(thinkingStyle.Render("retrying..."))
+				sb.WriteString(m.ticker.viewFrames(orbitFrames))
+				sb.WriteString(thinkingStyle.Render(" retrying..."))
 				sb.WriteString("\n")
 			}
 		}
@@ -1124,7 +1129,10 @@ func (m *cliModel) renderProgressBlock() string {
 			}
 		}
 	} else if m.typing {
-		// spinner + verbs removed per user request
+		sb.WriteString("  ")
+		sb.WriteString(m.ticker.viewFrames(orbitFrames))
+		sb.WriteString(thinkingStyle.Render(" " + m.pickVerb(m.ticker.ticks) + "..."))
+		sb.WriteString("\n")
 	}
 
 	content := strings.TrimRight(sb.String(), "\n")
@@ -1165,7 +1173,7 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 		if !isLast {
 			connector = "├── "
 		}
-		icon := "●"
+		icon := m.ticker.viewFrames(waveFrames)
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color(RoleColor(sa.Role)))
 		switch sa.Status {
 		case "error":

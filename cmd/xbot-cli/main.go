@@ -1150,35 +1150,25 @@ func main() {
 				if err != nil {
 					return nil, err
 				}
-				var users []map[string]any
+				var users []channel.WebUserInfo
 				if err := json.Unmarshal(result, &users); err != nil {
 					return nil, err
 				}
-				return users, nil
+				out := make([]map[string]any, len(users))
+				for i, u := range users {
+					out[i] = map[string]any{"id": u.ID, "username": u.Username, "created_at": u.CreatedAt}
+				}
+				return out, nil
 			}
-			conn := app.backend.MultiSession().DB().Conn()
-			rows, err := conn.Query("SELECT id, username, created_at FROM web_users ORDER BY id")
+			users, err := channel.ListWebUsers(app.backend.MultiSession().DB().Conn())
 			if err != nil {
 				return nil, err
 			}
-			defer rows.Close()
-			var users []map[string]any
-			for rows.Next() {
-				var id int
-				var uname, createdAt string
-				if err := rows.Scan(&id, &uname, &createdAt); err != nil {
-					continue
-				}
-				users = append(users, map[string]any{
-					"id":         id,
-					"username":   uname,
-					"created_at": createdAt,
-				})
+			out := make([]map[string]any, len(users))
+			for i, u := range users {
+				out[i] = map[string]any{"id": u.ID, "username": u.Username, "created_at": u.CreatedAt}
 			}
-			if users == nil {
-				users = []map[string]any{}
-			}
-			return users, nil
+			return out, nil
 		},
 		DeleteWebUserFn: func(username string) error {
 			if app.backend == nil {
@@ -1188,16 +1178,10 @@ func main() {
 				_, err := app.backend.CallRPC("delete_web_user", map[string]string{"username": username})
 				return err
 			}
-			conn := app.backend.MultiSession().DB().Conn()
-			result, err := conn.Exec("DELETE FROM web_users WHERE username = ?", username)
-			if err != nil {
-				return err
-			}
-			n, _ := result.RowsAffected()
-			if n == 0 {
-				return fmt.Errorf("user %q not found", username)
-			}
-			return nil
+			return channel.DeleteWebUser(app.backend.MultiSession().DB().Conn(), username)
+		},
+		IsAdminFn: func() bool {
+			return true // standalone mode: CLI user is always admin
 		},
 	}
 

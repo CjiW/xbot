@@ -65,6 +65,7 @@ func TestHandleCLIRPCAdminAddSubscription_ListRoundTrip(t *testing.T) {
 
 	aCfg := &config.Config{}
 	lb := fakeBackend{factory: factory}
+	table := buildRPCTable(aCfg, lb, nil, nil)
 
 	// Add subscription via admin path (same as remote CLI does)
 	sub := channel.Subscription{
@@ -72,7 +73,7 @@ func TestHandleCLIRPCAdminAddSubscription_ListRoundTrip(t *testing.T) {
 		BaseURL: "https://api.openai.com/v1", APIKey: "sk-test", Model: "gpt-4",
 	}
 	addParams, _ := json.Marshal(map[string]any{"sub": sub})
-	if _, err := handleCLIRPC(aCfg, lb, nil, nil, "add_subscription", addParams, "admin"); err != nil {
+	if _, err := handleCLIRPC(table, "add_subscription", addParams, "admin"); err != nil {
 		t.Fatalf("add_subscription: %v", err)
 	}
 
@@ -80,7 +81,7 @@ func TestHandleCLIRPCAdminAddSubscription_ListRoundTrip(t *testing.T) {
 	// Before fix: senderIDFromParams falls back to "admin" → empty list
 	// After fix: should return the subscription
 	listParams, _ := json.Marshal(map[string]string{"sender_id": ""})
-	raw, err := handleCLIRPC(aCfg, lb, nil, nil, "list_subscriptions", listParams, "admin")
+	raw, err := handleCLIRPC(table, "list_subscriptions", listParams, "admin")
 	if err != nil {
 		t.Fatalf("list_subscriptions: %v", err)
 	}
@@ -302,13 +303,14 @@ func TestHandleCLIRPCSetDefaultSubscriptionRefreshesSenderCache(t *testing.T) {
 
 	aCfg := &config.Config{}
 	lb := fakeBackend{factory: factory}
+	table := buildRPCTable(aCfg, lb, nil, nil)
 	_, model, _, _ := factory.GetLLM("cli_user")
 	if model != "gpt-4.1" {
 		t.Fatalf("expected initial gpt model, got %q", model)
 	}
 
 	params, _ := json.Marshal(map[string]string{"id": "sub-glm"})
-	if _, err := handleCLIRPC(aCfg, lb, nil, nil, "set_default_subscription", params, "admin"); err != nil {
+	if _, err := handleCLIRPC(table, "set_default_subscription", params, "admin"); err != nil {
 		t.Fatalf("handleCLIRPC set_default_subscription: %v", err)
 	}
 	_, model, _, _ = factory.GetLLM("cli_user")
@@ -345,6 +347,7 @@ func TestHandleCLIRPCSetDefaultSubscription_CrossIdentity(t *testing.T) {
 
 	aCfg := &config.Config{}
 	lb := fakeBackend{factory: factory}
+	table := buildRPCTable(aCfg, lb, nil, nil)
 	// Agent calls GetLLM with "cli_user" (business identity)
 	_, model, _, _ := factory.GetLLM("cli_user")
 	if model != "gpt-4.1" {
@@ -353,7 +356,7 @@ func TestHandleCLIRPCSetDefaultSubscription_CrossIdentity(t *testing.T) {
 
 	// RPC call with WS auth "admin", no sender_id in params (matches real CLI behavior)
 	params, _ := json.Marshal(map[string]string{"id": "sub-glm"})
-	if _, err := handleCLIRPC(aCfg, lb, nil, nil, "set_default_subscription", params, "admin"); err != nil {
+	if _, err := handleCLIRPC(table, "set_default_subscription", params, "admin"); err != nil {
 		t.Fatalf("handleCLIRPC set_default_subscription: %v", err)
 	}
 	// The key assertion: GetLLM("cli_user") must see the new model

@@ -558,10 +558,13 @@ func Run(args []string) error {
 		log.WithError(err).Fatal("Failed to register channels")
 	}
 
+	// Build RPC table once at startup; per-request identity is passed via context.
+	rpcTable := buildRPCTable(cfg, backend, disp, msgBus)
+
 	// Wire RPC handler for CLI RemoteBackend clients (after disp/msgBus are available).
 	if webCh != nil {
 		webCh.SetRPCHandler(func(method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
-			return handleCLIRPC(cfg, backend, disp, msgBus, method, params, senderID)
+			return handleCLIRPC(rpcTable, method, params, senderID)
 		})
 	}
 

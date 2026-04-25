@@ -241,7 +241,8 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 		RegistryUnpublish: regc.RegistryUnpublish,
 		RegistryUninstall: regc.RegistryUninstall,
 
-		// LLM callbacks
+		// LLM callbacks (Web channel exposes only basic model/max-context via HTTP API;
+		// ThinkingMode/MaxOutputTokens/PersonalConcurrency are CLI-only via RPC.)
 		LLMList:          llmc.LLMList,
 		LLMSet:           llmc.LLMSet,
 		LLMGetMaxContext: llmc.LLMGetMaxContext,

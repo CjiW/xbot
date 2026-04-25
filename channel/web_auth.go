@@ -114,6 +114,49 @@ func CreateWebUser(db *sql.DB, username string) (string, string, error) {
 	return username, password, nil
 }
 
+// WebUserInfo represents a web user record for listing.
+type WebUserInfo struct {
+	ID        int    `json:"id"`
+	Username  string `json:"username"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListWebUsers returns all web users sorted by ID.
+func ListWebUsers(db *sql.DB) ([]WebUserInfo, error) {
+	rows, err := db.Query("SELECT id, username, created_at FROM web_users ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []WebUserInfo
+	for rows.Next() {
+		var u WebUserInfo
+		if err := rows.Scan(&u.ID, &u.Username, &u.CreatedAt); err != nil {
+			log.WithError(err).Warn("web_users row scan failed")
+			continue
+		}
+		users = append(users, u)
+	}
+	if users == nil {
+		users = []WebUserInfo{}
+	}
+	return users, nil
+}
+
+// DeleteWebUser deletes a web user by username. Returns error if user not found.
+func DeleteWebUser(db *sql.DB, username string) error {
+	result, err := db.Exec("DELETE FROM web_users WHERE username = ?", username)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %q not found", username)
+	}
+	log.WithField("username", username).Info("Web user deleted by admin")
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Auth handlers
 // ---------------------------------------------------------------------------

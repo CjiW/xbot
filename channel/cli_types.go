@@ -556,6 +556,7 @@ type CLIChannelConfig struct {
 	CreateWebUserFn      func(username string) (password string, err error)                                                             // 创建 Web 用户（admin only，返回自动生成的密码）
 	ListWebUsersFn       func() ([]map[string]any, error)                                                                               // 列出所有 Web 用户
 	DeleteWebUserFn      func(username string) error                                                                                    // 删除 Web 用户（admin only）
+	IsAdminFn            func() bool                                                                                                    // 检查当前用户是否 admin
 }
 
 type AgentPanelEntry struct {

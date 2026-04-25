@@ -404,6 +404,7 @@ type cliModel struct {
 	createWebUserFn func(username string) (password string, err error)
 	listWebUsersFn  func() ([]map[string]any, error)
 	deleteWebUserFn func(username string) error
+	isAdminFn       func() bool
 
 	// --- Progress ---
 	progress             *CLIProgressPayload

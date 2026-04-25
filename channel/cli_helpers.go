@@ -939,8 +939,11 @@ func fmtTokens(n int64) string {
 //	/user list            — list all web users
 //	/user del <username>  — delete a web user
 func (m *cliModel) handleUserCommand(arg string) {
-	// All subcommands require admin (checked server-side via RPC or DB),
-	// but also check locally if functions are available.
+	// All subcommands require admin.
+	if m.isAdminFn != nil && !m.isAdminFn() {
+		m.showSystemMsg("⛔ Admin only", feedbackError)
+		return
+	}
 	if m.createWebUserFn == nil && m.listWebUsersFn == nil {
 		m.showSystemMsg("Web user management not available (server-client mode or web not configured)", feedbackWarning)
 		return

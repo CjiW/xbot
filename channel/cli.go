@@ -618,6 +618,9 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 	if c.config.DeleteWebUserFn != nil {
 		c.model.deleteWebUserFn = c.config.DeleteWebUserFn
 	}
+	if c.config.IsAdminFn != nil {
+		c.model.isAdminFn = c.config.IsAdminFn
+	}
 }
 
 // CheckUpdateAsync starts a background goroutine to check for updates.

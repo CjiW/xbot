@@ -112,19 +112,15 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			return m, nil, true
 		}
 
-	case msg.Code == tea.KeyUp:
-		// If textarea has content, let textarea own multiline vertical cursor movement.
-		// Otherwise long pasted input cannot navigate back to earlier lines because
-		// viewport/history steals Up before textarea sees it.
+	case msg.Code == tea.KeyUp && msg.Mod == tea.ModShift:
+		// Shift+Up: recall queued message for editing / browse input history.
 		if m.panelMode == "" && m.textarea.Value() != "" {
-			break
-		}
-		// Viewport 不在底部时，方向键优先滚动 viewport（不触发 input history）
-		if !m.viewport.AtBottom() {
-			m.viewport.ScrollUp(1)
 			return m, nil, true
 		}
-		// §Q 消息队列：typing 时 ↑ 追回最后一条排队消息编辑
+		if !m.viewport.AtBottom() {
+			return m, nil, true
+		}
+		// §Q 消息队列：typing 时 Shift+↑ 追回最后一条排队消息编辑
 		if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
 			if !m.queueEditing && m.textarea.Value() == "" {
 				// 追回最后一条排队消息
@@ -136,8 +132,8 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			}
 		}
 		if m.panelMode == "" && !m.typing {
-			// 空输入时浏览历史：仅当有排队消息时才启用，避免误触覆盖输入。
-			if len(m.messageQueue) > 0 && m.textarea.Value() == "" && len(m.inputHistory) > 0 {
+			// 空输入时浏览历史
+			if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
 				if m.inputHistoryIdx == -1 {
 					m.inputDraft = "" // 保存空草稿
 					m.inputHistoryIdx = 0
@@ -150,17 +146,27 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			}
 		}
 
-	case msg.Code == tea.KeyDown:
+	case msg.Code == tea.KeyUp:
+		// Plain ArrowUp: only viewport scroll (no queue recall / history).
 		// If textarea has content, let textarea own multiline vertical cursor movement.
 		if m.panelMode == "" && m.textarea.Value() != "" {
 			break
 		}
-		// Viewport 不在底部时，方向键优先滚动 viewport
+		// Viewport 不在底部时，方向键滚动 viewport
 		if !m.viewport.AtBottom() {
-			m.viewport.ScrollDown(1)
+			m.viewport.ScrollUp(1)
 			return m, nil, true
 		}
-		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 && len(m.messageQueue) > 0 {
+
+	case msg.Code == tea.KeyDown && msg.Mod == tea.ModShift:
+		// Shift+Down: browse input history backwards.
+		if m.panelMode == "" && m.textarea.Value() != "" {
+			return m, nil, true
+		}
+		if !m.viewport.AtBottom() {
+			return m, nil, true
+		}
+		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
 			if m.inputHistoryIdx > 0 {
 				m.inputHistoryIdx--
 				m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
@@ -169,6 +175,16 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				m.textarea.SetValue(m.inputDraft)
 			}
 			m.autoExpandInput()
+			return m, nil, true
+		}
+
+	case msg.Code == tea.KeyDown:
+		// Plain ArrowDown: only viewport scroll.
+		if m.panelMode == "" && m.textarea.Value() != "" {
+			break
+		}
+		if !m.viewport.AtBottom() {
+			m.viewport.ScrollDown(1)
 			return m, nil, true
 		}
 

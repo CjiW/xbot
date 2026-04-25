@@ -156,14 +156,17 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 			m.queueEditBuf = ""
 			m.textarea.SetValue("")
 		}
-		// 3. 如果 agent 正在处理：清空队列 + 发送取消
+		// 3. 如果 agent 正在处理：
+		//    - 有排队消息：只清空队列，不发 cancel（需要再按一次 Ctrl+C 才 cancel）
+		//    - 无排队消息：发送 cancel
 		if m.typing {
 			queueLen := len(m.messageQueue)
 			if queueLen > 0 {
 				m.messageQueue = nil
 				m.showSystemMsg(fmt.Sprintf(m.locale.QueueCleared, queueLen), feedbackInfo)
+			} else {
+				m.sendCancel()
 			}
-			m.sendCancel()
 			return m, nil
 		}
 		// 4. 空闲状态：清空输入

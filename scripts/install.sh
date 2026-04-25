@@ -60,11 +60,20 @@ ask_mode() {
         esac
         return
     fi
-    echo "Choose install mode:" >&2
-    echo "  1) standalone      - CLI runs locally in-process" >&2
-    echo "  2) server-client   - install local server service, CLI connects remotely" >&2
-    printf "Select [1/2] (default 1): " >&2
-    read -r mode
+    # When piped (curl | bash), stdin is not a terminal.
+    # Default to standalone in that case.
+    if [ ! -t 0 ]; then
+        info "Non-interactive mode (stdin is pipe). Defaulting to standalone."
+        info "Use MODE=server-client or run interactively to change."
+        echo "standalone"
+        return
+    fi
+    echo ""
+    echo "Choose install mode:"
+    echo "  1) standalone      - CLI runs locally in-process"
+    echo "  2) server-client   - install local server service, CLI connects remotely"
+    printf "Select [1/2] (default 1): "
+    read -r mode </dev/tty
     case "${mode:-1}" in
         1) echo "standalone" ;;
         2) echo "server-client" ;;
@@ -238,7 +247,11 @@ download_web_dist() {
     local dist_url="https://github.com/${REPO}/releases/download/${version}/xbot-web-dist.tar.gz"
     info "Downloading Web UI frontend..."
     mkdir -p "$target_dir"
-    if curl -fsSL --progress-bar "$dist_url" | tar xzf - -C "$target_dir" 2>/dev/null; then
+    local curl_progress=""
+    if [ -t 2 ]; then
+        curl_progress="--progress-bar"
+    fi
+    if curl -fSL ${curl_progress} "$dist_url" | tar xzf - -C "$target_dir" 2>/dev/null; then
         info "Web UI installed to ${target_dir} ✓"
     else
         warn "Failed to download Web UI frontend. The server will run in API-only mode."
@@ -390,14 +403,18 @@ main() {
     PORT="$DEFAULT_PORT"
     if [ "$MODE" = "server-client" ] && [ -z "${NONINTERACTIVE:-}" ]; then
         printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: " >&2
-        read -r input_port
+        read -r input_port </dev/tty
         PORT="${input_port:-$DEFAULT_PORT}"
     fi
 
     info "Downloading..."
     TMPDIR=$(mktemp -d)
     trap 'rm -rf "$TMPDIR"' EXIT
-    if ! curl -fsSL --progress-bar -o "${TMPDIR}/${BINARY}" "$DOWNLOAD_URL"; then
+    local curl_progress=""
+    if [ -t 2 ]; then
+        curl_progress="--progress-bar"
+    fi
+    if ! curl -fSL ${curl_progress} -o "${TMPDIR}/${BINARY}" "$DOWNLOAD_URL"; then
         error "Download failed. Check the version and platform."
     fi
 

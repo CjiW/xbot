@@ -760,7 +760,7 @@ func Load() *Config {
 		cfg.Agent.LLMRetryTimeout = 120 * time.Second
 	}
 	if cfg.Sandbox.Mode == "" {
-		cfg.Sandbox.Mode = "docker"
+		cfg.Sandbox.Mode = "none"
 	}
 	if cfg.Sandbox.IdleTimeout == 0 {
 		cfg.Sandbox.IdleTimeout = 30 * time.Minute

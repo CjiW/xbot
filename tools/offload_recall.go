@@ -55,7 +55,7 @@ func (t *OffloadRecallTool) Execute(ctx *ToolContext, args string) (*ToolResult,
 
 	var params offloadRecallParams
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 	if params.ID == "" {
 		return nil, fmt.Errorf("missing required parameter: id")

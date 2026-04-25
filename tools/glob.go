@@ -96,7 +96,7 @@ func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		Path    string `json:"path"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.Pattern == "" {

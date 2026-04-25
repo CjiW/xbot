@@ -60,7 +60,7 @@ type cronParams struct {
 func (t *CronTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	p, err := parseToolArgs[cronParams](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	senderID := ""

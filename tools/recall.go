@@ -50,7 +50,7 @@ func (t *RecallTool) Parameters() []llm.ToolParam {
 func (t *RecallTool) Execute(ctx *ToolContext, args string) (*ToolResult, error) {
 	var params recallParams
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.List {

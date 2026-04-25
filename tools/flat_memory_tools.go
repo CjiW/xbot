@@ -32,7 +32,7 @@ func (t *MemoryWriteTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 		Content string `json:"content"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")

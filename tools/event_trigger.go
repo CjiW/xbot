@@ -60,7 +60,7 @@ type eventTriggerParams struct {
 func (t *EventTriggerTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	p, err := parseToolArgs[eventTriggerParams](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	senderID := ""

@@ -63,7 +63,7 @@ func (t *ContextEditTool) Execute(ctx *ToolContext, args string) (*ToolResult, e
 
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(args), &raw); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	action, ok := raw["action"].(string)

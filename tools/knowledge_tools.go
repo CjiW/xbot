@@ -34,7 +34,7 @@ func (t *KnowledgeWriteTool) Execute(ctx *ToolContext, input string) (*ToolResul
 		Content string `json:"content"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")

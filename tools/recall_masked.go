@@ -62,7 +62,7 @@ func (t *RecallMaskedTool) Execute(ctx *ToolContext, args string) (*ToolResult, 
 
 	var params recallMaskedParams
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	// 列出所有已遮蔽的 observation

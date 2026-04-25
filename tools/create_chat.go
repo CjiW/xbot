@@ -71,7 +71,7 @@ func (t *CreateChatTool) Parameters() []llm.ToolParam {
 func (t *CreateChatTool) Execute(ctx *ToolContext, raw string) (*ToolResult, error) {
 	var params CreateChatParams
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	switch params.Type {

@@ -19,7 +19,7 @@ func defaultShell() string {
 	return "/bin/sh"
 }
 
-// loginShellArgs returns the command-line arguments for executing a command
+// LoginShellArgs returns the command-line arguments for executing a command
 // in a shell that loads the user's environment (PATH, aliases, etc.).
 //
 // Shell source order differs:
@@ -31,7 +31,7 @@ func defaultShell() string {
 // User PATH config (go, cuda, nvm, etc.) typically lives in .zshrc / .bashrc.
 // For zsh we explicitly source .zshrc so the user's environment is available
 // in non-interactive mode without the overhead of -i (prompts, completion, etc.).
-func loginShellArgs(shell, command string) []string {
+func LoginShellArgs(shell, command string) []string {
 	name := filepath.Base(shell)
 	switch name {
 	case "zsh":

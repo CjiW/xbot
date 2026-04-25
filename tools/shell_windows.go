@@ -15,9 +15,9 @@ const defaultWindowsShell = "powershell.exe"
 // defaultShell returns the default shell for the current platform.
 func defaultShell() string { return defaultWindowsShell }
 
-// loginShellArgs returns the command-line arguments for executing a command in a login shell.
+// LoginShellArgs returns the command-line arguments for executing a command in a login shell.
 // PowerShell: ["powershell.exe", "-Command", command] (loads profile by default)
-func loginShellArgs(shell, command string) []string {
+func LoginShellArgs(shell, command string) []string {
 	return []string{shell, "-Command", command}
 }
 

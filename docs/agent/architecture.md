@@ -78,6 +78,44 @@ Two modes (`agent/engine_run.go`):
 - LLM calls: per-tenant semaphore (`llm/semaphore.go`)
 - Background tasks: goroutine + WaitGroup, drained on shutdown
 
+## Run State Components
+
+The `runState` struct (`agent/engine_run.go`) orchestrates a single `Run()` execution. Three extracted components manage state that was previously scattered as inline fields:
+
+### TokenTracker (`agent/token_tracker.go`)
+
+Manages token accounting for a single Run. Replaces scattered `lastPromptTokens`/`lastCompletionTokens`/`lastMsgCountAtLLMCall` fields.
+
+- **RecordLLMCall(prompt, completion, msgCount)** — Called after each LLM API response. Stores exact token counts from the API.
+- **ResetAfterCompress(newTokens, msgCount)** — Called after context compression. Resets to locally-estimated counts.
+- **EstimateTotal(messages, model)** — Returns estimated total context size. Strategy varies by data source: API+completion+tool_delta, API+completion, restored-from-DB, or local-estimate-fallback.
+- **DetectTruncation(messages, model)** — Detects if messages were truncated (Ctrl+K / rewind) since last LLM call. Re-estimates if so.
+- **SaveState(saveFn)** — Persists token state to DB for next Run restoration.
+
+### CompressPipeline (`agent/compress_pipeline.go`)
+
+Encapsulates the compress→persist→cleanup pipeline that was duplicated across `runCompression`, `handleInputTooLong`, and `context_window_exceeded`.
+
+- **ApplyCompress(ctx, params)** → Executes: CM.Compress → AccumulateUsage → SyncMessages → EstimateTokens → TokenTracker.ResetAfterCompress → Persistence.RewriteAfterCompress → CleanOffload/MaskStores.
+- Returns `CompressPipelineResult{NewMessages, NewTokenCount, CompressOutput}`.
+
+### PersistenceBridge (`agent/persist_bridge.go`)
+
+Manages incremental session persistence. Replaces the inline `lastPersistedCount` field and scattered `session.AddMessage` calls.
+
+- **IncrementalPersist(messages)** — Persists messages after the watermark. Skips system messages, strips `<system-reminder>` tags.
+- **RewriteAfterCompress(sessionView, totalMsgCount)** — Clears session and re-adds compressed messages. Used after compression.
+- **MarkAllPersisted(count)** — Updates watermark without writing (for bg task notifications).
+- **ComputeEngineMessages(messages)** — Returns messages produced during this Run (for RunOutput.EngineMessages).
+- **IsPersisted(idx)** — Checks if a message at index has been persisted (for observation masking in-place updates).
+
+### Invariant Validation (`agent/runstate_invariant.go`)
+
+Debug-mode state consistency checker, called at key transition points:
+
+- **ValidateInvariants()** — Checks: (1) persistence watermark ≤ len(messages), (2) promptTokens > 0 iff hadLLMCall || restoredFromDB, (3) msgCountAtCall ≤ len(messages).
+- Called via `validateInvariantsAt(ctx, point)` at: post_llm_call, post_llm_call_input_too_long, post_compress, post_compress_window_exceeded, post_persist.
+
 ## AgentBackend
 
 The `AgentBackend` interface (`agent/backend.go`) abstracts where the agent loop runs:

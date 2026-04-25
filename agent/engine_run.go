@@ -447,29 +447,28 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		return nil, fmt.Errorf("input too long")
 	}
 
-	result, compressErr := cm.ManualCompress(ctx, s.messages, s.cfg.LLMClient, s.cfg.Model)
+	pipelineResult, compressErr := ApplyCompress(ctx, CompressPipelineParams{
+		CM:                cm,
+		Messages:          s.messages,
+		LLMClient:         s.cfg.LLMClient,
+		Model:             s.cfg.Model,
+		UseManual:         true,
+		TokenTracker:      s.tokenTracker,
+		Persistence:       s.persistence,
+		OffloadStore:      s.cfg.OffloadStore,
+		OffloadSessionKey: s.offloadSessionKey,
+		MaskStore:         s.cfg.MaskStore,
+		AccumulateUsage:   s.accumulateCompressUsage,
+		SyncMessages:      s.syncMessages,
+	})
 	if compressErr != nil {
 		log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
 		return nil, compressErr
 	}
-	s.accumulateCompressUsage(result)
-
-	s.messages = s.syncMessages(result.LLMView)
-	newCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
-	s.tokenTracker.ResetAfterCompress(int64(newCount), len(s.messages))
+	s.messages = pipelineResult.NewMessages
 	if s.autoNotify {
-		s.progressLines = append(s.progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newCount))
+		s.progressLines = append(s.progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", pipelineResult.NewTokenCount))
 		s.notifyProgress("")
-	}
-	if ok, _ := s.persistence.RewriteAfterCompress(result.SessionView, len(s.messages)); !ok {
-		log.Ctx(ctx).Warn("Force compression persistence failed, session may be inconsistent")
-	}
-	compressCutoff := time.Now()
-	if s.cfg.OffloadStore != nil {
-		s.cfg.OffloadStore.CleanOldEntries(s.offloadSessionKey, compressCutoff)
-	}
-	if s.cfg.MaskStore != nil {
-		s.cfg.MaskStore.CleanOldEntries(compressCutoff)
 	}
 
 	response, err := generateResponse(retryNotifyCtx, s.cfg.LLMClient, s.cfg.Model, s.messages, toolDefs, s.cfg.ThinkingMode, s.cfg.Stream, s.cfg.StreamContentFunc, s.cfg.StreamReasoningFunc)
@@ -575,17 +574,21 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 				if s.cfg.MemoryToolDefs != nil && s.cfg.MemoryToolExec != nil {
 					cm.SetMemoryTools(s.cfg.MemoryToolDefs, s.cfg.MemoryToolExec)
 				}
-				result, compressErr := cm.Compress(ctx, s.messages, s.cfg.LLMClient, s.cfg.Model)
+				pipelineResult, compressErr := ApplyCompress(ctx, CompressPipelineParams{
+					CM:              cm,
+					Messages:        s.messages,
+					LLMClient:       s.cfg.LLMClient,
+					Model:           s.cfg.Model,
+					TokenTracker:    s.tokenTracker,
+					Persistence:     s.persistence,
+					AccumulateUsage: s.accumulateCompressUsage,
+					SyncMessages:    s.syncMessages,
+					// No OffloadStore/MaskStore cleaning for context_window_exceeded
+				})
 				if compressErr != nil {
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced compression failed after context_window_exceeded")
 				} else {
-					s.accumulateCompressUsage(result)
-					s.messages = s.syncMessages(result.LLMView)
-					newCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
-					s.tokenTracker.ResetAfterCompress(int64(newCount), len(s.messages))
-					if ok, _ := s.persistence.RewriteAfterCompress(result.SessionView, len(s.messages)); !ok {
-						log.Ctx(ctx).Warn("Context window exceeded compression persistence failed, session may be inconsistent")
-					}
+					s.messages = pipelineResult.NewMessages
 					log.Ctx(ctx).Info("Forced compression completed after context_window_exceeded, retrying")
 					return nil, true // retry loop iteration
 				}
@@ -875,7 +878,19 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 		cm.SetMemoryTools(s.cfg.MemoryToolDefs, s.cfg.MemoryToolExec)
 	}
 
-	result, compressErr := cm.Compress(ctx, s.messages, s.cfg.LLMClient, s.cfg.Model)
+	pipelineResult, compressErr := ApplyCompress(ctx, CompressPipelineParams{
+		CM:                cm,
+		Messages:          s.messages,
+		LLMClient:         s.cfg.LLMClient,
+		Model:             s.cfg.Model,
+		TokenTracker:      s.tokenTracker,
+		Persistence:       s.persistence,
+		OffloadStore:      s.cfg.OffloadStore,
+		OffloadSessionKey: s.offloadSessionKey,
+		MaskStore:         s.cfg.MaskStore,
+		AccumulateUsage:   s.accumulateCompressUsage,
+		SyncMessages:      s.syncMessages,
+	})
 	if compressErr != nil {
 		log.Ctx(ctx).WithError(compressErr).Warn("Auto context compaction failed")
 		if s.structuredProgress != nil {
@@ -883,16 +898,10 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 		}
 		return
 	}
-	s.accumulateCompressUsage(result)
+	s.messages = pipelineResult.NewMessages
+	s.lastCompressIter = s.compressAttempts
 
 	oldTokenCount := totalTokens
-	s.messages = s.syncMessages(result.LLMView)
-	// Use the estimated token count of the compressed messages so that
-	// subsequent maybeCompress calls (in this Run and the next) don't fall
-	// back to the even-more-overestimated local counting path.
-	newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
-	s.tokenTracker.ResetAfterCompress(int64(newTokenCount), len(s.messages))
-	s.lastCompressIter = s.compressAttempts
 
 	// Emit PostCompact event (notification, non-blocking)
 	if s.cfg.HookManager != nil {
@@ -902,7 +911,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 				SenderID: s.cfg.OriginUserID, ChatID: s.cfg.ChatID,
 			},
 			Trigger:              "token_limit",
-			EstimatedTokensAfter: int64(newTokenCount),
+			EstimatedTokensAfter: pipelineResult.NewTokenCount,
 		})
 	}
 
@@ -913,7 +922,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	if s.autoNotify {
 		for i := len(s.progressLines) - 1; i >= 0; i-- {
 			if strings.Contains(s.progressLines[i], "正在压缩") {
-				s.progressLines[i] = fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, newTokenCount)
+				s.progressLines[i] = fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, pipelineResult.NewTokenCount)
 				break
 			}
 		}
@@ -921,41 +930,26 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	}
 
 	log.Ctx(ctx).WithFields(log.Fields{
-		"new_tokens": newTokenCount,
+		"new_tokens": pipelineResult.NewTokenCount,
 	}).Info("Auto context compaction completed")
 
 	GlobalMetrics.CompressEvents.Add(1)
 	GlobalMetrics.CompressTokensIn.Add(int64(oldTokenCount))
-	GlobalMetrics.CompressTokensOut.Add(int64(newTokenCount))
+	GlobalMetrics.CompressTokensOut.Add(pipelineResult.NewTokenCount)
 
 	if oldTokenCount > 0 {
-		reductionRate := 1.0 - float64(newTokenCount)/float64(oldTokenCount)
+		reductionRate := 1.0 - float64(pipelineResult.NewTokenCount)/float64(oldTokenCount)
 		if reductionRate < 0.10 {
 			log.Ctx(ctx).WithFields(log.Fields{
 				"old_tokens": oldTokenCount,
-				"new_tokens": newTokenCount,
+				"new_tokens": pipelineResult.NewTokenCount,
 				"reduction":  fmt.Sprintf("%.1f%%", reductionRate*100),
 			}).Warn("Compaction ineffective (reduction < 10%)")
 		}
 	}
 
-	// Persist compaction result to session
-	if ok, _ := s.persistence.RewriteAfterCompress(result.SessionView, len(s.messages)); ok {
-		log.Ctx(ctx).Info("Auto compaction persisted to session")
-		if hook := cm.SessionHook(); hook != nil {
-			hook.AfterPersist(ctx, s.cfg.Session, result)
-		}
-	} else {
-		log.Ctx(ctx).Warn("Auto compaction persistence failed, using in-memory result only")
-	}
-
-	// Clean offload and mask entries that were compressed away.
-	compressCutoff := time.Now()
-	if s.cfg.OffloadStore != nil {
-		s.cfg.OffloadStore.CleanOldEntries(s.offloadSessionKey, compressCutoff)
-	}
-	if s.cfg.MaskStore != nil {
-		s.cfg.MaskStore.CleanOldEntries(compressCutoff)
+	if hook := cm.SessionHook(); hook != nil {
+		hook.AfterPersist(ctx, s.cfg.Session, pipelineResult.CompressOutput)
 	}
 }
 

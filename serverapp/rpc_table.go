@@ -202,6 +202,7 @@ func registerLLMHandlers(t rpcTable, h *rpcContext) {
 			_, m, _, _ := backend.LLMFactory().GetLLM(bizID)
 			model = m
 		}
+		log.WithField("sender_id", bizID).WithField("model", model).Debug("RPC get_default_model")
 		return model
 	})
 	t["set_user_model"] = rpc1void(func(ctx context.Context, p struct {
@@ -268,7 +269,9 @@ func registerLLMHandlers(t rpcTable, h *rpcContext) {
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		return backend.LLMFactory().ListAllModelsForUser(rpcBizID(ctx)), nil
+		models := backend.LLMFactory().ListAllModelsForUser(rpcBizID(ctx))
+		log.WithField("count", len(models)).Debug("RPC list_all_models")
+		return models, nil
 	})
 	t["set_model_tiers"] = h.requireAdmin(rpc1void(func(ctx context.Context, p config.LLMConfig) error {
 		if backend.LLMFactory() == nil {
@@ -536,8 +539,10 @@ func registerSessionHandlers(t rpcTable, h *rpcContext) {
 		if p.Channel == "" {
 			p.Channel = "web"
 		}
-		if err := ownOrAdmin(ctx, p.ChatID); err != nil {
-			return false, err
+		// is_processing requires explicit chatID or admin.
+		// Unlike other handlers, empty chatID does NOT default to self.
+		if !isAdmin(rpcAuthID(ctx)) && p.ChatID != rpcBizID(ctx) {
+			return false, fmt.Errorf("access denied")
 		}
 		return backend.IsProcessing(p.Channel, p.ChatID), nil
 	})
@@ -751,6 +756,7 @@ func (h *rpcContext) updateSubscription(ctx context.Context, p struct {
 	p.Sub.SenderID = existing.SenderID
 	p.Sub.IsDefault = existing.IsDefault
 	if strings.HasSuffix(p.Sub.APIKey, "****") && len(p.Sub.APIKey) <= 20 {
+		log.WithField("sub_id", p.ID).Warn("[RPC] update_subscription: preserving existing API key (received masked)")
 		p.Sub.APIKey = existing.APIKey
 	}
 	if err := svc.Update(&p.Sub); err != nil {

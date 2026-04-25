@@ -138,6 +138,9 @@ func llmCallbacks(backend agent.AgentBackend) channel.LLMCallbacks {
 	return channel.LLMCallbacks{
 		LLMList: func(senderID string) ([]string, string) {
 			llmClient, currentModel, _, _ := backend.LLMFactory().GetLLM(senderID)
+			if llmClient == nil {
+				return nil, currentModel
+			}
 			return llmClient.ListModels(), currentModel
 		},
 		LLMSet: func(senderID, model string) error {
@@ -408,7 +411,14 @@ func buildFeishuSettingsCallbacks(cfg *config.Config, backend agent.AgentBackend
 			if err != nil || sub == nil {
 				return nil, err
 			}
-			ch := subToChannel(sub)
+			// Return raw APIKey (not masked) — this is used for editing,
+			// and matches the original master behavior.
+			ch := channel.Subscription{
+				ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
+				BaseURL: sub.BaseURL, APIKey: sub.APIKey,
+				Model: sub.Model, Active: sub.IsDefault,
+				MaxOutputTokens: sub.MaxOutputTokens, ThinkingMode: sub.ThinkingMode,
+			}
 			return &ch, nil
 		},
 		LLMAddSubscription: func(senderID string, sub *channel.Subscription) error {

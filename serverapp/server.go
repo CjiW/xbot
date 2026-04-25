@@ -1160,6 +1160,73 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, disp *channel.
 		}
 		return nil, nil
 
+	// --- Web user management (admin only) ---
+	case "create_web_user":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
+		var p struct {
+			Username string `json:"username"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		conn := backend.MultiSession().DB().Conn()
+		_, password, err := channel.CreateWebUser(conn, p.Username)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"password": password})
+
+	case "list_web_users":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
+		conn := backend.MultiSession().DB().Conn()
+		rows, err := conn.Query("SELECT id, username, created_at FROM web_users ORDER BY id")
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var users []map[string]any
+		for rows.Next() {
+			var id int
+			var username, createdAt string
+			if err := rows.Scan(&id, &username, &createdAt); err != nil {
+				continue
+			}
+			users = append(users, map[string]any{
+				"id":         id,
+				"username":   username,
+				"created_at": createdAt,
+			})
+		}
+		if users == nil {
+			users = []map[string]any{}
+		}
+		return json.Marshal(users)
+
+	case "delete_web_user":
+		if !isAdmin(senderID) {
+			return nil, fmt.Errorf("admin only")
+		}
+		var p struct {
+			Username string `json:"username"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		conn := backend.MultiSession().DB().Conn()
+		result, err := conn.Exec("DELETE FROM web_users WHERE username = ?", p.Username)
+		if err != nil {
+			return nil, err
+		}
+		n, _ := result.RowsAffected()
+		if n == 0 {
+			return nil, fmt.Errorf("user %q not found", p.Username)
+		}
+		return nil, nil
+
 	default:
 		return nil, fmt.Errorf("unknown RPC method: %s", method)
 	}

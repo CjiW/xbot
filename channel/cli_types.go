@@ -186,7 +186,7 @@ var cliCommands = []string{
 	"/cancel", "/channel", "/chat", "/clear", "/compact", "/context", "/exit",
 	"/help", "/model", "/models", "/new", "/quit", "/rewind", "/search",
 	"/sessions", "/settings", "/setup", "/ss", "/su", "/tasks", "/update",
-	"/usage",
+	"/usage", "/user",
 }
 
 // §19 长消息折叠阈值
@@ -553,6 +553,9 @@ type CLIChannelConfig struct {
 	GetActiveProgressFn  func(channelName, chatID string) *CLIProgressPayload                                                           // 获取目标 session 的活跃进度（session switch 恢复用）
 	ChannelConfigGetFn   func() (map[string]map[string]string, error)                                                                   // 获取频道配置（用于 /channel 面板）
 	ChannelConfigSetFn   func(channel string, values map[string]string) error                                                           // 保存频道配置（用于 /channel 面板）
+	CreateWebUserFn      func(username string) (password string, err error)                                                             // 创建 Web 用户（admin only，返回自动生成的密码）
+	ListWebUsersFn       func() ([]map[string]any, error)                                                                               // 列出所有 Web 用户
+	DeleteWebUserFn      func(username string) error                                                                                    // 删除 Web 用户（admin only）
 }
 
 type AgentPanelEntry struct {

@@ -811,6 +811,7 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/chats", wc.authMiddleware(wc.handleChats))
 	mux.HandleFunc("/api/chats/{chatID}/switch", wc.authMiddleware(wc.handleChatSwitch))
 	mux.HandleFunc("/api/chats/{chatID}", wc.authMiddleware(wc.handleChatDelete))
+	mux.HandleFunc("/api/context-info", wc.authMiddleware(wc.handleContextInfo))
 
 	// Static files
 	if wc.staticDir != "" {

@@ -81,10 +81,13 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 // handleHistoryGet returns the message history for the current user.
 func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, senderID string) {
 
+	// Use the currently active chatID (respects chat switching)
+	chatID := wc.getCurrentChatID(senderID)
+
 	// Find tenant ID for this web user
 	var tenantID int64
 	err := wc.db.QueryRow(
-		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", senderID,
+		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", chatID,
 	).Scan(&tenantID)
 	if err != nil {
 		// No tenant yet = no history
@@ -1489,6 +1492,69 @@ func (wc *WebChannel) handleChatDelete(w http.ResponseWriter, r *http.Request) {
 	wc.userCurrentChatMu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleContextInfo handles GET /api/context-info — returns structured token usage data.
+func (wc *WebChannel) handleContextInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	// Use the currently active chatID (respects chat switching)
+	chatID := wc.getCurrentChatID(senderID)
+
+	// Find tenant ID for this web user
+	var tenantID int64
+	err := wc.db.QueryRow(
+		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", chatID,
+	).Scan(&tenantID)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":            true,
+			"prompt_tokens": 0,
+			"max_tokens":    0,
+			"usage_pct":     0,
+			"source":        "none",
+		})
+		return
+	}
+
+	// Get persisted token state (from last LLM API response)
+	var promptTokens int64
+	wc.db.QueryRow(
+		"SELECT COALESCE(last_prompt_tokens, 0) FROM tenant_state WHERE tenant_id = ?",
+		tenantID,
+	).Scan(&promptTokens)
+
+	// Get max context tokens from user config
+	maxTokens := 0
+	if wc.callbacks.LLMGetMaxContext != nil {
+		maxTokens = wc.callbacks.LLMGetMaxContext(senderID)
+	}
+
+	usagePct := float64(0)
+	if maxTokens > 0 && promptTokens > 0 {
+		usagePct = float64(promptTokens) / float64(maxTokens) * 100
+	}
+
+	source := "none"
+	if promptTokens > 0 {
+		source = "api" // Always API since we persist from LLM responses
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":            true,
+		"prompt_tokens": promptTokens,
+		"max_tokens":    maxTokens,
+		"usage_pct":     usagePct,
+		"source":        source,
+	})
 }
 
 // getCurrentChatID returns the currently active chatID for a user.

@@ -322,6 +322,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [currentModel, setCurrentModel] = useState('')
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+  const [currentChatID, setCurrentChatID] = useState<string>('')
+  const [contextInfo, setContextInfo] = useState<{ prompt_tokens: number; max_tokens: number; usage_pct: number; source: string } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Array<{ id: number; role: string; snippet: string; created_at: string }>>([])
@@ -367,6 +369,152 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       })
       .catch(() => {})
   }, [])
+
+  const wsRef = useRef<WebSocket | null>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const reconnectDelayRef = useRef(1000)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const serverStopped = useRef(false)
+  const intentionalClose = useRef(false)
+
+  // --- Scroll management ---
+  const isNearBottom = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= 150
+  }, [])
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior })
+  }, [])
+
+  const handleContainerScroll = useCallback(() => {
+    setAutoScroll(isNearBottom())
+  }, [isNearBottom])
+
+  // Auto-scroll during streaming/progress updates — throttled to avoid layout thrashing.
+  // Only follows when user is already at the bottom (autoScroll=true).
+  const scrollRafRef = useRef<number>(0)
+  useEffect(() => {
+    if (!autoScroll) return
+    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
+    scrollRafRef.current = requestAnimationFrame(() => scrollToBottom('instant'))
+    return () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current) }
+  }, [messages, progress, autoScroll, scrollToBottom])
+
+  // --- Fetch context info ---
+  const fetchContextInfo = useCallback(() => {
+    fetch('/api/context-info')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          setContextInfo({
+            prompt_tokens: data.prompt_tokens || 0,
+            max_tokens: data.max_tokens || 0,
+            usage_pct: data.usage_pct || 0,
+            source: data.source || 'none',
+          })
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // --- Load history (extracted for reuse on chat switch) ---
+  const loadHistory = useCallback(() => {
+    fetch('/api/history')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok && data.messages) {
+          const hist: Message[] = data.messages
+            .filter((m: { role: string; content?: string; tool_calls?: string; detail?: string; display_only?: number }) => {
+              if (m.role === 'tool') return false
+              if (m.role === 'assistant' && m.tool_calls && !m.detail) return false
+              if (m.role === 'assistant' && m.display_only && !m.content && !m.detail) return false
+              return true
+            })
+            .map((m: { id: number; role: string; content: string; detail?: string; created_at?: string }) => {
+              const msg: Message = {
+                id: `hist-${m.id}`,
+                type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
+                content: m.content,
+                ts: m.created_at ? Math.floor(new Date(m.created_at).getTime() / 1000) : undefined,
+              }
+              if (m.detail) {
+                try {
+                  msg.iterationHistory = normalizeIterationHistory(JSON.parse(m.detail))
+                } catch { /* ignore */ }
+              }
+              return msg
+            })
+          setMessages(hist)
+          const isProcessing = data.processing === true
+          const lastIsUser = hist.length > 0 && hist[hist.length - 1].type === 'user'
+          if (isProcessing && lastIsUser) {
+            setLoading(true)
+          }
+          if (isProcessing && data.active_progress) {
+            const ap = data.active_progress
+            progressRef.current = {
+              phase: ap.phase || 'running',
+              iteration: ap.iteration || 0,
+              thinking: ap.thinking || '',
+              active_tools: (ap.active_tools || []).map((t: { name: string; label: string; status: string; summary: string }) => ({
+                name: t.name, label: t.label, status: t.status, summary: t.summary,
+              })),
+              completed_tools: (ap.completed_tools || []).map((t: { name: string; label: string; status: string; summary: string }) => ({
+                name: t.name, label: t.label, status: t.status, summary: t.summary,
+              })),
+            }
+            prevIterationRef.current = ap.iteration || 0
+            if (ap.thinking) {
+              reasoningRef.current = ap.thinking
+            }
+            setProgress(progressRef.current)
+            if (ap.stream_content) {
+              streamingContentRef.current = ap.stream_content
+              setMessages(prev => [...prev, {
+                id: '__streaming__',
+                type: 'assistant' as const,
+                content: ap.stream_content,
+              }])
+            }
+            if (ap.iteration_history && ap.iteration_history.length > 0) {
+              const restoredIterations: IterationSnapshot[] = ap.iteration_history.map(
+                (iter: { iteration: number; thinking?: string; reasoning?: string; completed_tools?: { name: string; label?: string; status: string; summary?: string }[] }) => ({
+                  iteration: iter.iteration,
+                  thinking: iter.thinking || '',
+                  reasoning: iter.reasoning || '',
+                  tools: (iter.completed_tools || []).map(t => ({
+                    name: t.name,
+                    label: t.label,
+                    status: t.status,
+                    summary: t.summary,
+                  })),
+                })
+              )
+              setLiveIterationsSync(restoredIterations)
+            }
+          }
+          if (data.last_seq) {
+            lastSeqRef.current = data.last_seq
+          }
+          setTimeout(() => {
+            scrollToBottom('instant')
+            requestAnimationFrame(() => scrollToBottom('instant'))
+          }, 100)
+        }
+      })
+      .catch(() => {})
+    fetchContextInfo()
+  }, [scrollToBottom, fetchContextInfo])
+
+  // --- Load history on mount ---
+  useEffect(() => {
+    loadHistory()
+  }, [loadHistory])
 
   // --- Search: debounce 300ms ---
   useEffect(() => {
@@ -417,147 +565,6 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [searchOpen])
-
-  const wsRef = useRef<WebSocket | null>(null)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const reconnectDelayRef = useRef(1000)
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const serverStopped = useRef(false)
-  const intentionalClose = useRef(false)
-
-
-  // --- Scroll management ---
-  const isNearBottom = useCallback(() => {
-    const el = messagesContainerRef.current
-    if (!el) return true
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= 150
-  }, [])
-
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
-    const el = messagesContainerRef.current
-    if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior })
-  }, [])
-
-  const handleContainerScroll = useCallback(() => {
-    setAutoScroll(isNearBottom())
-  }, [isNearBottom])
-
-  // Auto-scroll during streaming/progress updates — instant, no animation.
-  // Only follows when user is already at the bottom (autoScroll=true).
-  useEffect(() => {
-    if (autoScroll) {
-      scrollToBottom('instant')
-    }
-  }, [messages, progress, autoScroll, scrollToBottom])
-
-  // --- Load history on mount ---
-  useEffect(() => {
-    fetch('/api/history')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.ok && data.messages) {
-          const hist: Message[] = data.messages
-            .filter((m: { role: string; content?: string; tool_calls?: string; detail?: string; display_only?: number }) => {
-              if (m.role === 'tool') return false
-              // Skip intermediate assistant(tool_calls) messages that have no detail.
-              // These were saved for LLM context continuity; the final assistant message's
-              // detail field contains the full iteration history that covers these.
-              if (m.role === 'assistant' && m.tool_calls && !m.detail) return false
-              // Skip display-only assistant messages without content (cancelled placeholders)
-              // when there's no iteration history to show.
-              if (m.role === 'assistant' && m.display_only && !m.content && !m.detail) return false
-              return true
-            })
-            .map((m: { id: number; role: string; content: string; detail?: string; created_at?: string }) => {
-              const msg: Message = {
-                id: `hist-${m.id}`,
-                type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
-                content: m.content,
-                ts: m.created_at ? Math.floor(new Date(m.created_at).getTime() / 1000) : undefined,
-              }
-              // Parse iteration history from detail field
-              if (m.detail) {
-                try {
-                  msg.iterationHistory = normalizeIterationHistory(JSON.parse(m.detail))
-                } catch {
-                  // ignore parse errors
-                }
-              }
-              return msg
-            })
-          setMessages(hist)
-          // If the backend reports it's actively processing, set loading.
-          // Also check if the last message is from the user (legacy detection).
-          const isProcessing = data.processing === true
-          const lastIsUser = hist.length > 0 && hist[hist.length - 1].type === 'user'
-          if (isProcessing && lastIsUser) {
-            setLoading(true)
-          }
-          // Restore active progress from server (mid-session refresh recovery).
-          // This allows the frontend to immediately show iteration state and
-          // streaming content without waiting for WS reconnect.
-          if (isProcessing && data.active_progress) {
-            const ap = data.active_progress
-            progressRef.current = {
-              phase: ap.phase || 'running',
-              iteration: ap.iteration || 0,
-              thinking: ap.thinking || '',
-              active_tools: (ap.active_tools || []).map((t: { name: string; label: string; status: string; summary: string }) => ({
-                name: t.name, label: t.label, status: t.status, summary: t.summary,
-              })),
-              completed_tools: (ap.completed_tools || []).map((t: { name: string; label: string; status: string; summary: string }) => ({
-                name: t.name, label: t.label, status: t.status, summary: t.summary,
-              })),
-            }
-            prevIterationRef.current = ap.iteration || 0
-            if (ap.thinking) {
-              reasoningRef.current = ap.thinking
-            }
-            setProgress(progressRef.current)
-            // If there's stream content, create/update a streaming message
-            if (ap.stream_content) {
-              streamingContentRef.current = ap.stream_content
-              setMessages(prev => [...prev, {
-                id: '__streaming__',
-                type: 'assistant' as const,
-                content: ap.stream_content,
-              }])
-            }
-            // Restore iteration history (completed iterations 1..N-1)
-            if (ap.iteration_history && ap.iteration_history.length > 0) {
-              const restoredIterations: IterationSnapshot[] = ap.iteration_history.map(
-	                (iter: { iteration: number; thinking?: string; reasoning?: string; completed_tools?: { name: string; label?: string; status: string; summary?: string }[] }) => ({
-	                  iteration: iter.iteration,
-	                  thinking: iter.thinking || '',
-	                  reasoning: iter.reasoning || '',
-	                  tools: (iter.completed_tools || []).map(t => ({
-	                    name: t.name,
-	                    label: t.label,
-	                    status: t.status,
-	                    summary: t.summary,
-	                  })),
-	                })
-	              )
-              setLiveIterationsSync(restoredIterations)
-            }
-          }
-          // Store last_seq for WS sync handshake
-          if (data.last_seq) {
-            lastSeqRef.current = data.last_seq
-          }
-          // Scroll to bottom after initial history load.
-          // Two-phase: first instant scroll after DOM settles, then a re-scroll
-          // after one frame to catch any lazy-loaded content that expanded.
-          setTimeout(() => {
-            scrollToBottom('instant')
-            requestAnimationFrame(() => scrollToBottom('instant'))
-          }, 100)
-        }
-      })
-      .catch(() => {})
-  }, [scrollToBottom])
 
   // --- WebSocket connection with reconnect ---
   const connectWS = useCallback(() => {
@@ -747,6 +754,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 // Find or create a streaming placeholder message at the end
                 const last = prev[prev.length - 1]
                 if (last && last.id === '__streaming__') {
+                  // Only update if content actually changed to reduce re-renders
+                  if (last.content === content) return prev
                   return [...prev.slice(0, -1), { ...last, content: content }]
                 }
                 return [...prev, {
@@ -846,6 +855,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               }
               return [...filtered, msg]
             })
+            // Update context info after receiving final message
+            fetchContextInfo()
             break
           }
 
@@ -1126,6 +1137,19 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           }`}>
             {connected ? '● Connected' : reconnecting ? '◐ Connecting...' : '○ Disconnected'}
           </span>
+          {/* Context indicator */}
+          {contextInfo && contextInfo.max_tokens > 0 && (
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full ${
+                contextInfo.usage_pct > 80 ? 'bg-red-900/50 text-red-400' :
+                contextInfo.usage_pct > 50 ? 'bg-yellow-900/50 text-yellow-400' :
+                'bg-green-900/50 text-green-400'
+              }`}
+              title={`上下文使用: ${contextInfo.prompt_tokens.toLocaleString()} / ${contextInfo.max_tokens.toLocaleString()} tokens`}
+            >
+              📊 {(contextInfo.prompt_tokens / 1000).toFixed(1)}K/{(contextInfo.max_tokens / 1000).toFixed(0)}K ({contextInfo.usage_pct.toFixed(1)}%)
+            </span>
+          )}
           {/* Model selector */}
           {availableModels.length > 0 && (
             <div className="relative">
@@ -1248,9 +1272,31 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       {/* Main content: ChatSidebar + messages */}
       <div className="flex flex-1 min-h-0">
         <ChatSidebar
-          onSwitchChat={() => { setMessages([]) }}
-          onNewChat={() => { setMessages([]) }}
-          currentChatID=""
+          onSwitchChat={(chatID: string) => {
+            setCurrentChatID(chatID)
+            setMessages([])
+            setProgress(null)
+            setLiveIterationsSync([])
+            prevIterationRef.current = -1
+            progressRef.current = null
+            reasoningRef.current = ''
+            streamingContentRef.current = ''
+            setLoading(false)
+            // Reload history for the new chat after switch
+            setTimeout(() => loadHistory(), 100)
+          }}
+          onNewChat={() => {
+            setMessages([])
+            setProgress(null)
+            setLiveIterationsSync([])
+            prevIterationRef.current = -1
+            progressRef.current = null
+            reasoningRef.current = ''
+            streamingContentRef.current = ''
+            setLoading(false)
+            setContextInfo(null)
+          }}
+          currentChatID={currentChatID}
         />
         <div className="flex flex-col flex-1 min-w-0">
 

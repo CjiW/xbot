@@ -10,59 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-var cliUserScopedSettingKeys = map[string]struct{}{
-	"theme":                {},
-	"language":             {},
-	"context_mode":         {},
-	"max_iterations":       {},
-	"max_concurrency":      {},
-	"max_context_tokens":   {},
-	"enable_auto_compress": {},
-	"runner_server":        {},
-	"runner_token":         {},
-	"runner_workspace":     {},
-	// Tier model mappings are per-user preferences (each user picks their own
-	// vanguard/balance/swift models). Persisted to user_settings DB so they
-	// survive restart and work in remote mode.
-	"vanguard_model": {},
-	"balance_model":  {},
-	"swift_model":    {},
-}
-
-var cliGlobalScopedSettingKeys = map[string]struct{}{
-	"sandbox_mode":          {},
-	"compression_threshold": {},
-	"memory_provider":       {},
-	"tavily_api_key":        {},
-	"enable_stream":         {},
-	"enable_masking":        {},
-	"default_user":          {},
-	"privileged_user":       {},
-}
-
-// CLIRuntimeSettingKeys lists all setting keys that require runtime application
-// beyond DB persistence. Both serverapp and cmd/xbot-cli use this list to verify
-// every runtime-affecting key has a handler registered.
-//
-// To add a new runtime setting:
-//  1. Add the key here
-//  2. Add a handler to settingHandlerRegistry (serverapp) AND cliRuntimeHandlers (cmd/xbot-cli)
-//  3. That's it. The test TestAllRuntimeKeysHaveHandlers will catch omissions.
-var CLIRuntimeSettingKeys = []string{
-	"vanguard_model",
-	"balance_model",
-	"swift_model",
-	"sandbox_mode",
-	"compression_threshold",
-	"memory_provider",
-	"tavily_api_key",
-	"context_mode",
-	"max_iterations",
-	"max_concurrency",
-	"max_context_tokens",
-	"enable_auto_compress",
-}
-
 // ParseSettingBool parses a boolean setting value.
 // Accepts "true", "1", "yes" (case-insensitive) as true; everything else as false.
 // Shared between serverapp and cmd/xbot-cli for consistent behavior.
@@ -80,21 +27,6 @@ func ParseSettingInt(value string, fallback int) int {
 	return n
 }
 
-var cliActionSettingKeys = map[string]struct{}{
-	"subscription_manage": {},
-	"runner_panel":        {},
-	"danger_zone":         {},
-}
-
-var cliSubscriptionScopedSettingKeys = map[string]struct{}{
-	"llm_provider":      {},
-	"llm_api_key":       {},
-	"llm_base_url":      {},
-	"llm_model":         {},
-	"max_output_tokens": {},
-	"thinking_mode":     {},
-}
-
 // isMaskedAPIKey detects API keys that were masked by the server for safe transport.
 // Server masks keys as "<prefix>****" (e.g. "sk-a****"). Writing masked keys
 // back to storage would destroy the real key — this function prevents that.
@@ -102,42 +34,11 @@ func isMaskedAPIKey(key string) bool {
 	return strings.HasSuffix(key, "****") && len(key) <= 20
 }
 
-func isUserScopedSettingKey(key string) bool {
-	_, ok := cliUserScopedSettingKeys[key]
-	return ok
-}
-
-func IsGlobalScopedSettingKey(key string) bool {
-	_, ok := cliGlobalScopedSettingKeys[key]
-	return ok
-}
-
-func isActionSettingKey(key string) bool {
-	_, ok := cliActionSettingKeys[key]
-	return ok
-}
-
-func isSubscriptionScopedSettingKey(key string) bool {
-	_, ok := cliSubscriptionScopedSettingKeys[key]
-	return ok
-}
-
-func cliSettingScope(key string) string {
-	if isUserScopedSettingKey(key) {
-		return "user"
-	}
-	if IsGlobalScopedSettingKey(key) {
-		return "global"
-	}
-	if isSubscriptionScopedSettingKey(key) {
-		return "subscription"
-	}
-	if isActionSettingKey(key) {
-		return "action"
-	}
-	return "unknown"
-}
-
+// Private scope-check wrappers — delegate to the unified registry in setting_keys.go.
+func isUserScopedSettingKey(key string) bool         { return IsUserScopedSettingKey(key) }
+func isActionSettingKey(key string) bool             { return IsActionSettingKey(key) }
+func isSubscriptionScopedSettingKey(key string) bool { return IsSubscriptionScopedSettingKey(key) }
+func cliSettingScope(key string) string              { return SettingScopeOf(key) }
 func (m *cliModel) mergeCLISettingsValues() map[string]string {
 	values := make(map[string]string)
 	if m.channel == nil {

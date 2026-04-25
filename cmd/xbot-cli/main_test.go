@@ -857,3 +857,33 @@ func TestApplyCLISettingsToConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestIsCLISubscriptionSettingKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		// Positive cases: all 6 subscription-scoped keys
+		{"llm_provider", true},
+		{"llm_api_key", true},
+		{"llm_base_url", true},
+		{"llm_model", true},
+		{"max_output_tokens", true},
+		{"thinking_mode", true},
+		// Negative cases: non-subscription keys
+		{"theme", false},
+		{"sandbox_mode", false},
+		{"vanguard_model", false},
+		{"max_iterations", false},
+		{"", false},
+		{"random_key", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.key, func(t *testing.T) {
+			got := isCLISubscriptionSettingKey(tc.key)
+			if got != tc.want {
+				t.Errorf("isCLISubscriptionSettingKey(%q) = %v, want %v", tc.key, got, tc.want)
+			}
+		})
+	}
+}

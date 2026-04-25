@@ -114,37 +114,9 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyUp && msg.Mod == tea.ModShift:
-		// Shift+Up: recall queued message for editing / browse input history.
-		if m.panelMode == "" && m.textarea.Value() != "" {
-			return m, nil, true
-		}
-		if !m.viewport.AtBottom() {
-			return m, nil, true
-		}
-		// §Q 消息队列：typing 时 Shift+↑ 追回最后一条排队消息编辑
-		if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
-			if !m.queueEditing && m.textarea.Value() == "" {
-				// 追回最后一条排队消息
-				m.queueEditing = true
-				m.queueEditBuf = m.messageQueue[len(m.messageQueue)-1]
-				m.textarea.SetValue(m.queueEditBuf)
-				m.autoExpandInput()
-				return m, nil, true
-			}
-		}
-		if m.panelMode == "" && !m.typing {
-			// 空输入时浏览历史
-			if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
-				if m.inputHistoryIdx == -1 {
-					m.inputDraft = "" // 保存空草稿
-					m.inputHistoryIdx = 0
-				} else if m.inputHistoryIdx < len(m.inputHistory)-1 {
-					m.inputHistoryIdx++
-				}
-				m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
-				m.autoExpandInput()
-				return m, nil, true
-			}
+		model, cmd, handled := m.handleShiftUp()
+		if handled {
+			return model, cmd, true
 		}
 
 	case msg.Code == tea.KeyUp:
@@ -160,23 +132,9 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyDown && msg.Mod == tea.ModShift:
-		// Shift+Down: browse input history backwards.
-		if m.panelMode == "" && m.textarea.Value() != "" {
-			return m, nil, true
-		}
-		if !m.viewport.AtBottom() {
-			return m, nil, true
-		}
-		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
-			if m.inputHistoryIdx > 0 {
-				m.inputHistoryIdx--
-				m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
-			} else {
-				m.inputHistoryIdx = -1
-				m.textarea.SetValue(m.inputDraft)
-			}
-			m.autoExpandInput()
-			return m, nil, true
+		model, cmd, handled := m.handleShiftDown()
+		if handled {
+			return model, cmd, true
 		}
 
 	case msg.Code == tea.KeyDown:
@@ -1269,4 +1227,64 @@ func (m *cliModel) handleEnterKey() (tea.Model, []tea.Cmd, bool) {
 	// NOTE: tick chain is started by startAgentTurn() inside sendMessage().
 	// No need to emit tickCmd() here — doing so would create duplicate chains.
 	return m, cmds, true
+}
+
+// handleShiftUp handles Shift+Up for queue recall and input history browsing.
+func (m *cliModel) handleShiftUp() (tea.Model, []tea.Cmd, bool) {
+	// Shift+Up: recall queued message for editing / browse input history.
+	if m.panelMode == "" && m.textarea.Value() != "" {
+		return m, nil, true
+	}
+	if !m.viewport.AtBottom() {
+		return m, nil, true
+	}
+	// §Q 消息队列：typing 时 Shift+↑ 追回最后一条排队消息编辑
+	if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
+		if !m.queueEditing && m.textarea.Value() == "" {
+			// 追回最后一条排队消息
+			m.queueEditing = true
+			m.queueEditBuf = m.messageQueue[len(m.messageQueue)-1]
+			m.textarea.SetValue(m.queueEditBuf)
+			m.autoExpandInput()
+			return m, nil, true
+		}
+	}
+	if m.panelMode == "" && !m.typing {
+		// 空输入时浏览历史
+		if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
+			if m.inputHistoryIdx == -1 {
+				m.inputDraft = "" // 保存空草稿
+				m.inputHistoryIdx = 0
+			} else if m.inputHistoryIdx < len(m.inputHistory)-1 {
+				m.inputHistoryIdx++
+			}
+			m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+			m.autoExpandInput()
+			return m, nil, true
+		}
+	}
+	return m, nil, false
+}
+
+// handleShiftDown handles Shift+Down for reverse input history browsing.
+func (m *cliModel) handleShiftDown() (tea.Model, []tea.Cmd, bool) {
+	// Shift+Down: browse input history backwards.
+	if m.panelMode == "" && m.textarea.Value() != "" {
+		return m, nil, true
+	}
+	if !m.viewport.AtBottom() {
+		return m, nil, true
+	}
+	if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
+		if m.inputHistoryIdx > 0 {
+			m.inputHistoryIdx--
+			m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+		} else {
+			m.inputHistoryIdx = -1
+			m.textarea.SetValue(m.inputDraft)
+		}
+		m.autoExpandInput()
+		return m, nil, true
+	}
+	return m, nil, false
 }

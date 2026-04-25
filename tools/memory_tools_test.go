@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,14 +220,7 @@ func TestRecallMemorySearchTool_ResultFormatting(t *testing.T) {
 
 func TestLettaMemoryTools_IncludesRecall(t *testing.T) {
 	tools := LettaMemoryTools()
-	found := false
-	for _, tool := range tools {
-		if tool.Name() == "recall_memory_search" {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(tools, func(tool Tool) bool { return tool.Name() == "recall_memory_search" }) {
 		t.Error("LettaMemoryTools should include recall_memory_search")
 	}
 	// Should have 6 tools total

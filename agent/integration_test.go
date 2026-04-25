@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -626,14 +627,9 @@ func TestIntegration_ContextEdit_DeleteMessage(t *testing.T) {
 	// Use out.Messages (Run's internal messages) instead of external messages,
 	// because Run() may reallocate the slice via append, causing ContextEditor
 	// to modify a different slice than the external one.
-	found := false
-	for _, m := range out.Messages {
-		if strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "deleted") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(out.Messages, func(m llm.ChatMessage) bool {
+		return strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "deleted")
+	}) {
 		t.Error("expected to find a deleted message placeholder")
 	}
 }
@@ -695,14 +691,9 @@ func TestIntegration_ContextEdit_TruncateMessage(t *testing.T) {
 	}
 
 	// Check truncation happened (use out.Messages, not external messages)
-	found := false
-	for _, m := range out.Messages {
-		if strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "truncated") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(out.Messages, func(m llm.ChatMessage) bool {
+		return strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "truncated")
+	}) {
 		t.Error("expected to find a truncated message marker")
 	}
 }

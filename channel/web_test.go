@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -132,17 +133,13 @@ func TestRegisterAndLogin(t *testing.T) {
 
 	// Check cookie is set
 	cookies := resp3.Cookies()
-	found := false
-	for _, c := range cookies {
-		if c.Name == webSessionCookieName {
-			found = true
-			if !c.HttpOnly {
-				t.Error("cookie should be HttpOnly")
-			}
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(cookies, func(c *http.Cookie) bool { return c.Name == webSessionCookieName }) {
 		t.Error("session cookie not set")
+	}
+	for _, c := range cookies {
+		if c.Name == webSessionCookieName && !c.HttpOnly {
+			t.Error("cookie should be HttpOnly")
+		}
 	}
 
 	// Wrong password

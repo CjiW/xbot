@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -393,14 +394,7 @@ func TestRun_ProgressNotification(t *testing.T) {
 		t.Error("expected progress notifications")
 	}
 	// Should have at least the tool progress notification
-	found := false
-	for _, n := range notifications {
-		if strings.Contains(n, "Shell") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(notifications, func(n string) bool { return strings.Contains(n, "Shell") }) {
 		t.Errorf("no Shell tool notification found in: %v", notifications)
 	}
 }

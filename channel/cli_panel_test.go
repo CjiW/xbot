@@ -3,6 +3,7 @@ package channel
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -347,13 +348,7 @@ func TestOpenQuickSwitchWithEmptySubs(t *testing.T) {
 		t.Fatalf("expected mode=subscription, got %s", model.quickSwitchMode)
 	}
 
-	found := false
-	for _, s := range model.quickSwitchList {
-		if s.ID == "__add__" {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(model.quickSwitchList, func(s Subscription) bool { return s.ID == "__add__" }) {
 		t.Error("expected __add__ entry in quick switch list")
 	}
 }

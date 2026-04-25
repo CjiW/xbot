@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -217,13 +218,7 @@ func TestRegistry_GetToolSchemas_ExcludesCoreTools(t *testing.T) {
 			t.Error("Core tools should not appear in GetToolSchemas (they are always loaded)")
 		}
 	}
-	found := false
-	for _, s := range schemas {
-		if s.ToolName == "loadable_tool" {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(schemas, func(s ToolSchema) bool { return s.ToolName == "loadable_tool" }) {
 		t.Error("Non-core tool should appear in GetToolSchemas")
 	}
 }

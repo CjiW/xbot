@@ -370,6 +370,41 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       .catch(() => {})
   }, [])
 
+  const wsRef = useRef<WebSocket | null>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const reconnectDelayRef = useRef(1000)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const serverStopped = useRef(false)
+  const intentionalClose = useRef(false)
+
+  // --- Scroll management ---
+  const isNearBottom = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= 150
+  }, [])
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior })
+  }, [])
+
+  const handleContainerScroll = useCallback(() => {
+    setAutoScroll(isNearBottom())
+  }, [isNearBottom])
+
+  // Auto-scroll during streaming/progress updates — throttled to avoid layout thrashing.
+  // Only follows when user is already at the bottom (autoScroll=true).
+  const scrollRafRef = useRef<number>(0)
+  useEffect(() => {
+    if (!autoScroll) return
+    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
+    scrollRafRef.current = requestAnimationFrame(() => scrollToBottom('instant'))
+    return () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current) }
+  }, [messages, progress, autoScroll, scrollToBottom])
+
   // --- Fetch context info ---
   const fetchContextInfo = useCallback(() => {
     fetch('/api/context-info')
@@ -530,42 +565,6 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [searchOpen])
-
-  const wsRef = useRef<WebSocket | null>(null)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const reconnectDelayRef = useRef(1000)
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const serverStopped = useRef(false)
-  const intentionalClose = useRef(false)
-
-
-  // --- Scroll management ---
-  const isNearBottom = useCallback(() => {
-    const el = messagesContainerRef.current
-    if (!el) return true
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= 150
-  }, [])
-
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
-    const el = messagesContainerRef.current
-    if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior })
-  }, [])
-
-  const handleContainerScroll = useCallback(() => {
-    setAutoScroll(isNearBottom())
-  }, [isNearBottom])
-
-  // Auto-scroll during streaming/progress updates — throttled to avoid layout thrashing.
-  // Only follows when user is already at the bottom (autoScroll=true).
-  const scrollRafRef = useRef<number>(0)
-  useEffect(() => {
-    if (!autoScroll) return
-    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
-    scrollRafRef.current = requestAnimationFrame(() => scrollToBottom('instant'))
-    return () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current) }
-  }, [messages, progress, autoScroll, scrollToBottom])
 
   // --- WebSocket connection with reconnect ---
   const connectWS = useCallback(() => {

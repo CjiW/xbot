@@ -1296,14 +1296,14 @@ func (a *Agent) buildCLIProgressEventHandler(chatID, channel string) func(*Progr
 	log.WithFields(log.Fields{
 		"hasCliCh":       cliCh != nil,
 		"hasRemoteCLICh": remoteCLICh != nil,
-		"progressKey":    channel + ":" + chatID,
+		"progressKey":    sessionKey(channel, chatID),
 	}).Info("buildCLIProgressEventHandler: cli channel resolution")
 
 	if cliCh == nil && remoteCLICh == nil {
 		return nil
 	}
 
-	progressKey := channel + ":" + chatID
+	progressKey := sessionKey(channel, chatID)
 	return func(event *ProgressEvent) {
 		if event == nil || event.Structured == nil {
 			return
@@ -1511,7 +1511,7 @@ func (a *Agent) buildWebProgressEventHandler(chatID, channel string) func(*Progr
 		log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
 		return nil
 	}
-	progressKey := channel + ":" + chatID
+	progressKey := sessionKey(channel, chatID)
 	return func(event *ProgressEvent) {
 		if event == nil || event.Structured == nil {
 			return
@@ -1616,7 +1616,7 @@ func (a *Agent) buildStreamCallbacks(chatID, channel string) (streamContentFunc 
 
 	streamContentFunc = func(content string) {
 		if cliCh != nil {
-			cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, StreamContent: content})
+			cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: sessionKey(channel, chatID), StreamContent: content})
 		}
 		if remoteCLICh != nil {
 			remoteCLICh.SendStreamContent(chatID, content, "")
@@ -1627,7 +1627,7 @@ func (a *Agent) buildStreamCallbacks(chatID, channel string) (streamContentFunc 
 	}
 	streamReasoningFunc = func(content string) {
 		if cliCh != nil {
-			cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, ReasoningStreamContent: content})
+			cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: sessionKey(channel, chatID), ReasoningStreamContent: content})
 		}
 		if remoteCLICh != nil {
 			remoteCLICh.SendStreamContent(chatID, "", content)

@@ -1882,10 +1882,8 @@ func Run(args []string) error {
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {
 		feishuCh.SetCardBuilder(backend.GetCardBuilder())
-		if hook := backend.ToolHookChain().Get("approval"); hook != nil {
-			if ah, ok := hook.(*tools.ApprovalHook); ok {
-				feishuCh.SetApprovalHook(ah)
-			}
+		if state := backend.ApprovalState(); state != nil {
+			feishuCh.SetApprovalState(state)
 		}
 
 		// 传递 admin chatID 和 web DB（用于 admin 命令如 !webadd）

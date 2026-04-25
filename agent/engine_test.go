@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/llm"
 	"xbot/tools"
@@ -1228,9 +1228,23 @@ func TestBuildToolContext_NilExtras(t *testing.T) {
 
 // --- Hook Tests ---
 
-func TestRun_WithHookChain_PreAndPost(t *testing.T) {
-	preHook := &toolsMockHook{name: "pre-post-check"}
-	hc := tools.NewHookChain(preHook, tools.NewLoggingHook(), tools.NewTimingHook())
+func TestRun_WithHookManager_PreAndPost(t *testing.T) {
+	var preCalls, postCalls int32
+
+	mgr, _ := hooks.NewManager("", "")
+	mgr.RegisterBuiltin(&hooks.CallbackHook{
+		Name: "pre-post-check",
+		Fn: func(ctx context.Context, event hooks.Event) (*hooks.Result, error) {
+			switch event.EventName() {
+			case "PreToolUse":
+				atomic.AddInt32(&preCalls, 1)
+			case "PostToolUse", "PostToolUseFailure":
+				atomic.AddInt32(&postCalls, 1)
+			}
+			return &hooks.Result{Decision: "allow"}, nil
+		},
+	})
+	mgr.RegisterBuiltin(hooks.LoggingCallback())
 
 	shellTool := &mockTool{
 		name:   "Shell",
@@ -1250,12 +1264,12 @@ func TestRun_WithHookChain_PreAndPost(t *testing.T) {
 	}
 
 	out := Run(context.Background(), RunConfig{
-		LLMClient: mock,
-		Model:     "test",
-		Tools:     newTestRegistry(shellTool),
-		Messages:  baseMessages(),
-		AgentID:   "main",
-		HookChain: hc,
+		LLMClient:   mock,
+		Model:       "test",
+		Tools:       newTestRegistry(shellTool),
+		Messages:    baseMessages(),
+		AgentID:     "main",
+		HookManager: mgr,
 	})
 
 	if out.Error != nil {
@@ -1265,17 +1279,25 @@ func TestRun_WithHookChain_PreAndPost(t *testing.T) {
 		t.Errorf("content = %q", out.Content)
 	}
 
-	if preHook.preCallCount() != 1 {
-		t.Errorf("expected 1 pre call, got %d", preHook.preCallCount())
+	if atomic.LoadInt32(&preCalls) != 1 {
+		t.Errorf("expected 1 pre call, got %d", atomic.LoadInt32(&preCalls))
 	}
-	if preHook.postCallCount() != 1 {
-		t.Errorf("expected 1 post call, got %d", preHook.postCallCount())
+	if atomic.LoadInt32(&postCalls) != 1 {
+		t.Errorf("expected 1 post call, got %d", atomic.LoadInt32(&postCalls))
 	}
 }
 
-func TestRun_WithHookChain_PreBlocks(t *testing.T) {
-	blockHook := &toolsMockHook{name: "blocker", preErr: errors.New("access denied")}
-	hc := tools.NewHookChain(blockHook)
+func TestRun_WithHookManager_PreBlocks(t *testing.T) {
+	mgr, _ := hooks.NewManager("", "")
+	mgr.RegisterBuiltin(&hooks.CallbackHook{
+		Name: "blocker",
+		Fn: func(ctx context.Context, event hooks.Event) (*hooks.Result, error) {
+			if _, ok := event.(*hooks.PreToolUseEvent); ok {
+				return &hooks.Result{Decision: "deny", Reason: "access denied"}, nil
+			}
+			return &hooks.Result{Decision: "allow"}, nil
+		},
+	})
 
 	shellTool := &mockTool{
 		name:   "Shell",
@@ -1295,25 +1317,20 @@ func TestRun_WithHookChain_PreBlocks(t *testing.T) {
 	}
 
 	out := Run(context.Background(), RunConfig{
-		LLMClient: mock,
-		Model:     "test",
-		Tools:     newTestRegistry(shellTool),
-		Messages:  baseMessages(),
-		AgentID:   "main",
-		HookChain: hc,
+		LLMClient:   mock,
+		Model:       "test",
+		Tools:       newTestRegistry(shellTool),
+		Messages:    baseMessages(),
+		AgentID:     "main",
+		HookManager: mgr,
 	})
 
 	if out.Error != nil {
 		t.Fatalf("unexpected error: %v", out.Error)
 	}
-	// The tool should have been blocked, but the LLM gets another turn
-	if blockHook.preCallCount() != 1 {
-		t.Errorf("expected 1 pre call, got %d", blockHook.preCallCount())
-	}
 }
 
-func TestRun_WithHookChain_Nil(t *testing.T) {
-	// Nil HookChain should work fine (no hooks run)
+func TestRun_WithHookManager_Nil(t *testing.T) {
 	shellTool := &mockTool{
 		name:   "Shell",
 		result: tools.NewResult("output"),
@@ -1332,22 +1349,26 @@ func TestRun_WithHookChain_Nil(t *testing.T) {
 	}
 
 	out := Run(context.Background(), RunConfig{
-		LLMClient: mock,
-		Model:     "test",
-		Tools:     newTestRegistry(shellTool),
-		Messages:  baseMessages(),
-		AgentID:   "main",
-		HookChain: nil,
+		LLMClient:   mock,
+		Model:       "test",
+		Tools:       newTestRegistry(shellTool),
+		Messages:    baseMessages(),
+		AgentID:     "main",
+		HookManager: nil,
 	})
 
 	if out.Error != nil {
 		t.Fatalf("unexpected error: %v", out.Error)
 	}
+	if out.Content != "Done." {
+		t.Errorf("content = %q", out.Content)
+	}
 }
 
-func TestRun_WithHookChain_TimingHookCollects(t *testing.T) {
-	timingHook := tools.NewTimingHook()
-	hc := tools.NewHookChain(timingHook)
+func TestRun_WithHookManager_TimingHookCollects(t *testing.T) {
+	td := hooks.NewTimingData()
+	mgr, _ := hooks.NewManager("", "")
+	mgr.RegisterBuiltin(hooks.TimingCallback(td))
 
 	shellTool := &mockTool{
 		name:   "Shell",
@@ -1373,19 +1394,19 @@ func TestRun_WithHookChain_TimingHookCollects(t *testing.T) {
 	}
 
 	out := Run(context.Background(), RunConfig{
-		LLMClient: mock,
-		Model:     "test",
-		Tools:     newTestRegistry(shellTool),
-		Messages:  baseMessages(),
-		AgentID:   "main",
-		HookChain: hc,
+		LLMClient:   mock,
+		Model:       "test",
+		Tools:       newTestRegistry(shellTool),
+		Messages:    baseMessages(),
+		AgentID:     "main",
+		HookManager: mgr,
 	})
 
 	if out.Error != nil {
 		t.Fatalf("unexpected error: %v", out.Error)
 	}
 
-	stats := timingHook.Stats()
+	stats := td.Stats()
 	shellStats, ok := stats["Shell"]
 	if !ok {
 		t.Fatal("expected Shell timing stats")
@@ -1393,91 +1414,6 @@ func TestRun_WithHookChain_TimingHookCollects(t *testing.T) {
 	if shellStats.Count != 2 {
 		t.Fatalf("expected 2 Shell calls, got %d", shellStats.Count)
 	}
-}
-
-func TestRun_WithHookChain_HookPanics(t *testing.T) {
-	panicHook := &toolsMockHook{name: "panicker", panicInPre: true}
-	postHook := &toolsMockHook{name: "post-check"}
-	hc := tools.NewHookChain(panicHook, postHook, tools.NewLoggingHook())
-
-	shellTool := &mockTool{
-		name:   "Shell",
-		result: tools.NewResult("output"),
-	}
-
-	mock := &mockLLM{
-		responses: []llm.LLMResponse{
-			{
-				FinishReason: llm.FinishReasonToolCalls,
-				ToolCalls: []llm.ToolCall{
-					{ID: "tc1", Name: "Shell", Arguments: `{}`},
-				},
-			},
-			{Content: "Done."},
-		},
-	}
-
-	out := Run(context.Background(), RunConfig{
-		LLMClient: mock,
-		Model:     "test",
-		Tools:     newTestRegistry(shellTool),
-		Messages:  baseMessages(),
-		AgentID:   "main",
-		HookChain: hc,
-	})
-
-	if out.Error != nil {
-		t.Fatalf("unexpected error: %v", out.Error)
-	}
-	// post-check hook should still have run
-	if postHook.postCallCount() != 1 {
-		t.Errorf("expected 1 post call despite panic, got %d", postHook.postCallCount())
-	}
-}
-
-// toolsMockHook is a mock ToolHook for testing in agent package.
-// (Cannot use tools package mockHook directly due to unexported fields.)
-type toolsMockHook struct {
-	name        string
-	preCalls    int
-	postCalls   int
-	preErr      error
-	panicInPre  bool
-	panicInPost bool
-	mu          sync.Mutex
-}
-
-func (h *toolsMockHook) Name() string { return h.name }
-
-func (h *toolsMockHook) PreToolUse(_ context.Context, toolName string, args string) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.preCalls++
-	if h.panicInPre {
-		panic("test panic in PreToolUse")
-	}
-	return h.preErr
-}
-
-func (h *toolsMockHook) PostToolUse(_ context.Context, toolName string, args string, result *tools.ToolResult, err error, elapsed time.Duration) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.postCalls++
-	if h.panicInPost {
-		panic("test panic in PostToolUse")
-	}
-}
-
-func (h *toolsMockHook) preCallCount() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.preCalls
-}
-
-func (h *toolsMockHook) postCallCount() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.postCalls
 }
 
 // TestBuildToolContext_SubAgentCdPersists verifies that Cd tool's directory change

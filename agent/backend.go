@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/config"
@@ -38,7 +39,7 @@ type AgentBackend interface {
 
 	// IsRemote returns true if the backend is remote (server-side agent loop).
 	// Callers should use this to guard calls that return nil for RemoteBackend
-	// (SettingsService, LLMFactory, BgTaskManager, ToolHookChain, MultiSession).
+	// (SettingsService, LLMFactory, BgTaskManager, HookManager, MultiSession).
 	IsRemote() bool
 
 	// IsProcessing returns true if there is an active agent turn for the given channel/chatID.
@@ -70,8 +71,12 @@ type AgentBackend interface {
 	// BgTaskManager returns the background task manager.
 	BgTaskManager() *tools.BackgroundTaskManager
 
-	// ToolHookChain returns the tool hook chain.
-	ToolHookChain() *tools.HookChain
+	// HookManager returns the tool hook manager.
+	HookManager() *hooks.Manager
+
+	// ApprovalState returns the approval state for runtime handler injection.
+	// LocalBackend delegates to Agent; RemoteBackend returns nil.
+	ApprovalState() *hooks.ApprovalState
 
 	// SetDirectSend injects the direct send function (bypasses bus for message tracking).
 	SetDirectSend(fn func(bus.OutboundMessage) (string, error))

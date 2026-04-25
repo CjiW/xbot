@@ -296,9 +296,9 @@ func (m *cliModel) startAgentTurn() {
 	// NOTE: Callers are responsible for ensuring the tick chain starts:
 	//   - Inside Bubble Tea Update: return tickCmd() in the cmd chain
 	//   - Outside Update (callbacks): append to m.pendingCmds before calling
-	// Sync checkpoint hook turn index
-	if m.checkpointHook != nil {
-		m.checkpointHook.SetTurnIdx(int(m.agentTurnID))
+	// Sync checkpoint state turn index
+	if m.checkpointState != nil {
+		m.checkpointState.SetTurnIdx(int(m.agentTurnID))
 	}
 	// Clear rewind result when new turn starts
 	m.rewindResult = nil

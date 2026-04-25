@@ -14,7 +14,7 @@
 - `docs/agent/architecture.md` — package map, message flow, pipeline, key interfaces, concurrency
 - `docs/agent/agent.md` — agent loop, middleware, SubAgent, context management, masking
 - `docs/agent/llm.md` — LLM clients, streaming pitfalls, retry behavior
-- `docs/agent/tools.md` — built-in tools, hooks, sandbox types
+- `docs/agent/tools.md` — built-in tools, hooks system (agent/hooks/), sandbox types
 - `docs/agent/channel.md` — CLI, Feishu, Web, QQ adapters
 - `docs/agent/memory.md` — letta vs flat providers
 - `docs/agent/conventions.md` — error handling, logging, testing, naming, build
@@ -54,6 +54,13 @@
 - **SubAgent session view: viewport freeze on return** — when main session's turn ended while viewing agent session, PhaseDone is detected on return but assistant reply is missing. Tick handler with `busy=false` must check `!m.renderCacheValid` as fallback.
 - **SubAgent CWD inheritance**: `parent_cwd` metadata must fallback to `parentCtx.WorkingDir` when `parentCtx.CurrentDir` is empty (parent never Cd'd). `buildParentToolContext` must also fallback to `workspaceRoot`. Otherwise SubAgent starts in `a.workDir` (config value) instead of the parent's actual working directory.
 - **Group chat members must be pre-spawned**: `CreateChat(type="group")` must auto-spawn each member agent and register AgentChannel in Dispatcher. Otherwise `@mentions` in SendMessage fail with "unknown channel: agent:role/instance".
+
+### Hooks System
+- **Old `ToolHook`/`HookChain` is gone.** Replaced by `agent/hooks/Manager`. Any code referencing `HookChain`, `ToolHook`, `executeWithHooks` is stale.
+- **Manager.Emit() is shared across Agent + SubAgents** (same instance). Must be concurrency-safe.
+- **Decision priority**: `deny > defer > ask > allow`. Low-priority layer deny cannot be overridden by high-priority allow.
+- **Command hooks disabled by default** — requires `enable_command_hooks: true` in config.
+- **Max 10 handlers per event**, total timeout 60s. Excess silently truncated with warning log.
 
 ### Windows
 - `syscall.PROCESS_QUERY_LIMITED_INFORMATION` and `STILL_ACTIVE` not in Go stdlib — define as uint32 constants.

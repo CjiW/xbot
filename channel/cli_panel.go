@@ -429,8 +429,8 @@ func (m *cliModel) applyRewind() {
 		m.resetTokenStateFn()
 	}
 
-	// File rollback via checkpoint hook
-	if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
+	// File rollback via checkpoint state
+	if m.checkpointState != nil && m.checkpointState.Store() != nil {
 		// Compute the absolute turn index for the selected user message.
 		// m.agentTurnID is the turn index of the most recent user message.
 		// Each rewindItem corresponds to one user turn (startAgentTurn increments
@@ -443,7 +443,7 @@ func (m *cliModel) applyRewind() {
 		if absTurnIdx < 1 {
 			absTurnIdx = 1
 		}
-		m.rewindResult = m.checkpointHook.Store().Rewind(absTurnIdx)
+		m.rewindResult = m.checkpointState.Store().Rewind(absTurnIdx)
 	}
 
 	// Put selected message content into input box

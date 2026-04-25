@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xbot/agent"
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/config"
@@ -125,7 +126,8 @@ func (b fakeBackend) LLMFactory() *agent.LLMFactory                             
 func (b fakeBackend) SettingsService() *agent.SettingsService                            { return b.settingsSvc }
 func (b fakeBackend) MultiSession() *session.MultiTenantSession                          { return nil }
 func (b fakeBackend) BgTaskManager() *tools.BackgroundTaskManager                        { return nil }
-func (b fakeBackend) ToolHookChain() *tools.HookChain                                    { return nil }
+func (b fakeBackend) HookManager() *hooks.Manager                                        { return nil }
+func (b fakeBackend) ApprovalState() *hooks.ApprovalState                                { return nil }
 func (b fakeBackend) SetDirectSend(_ func(bus.OutboundMessage) (string, error))          {}
 func (b fakeBackend) SetChannelFinder(_ func(string) (channel.Channel, bool))            {}
 func (b fakeBackend) SetChannelPromptProviders(_ ...agent.ChannelPromptProvider)         {}

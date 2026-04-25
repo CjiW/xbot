@@ -25,7 +25,7 @@ oauth/            OAuth 2.0 server and providers
 User Message → Bus.Inbound → Dispatcher → Channel.HandleMessage
   → Agent.HandleMessage → chatProcessLoop → runState.Run()
     → Pipeline.Assemble(system prompt) → LLM.Generate()
-    → executeToolCalls() → toolExecutor() → HookChain → Tool.Execute()
+    → executeToolCalls() → toolExecutor() → hooks.Manager.Emit(PreToolUse) → Tool.Execute() → hooks.Manager.Emit(PostToolUse)
     → results → LLM.Generate() → ... (loop up to maxIterations)
     → ExtractFinalReply() → Bus.Outbound → Dispatcher → Channel.Send()
 ```
@@ -51,7 +51,7 @@ Registered in `agent/context.go:initPipelines()`.
 
 ```
 LLM Response → executeToolCalls() → execOne() → toolExecutor()
-  → HookChain.RunPre() → tool.Execute() → HookChain.RunPost()
+  → Manager.Emit(PreToolUse) → tool.Execute() → Manager.Emit(PostToolUse)
 ```
 
 Two modes (`agent/engine_run.go`):
@@ -64,7 +64,6 @@ Two modes (`agent/engine_run.go`):
 |-----------|------|---------|
 | `LLM` | `llm/interface.go` | Generate, ListModels, Stream |
 | `Tool` | `tools/interface.go` | Execute, Definition, Name |
-| `ToolHook` | `tools/hook.go` | PreToolUse, PostToolUse |
 | `Sandbox` | `tools/sandbox.go` | Run, Sync, Resolve |
 | `Channel` | `channel/channel.go` | Start, Stop, Send |
 | `MessageMiddleware` | `agent/middleware.go` | Process(mc) |

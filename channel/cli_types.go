@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/llm"
 	"xbot/storage/sqlite"
@@ -637,14 +638,14 @@ type CLIChannel struct {
 	runnerAutoConnect *runnerAutoConnectConfig // auto-connect as runner after TUI init
 
 	// Permission control
-	approvalHook *tools.ApprovalHook // injected to wire CLIApprovalHandler after program creation
+	approvalState *hooks.ApprovalState // injected to wire CLIApprovalHandler after program creation
 
 	// Pending injections (set before model exists, applied in Start)
 	pendingTrimHistoryFn     func(time.Time) error
 	pendingResetTokenStateFn func()
 	pendingHistory           []HistoryMessage    // remote mode: cached history before model is ready
 	pendingProgress          *CLIProgressPayload // remote mode: cached progress before model is ready
-	pendingCheckpointHook    *tools.CheckpointHook
+	pendingCheckpointState   *hooks.CheckpointState
 	pendingSendInboundFn     func(bus.InboundMessage) bool
 	// Pending remote bg task callbacks (set before model exists in remote mode)
 	pendingBgTaskCountFn   func() int

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/clipanic"
@@ -874,7 +875,8 @@ func (b *RemoteBackend) LLMFactory() *LLMFactory                     { return ni
 func (b *RemoteBackend) SettingsService() *SettingsService           { return nil }
 func (b *RemoteBackend) MultiSession() *session.MultiTenantSession   { return nil }
 func (b *RemoteBackend) BgTaskManager() *tools.BackgroundTaskManager { return nil }
-func (b *RemoteBackend) ToolHookChain() *tools.HookChain             { return nil }
+func (b *RemoteBackend) HookManager() *hooks.Manager                 { return nil }
+func (b *RemoteBackend) ApprovalState() *hooks.ApprovalState         { return nil }
 
 // ---------------------------------------------------------------------------
 // AgentBackend — init-only no-ops (server handles these)

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 )
 
 // contextKey is an unexported type for context keys defined in this package.
@@ -83,111 +81,6 @@ type ApprovalResult struct {
 type ApprovalHandler interface {
 	// RequestApproval sends an approval request and waits for the user's response.
 	RequestApproval(ctx context.Context, req ApprovalRequest) (ApprovalResult, error)
-}
-
-// ApprovalHook is a ToolHook that intercepts tool calls targeting privileged users.
-// It reads the user configuration from context (injected per-request by the engine),
-// so settings changes take effect immediately without restart.
-type ApprovalHook struct {
-	handlerMu sync.RWMutex
-	handler   ApprovalHandler
-	timeout   time.Duration
-}
-
-// NewApprovalHook creates an ApprovalHook with the given handler.
-// User configuration (defaultUser, privilegedUser) is read from context per-request.
-func NewApprovalHook(handler ApprovalHandler) *ApprovalHook {
-	return &ApprovalHook{
-		handler: handler,
-		timeout: 60 * time.Second,
-	}
-}
-
-func (h *ApprovalHook) Name() string { return "approval" }
-
-// SetHandler replaces the approval handler at runtime.
-// Called by channels (CLI, Web) after they have a UI program ready.
-func (h *ApprovalHook) SetHandler(handler ApprovalHandler) {
-	h.handlerMu.Lock()
-	h.handler = handler
-	h.handlerMu.Unlock()
-}
-
-func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args string) error {
-	// Read user configuration from context first (per-request, from user_settings)
-	defaultUser, privilegedUser := PermUsersFromContext(ctx)
-
-	// Feature not configured — ignore any run_as/reason (may be stale LLM context)
-	if defaultUser == "" && privilegedUser == "" {
-		return nil
-	}
-
-	runAs, reason := extractRunAsAndReason(args)
-	if (strings.TrimSpace(runAs) == "") != (strings.TrimSpace(reason) == "") {
-		return fmt.Errorf("run_as and reason must be provided together")
-	}
-
-	// No run_as specified — execute as current process user
-	if runAs == "" {
-		return nil
-	}
-
-	// Validate run_as against configured users
-	if runAs == defaultUser {
-		// Default user — no approval needed
-		return nil
-	}
-
-	if runAs != privilegedUser {
-		// Unknown user
-		users := defaultUser
-		if privilegedUser != "" {
-			if users != "" {
-				users += " or " + privilegedUser
-			} else {
-				users = privilegedUser
-			}
-		}
-		return fmt.Errorf("unknown run_as user %q: must be %q", runAs, users)
-	}
-
-	// Privileged user — request approval with timeout
-	h.handlerMu.RLock()
-	handler := h.handler
-	h.handlerMu.RUnlock()
-	if handler == nil {
-		// No approval handler registered — block execution
-		return fmt.Errorf("execution as %q requires approval but no approval handler is available (running in non-interactive channel?)", runAs)
-	}
-
-	approvalCtx, cancel := context.WithTimeout(ctx, h.timeout)
-	defer cancel()
-
-	req := ApprovalRequest{
-		ToolName: toolName,
-		ToolArgs: args,
-		RunAs:    runAs,
-	}
-
-	// Extract display details from args
-	populateApprovalDetails(&req, toolName, args)
-
-	result, err := handler.RequestApproval(approvalCtx, req)
-	if err != nil {
-		return fmt.Errorf("approval request failed: %w", err)
-	}
-	if !result.Approved {
-		if strings.TrimSpace(result.DenyReason) != "" {
-			return fmt.Errorf("user denied execution as %q: %s", runAs, strings.TrimSpace(result.DenyReason))
-		}
-		return fmt.Errorf("user denied execution as %q", runAs)
-	}
-
-	return nil
-}
-
-func (h *ApprovalHook) PostToolUse(ctx context.Context, toolName string, args string, result *ToolResult, err error, elapsed time.Duration) {
-	// No post-action needed
 }
 
 // extractRunAsAndReason parses the "run_as" and "reason" fields from JSON tool arguments.

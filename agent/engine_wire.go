@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"xbot/agent/hooks"
 	"xbot/bus"
 	channelpkg "xbot/channel"
 	"xbot/llm"
@@ -57,7 +58,7 @@ func applyUserMaxContext(base *ContextManagerConfig, userMaxCtx int) *ContextMan
 }
 
 // buildBaseRunConfig 构建主 Agent（main/cron）共用的基础 RunConfig。
-// 包含 LLM、身份、工作区、工具执行器、循环控制、HookChain 等公共字段。
+// 包含 LLM、身份、工作区、工具执行器、循环控制、HookManager 等公共字段。
 // 返回 (RunConfig, userMaxContext) — userMaxContext 为用户在 Settings 中设置的值，0 表示未设置。
 func (a *Agent) buildBaseRunConfig(
 	channel, chatID, senderID string,
@@ -130,8 +131,8 @@ func (a *Agent) buildBaseRunConfig(
 		// Letta 记忆字段
 		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
 
-		// HookChain — inherit from Agent
-		HookChain: a.hookChain,
+		// HookManager — inherit from Agent
+		HookManager: a.hookManager,
 
 		// SettingsSvc — inherit from Agent
 		SettingsSvc: a.settingsSvc,
@@ -952,8 +953,8 @@ func (a *Agent) buildSubAgentRunConfig(
 			return a.spawnSubAgent(ctx, msg)
 		}
 	}
-	// HookChain — SubAgent inherits parent Agent's hook chain
-	cfg.HookChain = a.hookChain
+	// HookManager — SubAgent inherits parent Agent's hook manager
+	cfg.HookManager = a.hookManager
 	cfg.SettingsSvc = a.settingsSvc
 	cfg.MessageSender = a.messageSender
 	cfg.RegisterAgentChannel = a.registerAgentChannel
@@ -1045,8 +1046,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 	// Pre-build Letta memory extras (involves GetOrCreateSession + LettaMemory lookup).
 	cfg.ToolContextExtras = a.buildToolContextExtras(channel, chatID)
 
-	// Inherit hook chain from Agent.
-	cfg.HookChain = a.hookChain
+	// Inherit hook manager from Agent.
+	cfg.HookManager = a.hookManager
 	cfg.SettingsSvc = a.settingsSvc
 
 	var sessionOnce sync.Once
@@ -1112,7 +1113,12 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
 		// 6-8. Execute with hooks (shared implementation — same as defaultToolExecutor)
-		return executeWithHooks(cfg.HookChain, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
+		return executeWithHooks(cfg.HookManager, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool, hooks.BasePayload{
+			SessionID: cfg.ChatID,
+			Channel:   cfg.Channel,
+			SenderID:  cfg.OriginUserID,
+			ChatID:    cfg.ChatID,
+		})
 	}
 }
 
@@ -1491,6 +1497,18 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		oneshotIA.mu.Unlock()
 	}
 
+	// Emit SubAgentStart event (notification, non-blocking)
+	if a.hookManager != nil {
+		a.hookManager.Emit(ctx, &hooks.SubAgentStartEvent{
+			BasePayload: hooks.BasePayload{
+				SessionID: originChatID, Channel: originChannel,
+				SenderID: originSender, ChatID: originChatID,
+			},
+			AgentType: roleName,
+			Task:      task,
+		})
+	}
+
 	out := Run(subCtx, cfg)
 
 	// Populate iteration history so inspect can show results after completion
@@ -1517,6 +1535,19 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		"tools":     out.ToolsUsed,
 		"has_error": out.Error != nil,
 	}).Info("SubAgent completed (via Run)")
+
+	// Emit SubAgentStop event (notification, non-blocking)
+	if a.hookManager != nil {
+		a.hookManager.Emit(ctx, &hooks.SubAgentStopEvent{
+			BasePayload: hooks.BasePayload{
+				SessionID: originChatID, Channel: originChannel,
+				SenderID: originSender, ChatID: originChatID,
+			},
+			AgentType: roleName,
+			Instance:  oneshotInstance,
+			Content:   out.Content,
+		})
+	}
 
 	if out.Error != nil {
 		content := out.Content

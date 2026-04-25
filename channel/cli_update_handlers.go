@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	log "xbot/logger"
 )
@@ -954,4 +955,308 @@ func maxTreeDepth(agents []CLISubAgent) int {
 		}
 	}
 	return max
+}
+
+// handleCtrlC handles the unified Ctrl+C keypress.
+// Returns (model, cmd, handled). If handled is true, Update() returns immediately.
+func (m *cliModel) handleCtrlC() (tea.Model, tea.Cmd, bool) {
+	// 1. 关闭所有 overlay/panel
+	if m.quickSwitchMode != "" {
+		m.quickSwitchMode = ""
+	}
+	if m.rewindMode {
+		m.closeRewindPanel()
+	}
+	if m.panelMode != "" {
+		m.closePanel()
+	}
+	if m.searchMode {
+		m.exitSearch()
+	}
+	// 2. 取消正在编辑的排队消息
+	if m.queueEditing {
+		m.queueEditing = false
+		m.queueEditBuf = ""
+		m.textarea.SetValue("")
+	}
+	// 3. 如果 agent 正在处理：
+	//    - 有排队消息：只清空队列，不发 cancel（需要再按一次 Ctrl+C 才 cancel）
+	//    - 无排队消息：发送 cancel
+	if m.typing {
+		queueLen := len(m.messageQueue)
+		if queueLen > 0 {
+			m.messageQueue = nil
+			m.showSystemMsg(fmt.Sprintf(m.locale.QueueCleared, queueLen), feedbackInfo)
+		} else {
+			m.sendCancel()
+		}
+		return m, nil, true
+	}
+	// 4. 空闲状态：清空输入
+	if m.textarea.Value() != "" {
+		m.textarea.Reset()
+		m.inputHistoryIdx = -1
+		m.inputDraft = ""
+		m.autoExpandInput()
+	}
+	return m, nil, true
+}
+
+// handleSwitchLLMDoneMsg processes async subscription switch completion.
+// Returns (model, cmd, handled).
+func (m *cliModel) handleSwitchLLMDoneMsg(done cliSwitchLLMDoneMsg) (tea.Model, tea.Cmd, bool) {
+	returnToSettings := m.quickSwitchReturnToPanel
+	m.quickSwitchReturnToPanel = false
+	if done.err != nil {
+		m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
+	} else if done.mgr != nil {
+		if err := done.mgr.SetDefault(done.subID, m.chatID); err != nil {
+			m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
+		} else {
+			m.subGeneration++ // subscription actually changed
+			m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
+			// Refresh values cache so GetCurrentValues() reflects the new subscription.
+			if m.channel != nil && m.channel.config.RefreshValuesCache != nil {
+				m.channel.config.RefreshValuesCache()
+			}
+		}
+		// Update cached model name directly from the switch result
+		// (same pattern as model-switch case — avoids stale config/RPC reads)
+		if done.subModel != "" {
+			m.cachedModelName = done.subModel
+			// Always refresh modelCount after subscription switch
+			// so status bar shows correct count and [Ctrl+N] hint.
+			if m.channel.modelLister != nil {
+				m.modelCount = len(m.channel.modelLister.ListModels())
+			}
+		} else {
+			// Subscription has no model configured — clear stale model name.
+			m.cachedModelName = ""
+		}
+	}
+	// If we came from the settings panel, re-open it so the user can continue editing
+	if returnToSettings {
+		m.openSettingsFromQuickSwitch()
+	}
+	// Drain pendingCmds (e.g. showTempStatus timer) — must not return nil cmds
+	var cmd tea.Cmd
+	if len(m.pendingCmds) > 0 {
+		cmd = tea.Batch(m.pendingCmds...)
+		m.pendingCmds = nil
+	}
+	return m, cmd, true
+}
+
+// handleTickMsg processes the fast tick (100ms) message.
+// Returns tea.Cmds to batch with other commands.
+func (m *cliModel) handleTickMsg() []tea.Cmd {
+	var cmds []tea.Cmd
+
+	// Always refresh bg task count on tick so status bar updates immediately
+	// when a bg task completes (even when no progress event is coming)
+	if m.bgTaskCountFn != nil {
+		prev := m.bgTaskCount
+		m.bgTaskCount = m.bgTaskCountFn()
+		// Force re-render when count changes (e.g. task killed in panel)
+		if m.bgTaskCount != prev {
+			m.renderCacheValid = false
+		}
+	}
+	// Refresh agent count on tick
+	if m.agentCountFn != nil {
+		prev := m.agentCount
+		m.agentCount = m.agentCountFn()
+		if m.agentCount != prev {
+			m.renderCacheValid = false
+		}
+	}
+	// Schedule next tick when agent is active or bg tasks are running.
+	// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
+	// (two tickCmd() would double the message count every 100ms → CPU explosion).
+	busy := m.typing || m.progress != nil
+	if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || (m.agentCountFn != nil && m.agentCount > 0) || busy {
+		m.fastTickActive = true
+		cmds = append(cmds, tickCmd())
+	} else if m.needFlushQueue && len(m.messageQueue) > 0 {
+		m.fastTickActive = true
+		// Pending queue flush — use fast tick so the queued message
+		// is sent promptly (not waiting 3s for idleTickCmd).
+		cmds = append(cmds, tickCmd())
+	} else {
+		// Transition to idle: start low-frequency tick for placeholder rotation
+		m.fastTickActive = false
+		cmds = append(cmds, idleTickCmd())
+	}
+	if busy {
+		// Advance spinner frame on every tick so the animation stays in sync
+		// with elapsed time display. Previously driven by a separate tickerTickMsg
+		// chain that could break when m.progress briefly went nil.
+		m.ticker.tick()
+		// Typewriter is now driven by its own typewriterTickMsg chain (50ms).
+		// Start the typewriter chain if there's stream or reasoning content to reveal.
+		hasStreamContent := m.progress != nil && m.progress.StreamContent != "" && m.twVisible < len([]rune(m.progress.StreamContent))
+		hasReasoningContent := m.progress != nil && m.progress.ReasoningStreamContent != "" && m.rwVisible < len([]rune(m.progress.ReasoningStreamContent))
+		if hasStreamContent || hasReasoningContent {
+			if !m.typewriterTickActive {
+				m.typewriterTickActive = true
+				cmds = append(cmds, typewriterTickCmd())
+			}
+		}
+		m.updateViewportContent()
+	} else {
+		// Not busy: stop typewriter chain
+		m.typewriterTickActive = false
+		// Still refresh viewport if messages were added/changed (e.g. assistant
+		// reply arrived via handleAgentMessage after PhaseDone cleared progress).
+		if !m.renderCacheValid {
+			m.updateViewportContent()
+		}
+	}
+
+	// §Q Flush message queue on tick (not in cliProgressMsg/cliOutboundMsg).
+	// This ensures the previous reply is already appended to m.messages before
+	// the queued message gets sent, producing correct order: msg1, reply1, msg2.
+	// Guard: only flush when NOT typing (previous turn fully complete).
+	if m.needFlushQueue && !m.typing && len(m.messageQueue) > 0 {
+		m.needFlushQueue = false
+		m.flushMessageQueue()
+		// Always return after flush so the tickCmd queued by startAgentTurn()
+		// (inside sendMessageFromQueue → sendMessage) gets picked up in cmds.
+		return cmds
+	}
+
+	return cmds
+}
+
+// handleIdleTick processes the low-frequency idle tick for placeholder rotation.
+func (m *cliModel) handleIdleTick() []tea.Cmd {
+	var cmds []tea.Cmd
+	// Low-frequency idle tick: rotate placeholder and keep alive
+	// Remote mode: keep retrying model name fetch until we get one.
+	if m.cachedModelName == "" && m.remoteMode {
+		m.refreshCachedModelName()
+	}
+	if !m.typing && m.progress == nil {
+		m.updatePlaceholder()
+		cmds = append(cmds, idleTickCmd())
+	} else if !m.fastTickActive {
+		// Self-healing: if fast tick chain broke but we're still busy
+		// (typing or progress active), re-arm fast tick.
+		m.fastTickActive = true
+		cmds = append(cmds, tickCmd())
+	}
+	return cmds
+}
+
+// handleTypewriterTick advances the typewriter effect and continues the chain.
+func (m *cliModel) handleTypewriterTick() []tea.Cmd {
+	var cmds []tea.Cmd
+	// Advance typewriter by 1 rune on its own 50ms cadence.
+	m.advanceTypewriter()
+	m.updateViewportContent()
+	// Continue chain if still behind on either stream or reasoning content
+	streamBehind := m.progress != nil && m.progress.StreamContent != "" && m.twVisible < len([]rune(m.progress.StreamContent))
+	reasoningBehind := m.progress != nil && m.progress.ReasoningStreamContent != "" && m.rwVisible < len([]rune(m.progress.ReasoningStreamContent))
+	if m.typewriterTickActive && (streamBehind || reasoningBehind) {
+		cmds = append(cmds, typewriterTickCmd())
+	} else {
+		m.typewriterTickActive = false
+	}
+	return cmds
+}
+
+// handleSplashDone processes the splash screen completion.
+func (m *cliModel) handleSplashDone() []tea.Cmd {
+	var cmds []tea.Cmd
+	// §14 启动画面结束确认
+	m.splashDone = true
+	// Remote mode: retry model name fetch — the initial call in cli.go:76
+	// may have failed if the WS RPC wasn't fully ready yet.
+	if m.cachedModelName == "" && m.remoteMode {
+		m.refreshCachedModelName()
+	}
+	if m.typing && m.progress != nil && !m.fastTickActive {
+		m.fastTickActive = true
+		cmds = append(cmds, tickCmd())
+	} else if !m.typing || m.progress == nil {
+		cmds = append(cmds, idleTickCmd())
+	}
+	return cmds
+}
+
+// handleHistoryLoad loads pre-converted history messages into the model.
+func (m *cliModel) handleHistoryLoad(msg cliHistoryLoadMsg) {
+	if len(msg.history) > 0 {
+		m.messages = append(m.messages, msg.history...)
+		m.invalidateAllCache(false)
+		m.updateViewportContent()
+		if m.streamingMsgIdx < 0 {
+			m.viewport.GotoBottom()
+		}
+		log.WithFields(log.Fields{"count": len(msg.history)}).Info("Applied history load in Update loop")
+	}
+}
+
+// handleApprovalRequest shows the approval dialog for a permission request.
+func (m *cliModel) handleApprovalRequest(msg approvalRequestMsg) (tea.Model, tea.Cmd) {
+	// Permission control: show approval dialog
+	m.approvalRequest = &msg.request
+	m.approvalResultCh = msg.resultCh
+	m.approvalCursor = 0 // default to Approve
+	m.approvalEnteringDeny = false
+	m.approvalDenyInput = textinput.New()
+	m.approvalDenyInput.Placeholder = "Optional deny reason for LLM"
+	m.approvalDenyInput.CharLimit = 200
+	m.approvalDenyInput.SetWidth(60)
+	m.panelMode = "approval"
+	m.renderCacheValid = false
+	return m, nil
+}
+
+// handleSearchKey processes key events when search mode is active.
+// Returns (model, cmd, handled). If handled is true, Update() returns immediately.
+func (m *cliModel) handleSearchKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	switch {
+	case m.searchEditing:
+		switch key.String() {
+		case "enter":
+			m.executeSearch()
+			return m, nil, true
+		case "esc":
+			m.exitSearch()
+			return m, nil, true
+		}
+		var cmd tea.Cmd
+		m.searchTI, cmd = m.searchTI.Update(key)
+		return m, cmd, true
+	default:
+		switch key.String() {
+		case "n":
+			if len(m.searchResults) > 0 {
+				next := m.searchIdx + 1
+				if next >= len(m.searchResults) {
+					next = 0
+				}
+				m.jumpToSearchResult(next)
+				m.renderCacheValid = false
+				m.updateViewportContent()
+			}
+			return m, nil, true
+		case "N":
+			if len(m.searchResults) > 0 {
+				prev := m.searchIdx - 1
+				if prev < 0 {
+					prev = len(m.searchResults) - 1
+				}
+				m.jumpToSearchResult(prev)
+				m.renderCacheValid = false
+				m.updateViewportContent()
+			}
+			return m, nil, true
+		case "esc":
+			m.exitSearch()
+			return m, nil, true
+		}
+		return m, nil, true
+	}
 }

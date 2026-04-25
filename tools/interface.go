@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"xbot/bus"
@@ -483,7 +484,7 @@ func (r *Registry) GetBuiltinToolNames() []string {
 		}
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 
@@ -522,7 +523,7 @@ func (r *Registry) GetToolGroupsForChannel(channel string) []ToolGroupEntry {
 	// 转换为切片并排序
 	result := make([]ToolGroupEntry, 0, len(groups))
 	for _, entry := range groups {
-		sort.Strings(entry.ToolNames)
+		slices.Sort(entry.ToolNames)
 		result = append(result, *entry)
 	}
 	sort.Slice(result, func(i, j int) bool {

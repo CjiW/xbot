@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	log "xbot/logger"
@@ -105,7 +105,7 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 		return ""
 	}
 
-	sort.Strings(orderedNames)
+	slices.Sort(orderedNames)
 
 	var sb strings.Builder
 	sb.WriteString("# Available Agents (SubAgents)\n\n")

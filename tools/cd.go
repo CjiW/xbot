@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -145,7 +146,7 @@ func detectProjectContext(dir string) string {
 	for _, m := range foundMarkers {
 		files = append(files, m.file)
 	}
-	sort.Strings(files)
+	slices.Sort(files)
 	seenFiles := make(map[string]bool)
 	var uniqueFiles []string
 	for _, f := range files {

@@ -12,7 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -258,7 +258,7 @@ func getLoginShellEnv() []string {
 		}
 	}
 
-	sort.Strings(env)
+	slices.Sort(env)
 	return env
 }
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"xbot/llm"
@@ -120,7 +120,7 @@ func listKnowledgeDir(dir string) (*ToolResult, error) {
 		return NewResult("(no knowledge files yet. Use knowledge_write to create some.)"), nil
 	}
 
-	sort.Strings(files)
+	slices.Sort(files)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Knowledge Files\n\nDirectory: %s\n\n", dir)
 	for _, f := range files {

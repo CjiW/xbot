@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"xbot/llm"
 )
@@ -232,7 +232,7 @@ func (t *GlobTool) executeLocal(ctx *ToolContext, pattern, path string) (*ToolRe
 		}
 	}
 
-	sort.Strings(matches)
+	slices.Sort(matches)
 
 	if len(matches) == 0 {
 		return NewResultWithTips("No files matched the pattern.", "检查 glob 模式语法，或尝试更宽泛的匹配（如 **/*.go）。"), nil

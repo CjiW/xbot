@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -362,7 +362,7 @@ func catalogFingerprint(catalog []tools.MCPServerCatalogEntry) string {
 			keys = append(keys, entry.Name+":"+toolName)
 		}
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	h := sha256.New()
 	for _, k := range keys {
 		h.Write([]byte(k))

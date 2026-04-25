@@ -240,14 +240,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		log.Ctx(ctx).WithError(err).Warn("Failed to count tokens for compression")
 	}
 
-	threshold := int(float64(a.getMaxContextTokens()) * a.contextManagerConfig.CompressionThreshold)
-	if err == nil && tokenCount < threshold {
-		return &bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: fmt.Sprintf("当前上下文 token 数 (%d) 未达到压缩阈值 (%d)，无需压缩。", tokenCount, threshold),
-		}, nil
-	}
+	// Always allow manual /compress regardless of threshold — user explicitly requested it.
 
 	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
 

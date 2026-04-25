@@ -73,8 +73,8 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		params.Reason = ""
 	}
 
-	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
-		return nil, fmt.Errorf("run_as and reason must be provided together")
+	if err := validateRunAsReason(params.RunAs, params.Reason); err != nil {
+		return nil, err
 	}
 
 	// 检测命令中的控制字符和 null bytes

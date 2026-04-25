@@ -70,8 +70,8 @@ func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 		params.Reason = ""
 	}
 
-	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
-		return nil, fmt.Errorf("run_as and reason must be provided together")
+	if err := validateRunAsReason(params.RunAs, params.Reason); err != nil {
+		return nil, err
 	}
 
 	if shouldUseSandbox(ctx) {
@@ -196,8 +196,8 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 		params.Reason = ""
 	}
 
-	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
-		return nil, fmt.Errorf("run_as and reason must be provided together")
+	if err := validateRunAsReason(params.RunAs, params.Reason); err != nil {
+		return nil, err
 	}
 
 	// When only end_line is specified, default start_line to 1

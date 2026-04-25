@@ -319,10 +319,56 @@ func updateActiveSubscription(backend agent.AgentBackend, cfg *config.Config, va
 		}
 	}
 
-	// Get current default subscription
+	// Get or create default subscription
 	sub, err := backend.GetDefaultSubscription(cliSenderID)
 	if err != nil || sub == nil {
-		return fmt.Errorf("no active subscription: %v", err)
+		// No subscription exists yet (first-time setup). Create one from the provided values.
+		provider := strings.TrimSpace(values["llm_provider"])
+		apiKey := strings.TrimSpace(values["llm_api_key"])
+		model := strings.TrimSpace(values["llm_model"])
+		baseURL := strings.TrimSpace(values["llm_base_url"])
+		if provider == "" {
+			provider = cfg.LLM.Provider
+		}
+		if baseURL == "" {
+			baseURL = cfg.LLM.BaseURL
+		}
+		if model == "" {
+			model = cfg.LLM.Model
+		}
+		newSub := channel.Subscription{
+			Name:            "default",
+			Provider:        provider,
+			APIKey:          apiKey,
+			Model:           model,
+			BaseURL:         baseURL,
+			MaxOutputTokens: cfg.LLM.MaxOutputTokens,
+			ThinkingMode:    cfg.LLM.ThinkingMode,
+			Active:          true,
+		}
+		if v, ok := values["max_output_tokens"]; ok {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				newSub.MaxOutputTokens = n
+			}
+		}
+		if v, ok := values["thinking_mode"]; ok {
+			newSub.ThinkingMode = v
+		}
+		if err := backend.AddSubscription(cliSenderID, newSub); err != nil {
+			return fmt.Errorf("create subscription: %w", err)
+		}
+		// Find the newly created subscription and set it as default
+		subs, listErr := backend.ListSubscriptions(cliSenderID)
+		if listErr != nil {
+			return fmt.Errorf("list subscriptions after create: %w", listErr)
+		}
+		for _, s := range subs {
+			if s.Provider == provider && s.Model == model && s.APIKey == apiKey {
+				_ = backend.SetDefaultSubscription(s.ID, "")
+				break
+			}
+		}
+		return nil
 	}
 
 	// Apply changed fields
@@ -388,7 +434,21 @@ func isFirstRun() bool {
 	if cfg == nil {
 		return true
 	}
-	return cfg.LLM.APIKey == ""
+	// Check config-level API key
+	if cfg.LLM.APIKey != "" {
+		return false
+	}
+	// Check environment variable override
+	if os.Getenv("LLM_API_KEY") != "" {
+		return false
+	}
+	// Check config.json subscriptions array (may have active sub with API key)
+	for _, sub := range cfg.Subscriptions {
+		if sub.Active && sub.APIKey != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // isLocalServer returns true if the server URL points to a local/loopback address.

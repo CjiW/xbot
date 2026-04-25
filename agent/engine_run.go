@@ -381,6 +381,20 @@ func (s *runState) assertSystemMessages(ctx context.Context) *RunOutput {
 	return nil
 }
 
+// updateTokenUsage syncs the current lastPromptTokens/lastCompletionTokens into
+// structuredProgress.TokenUsage so that progress events carry accurate token counts.
+func (s *runState) updateTokenUsage() {
+	if s.structuredProgress == nil {
+		return
+	}
+	s.structuredProgress.TokenUsage = &TokenUsageSnapshot{
+		PromptTokens:     s.lastPromptTokens,
+		CompletionTokens: s.lastCompletionTokens,
+		TotalTokens:      s.lastPromptTokens + s.lastCompletionTokens,
+		CacheHitTokens:   int64(s.localCachedTokens),
+	}
+}
+
 // callLLM invokes the LLM with the current messages, handling per-tenant
 // concurrency semaphore and input-too-long errors with forced compression.
 func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) (*llm.LLMResponse, error) {
@@ -402,6 +416,7 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
 		s.localCachedTokens += int(response.Usage.CacheHitTokens)
+		s.updateTokenUsage()
 	}
 
 	if err != nil && llm.IsInputTooLongError(err) && len(s.messages) > 3 {
@@ -483,6 +498,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
 		s.localCachedTokens += int(response.Usage.CacheHitTokens)
+		s.updateTokenUsage()
 	}
 	return response, err
 }
@@ -729,6 +745,26 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	promptBudget := maxTokens - maxOutputTokens
 	if promptBudget <= 0 {
 		promptBudget = maxTokens / 2 // fallback: reserve half for output
+	}
+
+	// Truncation detection: if messages were truncated (e.g. by Ctrl+K / rewind)
+	// since the last LLM call, the cached lastPromptTokens is stale because it
+	// was measured against a longer message list. Re-estimate from remaining messages.
+	if s.lastMsgCountAtLLMCall > 0 && len(s.messages) < s.lastMsgCountAtLLMCall {
+		prevTokens := s.lastPromptTokens
+		estimated, estErr := llm.CountMessagesTokens(s.messages, s.cfg.Model)
+		if estErr == nil && estimated > 0 {
+			s.lastPromptTokens = int64(estimated)
+			s.lastCompletionTokens = 0
+			s.lastMsgCountAtLLMCall = len(s.messages)
+			s.updateTokenUsage()
+			log.Ctx(ctx).WithFields(log.Fields{
+				"prev_prompt_tokens": prevTokens,
+				"new_prompt_tokens":  s.lastPromptTokens,
+				"prev_msg_count":     s.lastMsgCountAtLLMCall,
+				"new_msg_count":      len(s.messages),
+			}).Info("maybeCompress: truncated messages detected, re-estimated token count")
+		}
 	}
 
 	// Token estimation strategy:

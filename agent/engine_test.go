@@ -1530,3 +1530,53 @@ func TestRun_LLMSemaphore_NoLeakAcrossIterations(t *testing.T) {
 		t.Errorf("semaphore has %d slots still held, want 0", len(sem))
 	}
 }
+
+func TestRun_TokenUsageInProgress(t *testing.T) {
+	mock := &mockLLM{
+		responses: []llm.LLMResponse{
+			{
+				Content: "Hello!",
+				Usage: llm.TokenUsage{
+					PromptTokens:     1500,
+					CompletionTokens: 300,
+				},
+			},
+		},
+	}
+
+	var capturedSnapshot *TokenUsageSnapshot
+	out := Run(context.Background(), RunConfig{
+		LLMClient: mock,
+		Model:     "test-model",
+		Tools:     newTestRegistry(),
+		Messages:  baseMessages(),
+		AgentID:   "main",
+		Channel:   "test",
+		ChatID:    "chat1",
+		ProgressNotifier: func(_ []string) {
+			// Required for autoNotify=true so that progressFinalizer fires
+		},
+		ProgressEventHandler: func(evt *ProgressEvent) {
+			if evt.Structured != nil && evt.Structured.TokenUsage != nil {
+				// Capture the last snapshot (phase=done)
+				capturedSnapshot = evt.Structured.TokenUsage
+			}
+		},
+	})
+
+	if out.Error != nil {
+		t.Fatalf("unexpected error: %v", out.Error)
+	}
+	if capturedSnapshot == nil {
+		t.Fatal("TokenUsage snapshot was never set in progress events")
+	}
+	if capturedSnapshot.PromptTokens != 1500 {
+		t.Errorf("PromptTokens = %d, want 1500", capturedSnapshot.PromptTokens)
+	}
+	if capturedSnapshot.CompletionTokens != 300 {
+		t.Errorf("CompletionTokens = %d, want 300", capturedSnapshot.CompletionTokens)
+	}
+	if capturedSnapshot.TotalTokens != 1800 {
+		t.Errorf("TotalTokens = %d, want 1800", capturedSnapshot.TotalTokens)
+	}
+}

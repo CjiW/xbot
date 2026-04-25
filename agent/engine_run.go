@@ -420,6 +420,7 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 		// Push updated token usage to CLI immediately so the context
 		// bar reflects the latest prompt token count on each iteration.
 		s.notifyProgress("")
+		s.validateInvariantsAt(ctx, "post_llm_call")
 	}
 
 	if err != nil && llm.IsInputTooLongError(err) && len(s.messages) > 3 {
@@ -479,6 +480,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
 		s.localCachedTokens += int(response.Usage.CacheHitTokens)
 		s.updateTokenUsage()
+		s.validateInvariantsAt(ctx, "post_llm_call_input_too_long")
 	}
 	return response, err
 }
@@ -589,6 +591,7 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced compression failed after context_window_exceeded")
 				} else {
 					s.messages = pipelineResult.NewMessages
+					s.validateInvariantsAt(ctx, "post_compress_window_exceeded")
 					log.Ctx(ctx).Info("Forced compression completed after context_window_exceeded, retrying")
 					return nil, true // retry loop iteration
 				}
@@ -900,6 +903,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 	}
 	s.messages = pipelineResult.NewMessages
 	s.lastCompressIter = s.compressAttempts
+	s.validateInvariantsAt(ctx, "post_compress")
 
 	oldTokenCount := totalTokens
 
@@ -1404,6 +1408,7 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 
 	// --- Incremental session persistence ---
 	s.persistence.IncrementalPersist(s.messages)
+	s.validateInvariantsAt(ctx, "post_persist")
 
 	// --- Background notification draining (bg tasks + bg subagents) ---
 	if s.cfg.DrainBgNotifications != nil {

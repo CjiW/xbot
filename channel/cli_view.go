@@ -854,6 +854,12 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		ctxBar = s.TokenUsage.Render(formatTokenCount(tu))
 	}
 
+	// Queue indicator (persistent during typing, not just temp status)
+	if len(m.messageQueue) > 0 {
+		sb.WriteString(" · ")
+		sb.WriteString(fmt.Sprintf(m.locale.QueuePending, len(m.messageQueue)))
+	}
+
 	leftText := sb.String()
 	if ctxBar != "" {
 		return padBetween(leftText, ctxBar, m.width)

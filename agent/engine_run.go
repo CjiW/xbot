@@ -150,6 +150,18 @@ func (s *runState) initProgress() {
 			ActiveTools:    nil,
 			CompletedTools: nil,
 		}
+		// Seed token usage from DB-restored values so the first progress
+		// event carries real data instead of nil. Without this, the CLI
+		// context bar shows nothing (or estimated values from maybeCompress)
+		// until the first callLLM completes.
+		if s.lastPromptTokens > 0 {
+			s.structuredProgress.TokenUsage = &TokenUsageSnapshot{
+				PromptTokens:     s.lastPromptTokens,
+				CompletionTokens: s.lastCompletionTokens,
+				TotalTokens:      s.lastPromptTokens + s.lastCompletionTokens,
+				MaxOutputTokens:  int64(s.cfg.MaxOutputTokens),
+			}
+		}
 	}
 
 	copyLines := func(lines []string) []string {

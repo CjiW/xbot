@@ -23,6 +23,11 @@ import (
 	"xbot/tools"
 )
 
+// sessKey builds the canonical session key from channel and chatID.
+func sessKey(channel, chatID string) string {
+	return channel + ":" + chatID
+}
+
 // MultiTenantOption 配置选项
 type MultiTenantOption func(*MultiTenantSession)
 
@@ -265,7 +270,7 @@ func (m *MultiTenantSession) GetAllUserTokenUsage() ([]sqlite.UserTokenUsage, er
 func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*TenantSession, error) {
 	// Cache key: channel:chat_id (NOT senderID)
 	// Per-user human block is handled dynamically via Recall/Memorize with senderID parameter
-	key := channel + ":" + chatID
+	key := sessKey(channel, chatID)
 
 	// Fast path: check cache with read lock
 	m.mu.RLock()
@@ -295,7 +300,7 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 	}
 
 	// 创建会话 MCP 管理器（用户作用域由 ConfigureSessionMCP 在消息处理时注入）
-	sessionKey := channel + ":" + chatID
+	sessionKey := sessKey(channel, chatID)
 	mcpManager := tools.NewSessionMCPManager(sessionKey, "", m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
 
 	// Letta 模式：创建 LettaMemory（userID 通过 context 传递，不存储在结构体中）
@@ -676,7 +681,7 @@ func (m *MultiTenantSession) cleanupInactiveResources() {
 // their lifecycle to prevent stale data leaking into future sessions with the
 // same role/instance key.
 func (m *MultiTenantSession) DestroySession(channel, chatID string) error {
-	key := channel + ":" + chatID
+	key := sessKey(channel, chatID)
 
 	m.mu.Lock()
 	sess, ok := m.tenantCache[key]
@@ -760,7 +765,7 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 	case "session":
 		appendErr("session", m.sessionSvc.Clear(tenantID))
 		// Evict cached session so next request loads fresh state
-		sessionKey := channel + ":" + chatID
+		sessionKey := sessKey(channel, chatID)
 		m.mu.Lock()
 		if sess, ok := m.tenantCache[sessionKey]; ok {
 			sess.Close()
@@ -776,7 +781,7 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 	case "core_all":
 		appendErr("core_all", m.coreSvc.ClearAllBlocks(tenantID, userID))
 		// Evict cached session to reset in-memory core memory references
-		sessionKey := channel + ":" + chatID
+		sessionKey := sessKey(channel, chatID)
 		m.mu.Lock()
 		if sess, ok := m.tenantCache[sessionKey]; ok {
 			sess.Close()
@@ -801,7 +806,7 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 			appendErr("archival", m.archivalSvc.ClearAll(ctx, tenantID))
 		}
 		// Evict session from cache to reset in-memory state
-		sessionKey := channel + ":" + chatID
+		sessionKey := sessKey(channel, chatID)
 		m.mu.Lock()
 		if sess, ok := m.tenantCache[sessionKey]; ok {
 			sess.Close()

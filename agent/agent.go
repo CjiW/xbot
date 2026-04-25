@@ -939,12 +939,6 @@ func (a *Agent) getGlobalSem() chan struct{} {
 	return a.globalSem
 }
 
-func (a *Agent) getMaxContextTokens() int {
-	a.contextManagerMu.RLock()
-	defer a.contextManagerMu.RUnlock()
-	return a.contextManagerConfig.MaxContextTokens
-}
-
 // SetSandbox replaces the sandbox instance and mode at runtime (e.g. when user
 // switches from docker to none in the settings panel).
 func (a *Agent) SetSandbox(sb tools.Sandbox, mode string) {

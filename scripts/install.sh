@@ -60,10 +60,11 @@ ask_mode() {
         esac
         return
     fi
-    # When piped (curl | bash), stdin is not a terminal.
-    # Default to standalone in that case.
-    if [ ! -t 0 ]; then
-        info "Non-interactive mode (stdin is pipe). Defaulting to standalone."
+    # When piped (curl | bash), stdin is not a terminal but the user may still
+    # be at an interactive shell. Try /dev/tty first — it bypasses the pipe
+    # and connects directly to the user's terminal.
+    if [ ! -e /dev/tty ]; then
+        info "Non-interactive mode (no /dev/tty). Defaulting to standalone."
         info "Use MODE=server-client or run interactively to change."
         echo "standalone"
         return
@@ -401,8 +402,8 @@ main() {
     MODE=$(ask_mode)
     TOKEN=$(random_token)
     PORT="$DEFAULT_PORT"
-    if [ "$MODE" = "server-client" ] && [ -z "${NONINTERACTIVE:-}" ]; then
-        printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: " >&2
+    if [ "$MODE" = "server-client" ] && [ -z "${NONINTERACTIVE:-}" ] && [ -e /dev/tty ]; then
+        printf "Server port (HTTP + WebSocket + Web UI) [${DEFAULT_PORT}]: "
         read -r input_port </dev/tty
         PORT="${input_port:-$DEFAULT_PORT}"
     fi

@@ -608,6 +608,16 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 	if c.config.UsageQuery != nil {
 		c.model.usageQueryFn = c.config.UsageQuery
 	}
+	// Wire web user management callbacks
+	if c.config.CreateWebUserFn != nil {
+		c.model.createWebUserFn = c.config.CreateWebUserFn
+	}
+	if c.config.ListWebUsersFn != nil {
+		c.model.listWebUsersFn = c.config.ListWebUsersFn
+	}
+	if c.config.DeleteWebUserFn != nil {
+		c.model.deleteWebUserFn = c.config.DeleteWebUserFn
+	}
 }
 
 // CheckUpdateAsync starts a background goroutine to check for updates.

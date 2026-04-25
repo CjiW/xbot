@@ -931,3 +931,95 @@ func fmtTokens(n int64) string {
 	}
 	return fmt.Sprintf("%d", n)
 }
+
+// handleUserCommand manages web users from TUI.
+// Usage:
+//
+//	/user add <username>  — create a web user, returns auto-generated password
+//	/user list            — list all web users
+//	/user del <username>  — delete a web user
+func (m *cliModel) handleUserCommand(arg string) {
+	// All subcommands require admin (checked server-side via RPC or DB),
+	// but also check locally if functions are available.
+	if m.createWebUserFn == nil && m.listWebUsersFn == nil {
+		m.showSystemMsg("Web user management not available (server-client mode or web not configured)", feedbackWarning)
+		return
+	}
+
+	arg = strings.TrimSpace(arg)
+	if arg == "" || arg == "list" || arg == "ls" {
+		m.handleUserList()
+		return
+	}
+
+	parts := strings.Fields(arg)
+	if len(parts) < 2 {
+		m.showSystemMsg("Usage: /user add <username> | /user list | /user del <username>", feedbackInfo)
+		return
+	}
+
+	subcmd := parts[0]
+	username := parts[1]
+
+	switch subcmd {
+	case "add", "create":
+		if m.createWebUserFn == nil {
+			m.showSystemMsg("Create web user not available", feedbackWarning)
+			return
+		}
+		password, err := m.createWebUserFn(username)
+		if err != nil {
+			m.showSystemMsg(fmt.Sprintf("❌ Failed to create user: %v", err), feedbackError)
+			return
+		}
+		m.showSystemMsg(fmt.Sprintf("✅ Web user created!\n\n| | |\n|---|---|\n| **Username** | `%s` |\n| **Password** | `%s` |\n\n⚠️ Save the password — it won't be shown again.", username, password), feedbackInfo)
+
+	case "del", "delete", "rm", "remove":
+		if m.deleteWebUserFn == nil {
+			m.showSystemMsg("Delete web user not available", feedbackWarning)
+			return
+		}
+		if err := m.deleteWebUserFn(username); err != nil {
+			m.showSystemMsg(fmt.Sprintf("❌ Failed to delete user: %v", err), feedbackError)
+			return
+		}
+		m.showSystemMsg(fmt.Sprintf("✅ Web user `%s` deleted", username), feedbackInfo)
+
+	default:
+		m.showSystemMsg("Usage: /user add <username> | /user list | /user del <username>", feedbackInfo)
+	}
+}
+
+// handleUserList displays all web users in a table.
+func (m *cliModel) handleUserList() {
+	if m.listWebUsersFn == nil {
+		m.showSystemMsg("List web users not available", feedbackWarning)
+		return
+	}
+	users, err := m.listWebUsersFn()
+	if err != nil {
+		m.showSystemMsg(fmt.Sprintf("❌ Failed to list users: %v", err), feedbackError)
+		return
+	}
+	if len(users) == 0 {
+		m.showSystemMsg("No web users found. Use `/user add <username>` to create one.", feedbackInfo)
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Web Users\n\n")
+	sb.WriteString("| # | Username | Created |\n|---|---|---|\n")
+	for i, u := range users {
+		username, _ := u["username"].(string)
+		createdAt, _ := u["created_at"].(string)
+		if createdAt != "" {
+			// Trim to date+hour
+			if t, err := time.Parse("2006-01-02T15:04:05Z07:00", createdAt); err == nil {
+				createdAt = t.Format("2006-01-02 15:04")
+			}
+		}
+		fmt.Fprintf(&sb, "| %d | `%s` | %s |\n", i+1, username, createdAt)
+	}
+	sb.WriteString("\n`/user add <name>` to create · `/user del <name>` to delete")
+	m.showSystemMsg(sb.String(), feedbackInfo)
+}

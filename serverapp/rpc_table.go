@@ -614,6 +614,55 @@ func buildRPCTable(cfg *config.Config, backend agent.AgentBackend, disp *channel
 		return nil, nil
 	}))
 
+	// ── Web user management (admin only) ──
+	t["create_web_user"] = h.requireAdmin(rpc1(func(p struct {
+		Username string `json:"username"`
+	}) (interface{}, error) {
+		conn := backend.MultiSession().DB().Conn()
+		_, password, err := channel.CreateWebUser(conn, p.Username)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"password": password}, nil
+	}))
+	t["list_web_users"] = h.requireAdmin(rpc0err(func() (interface{}, error) {
+		conn := backend.MultiSession().DB().Conn()
+		rows, err := conn.Query("SELECT id, username, created_at FROM web_users ORDER BY id")
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var users []map[string]any
+		for rows.Next() {
+			var id int
+			var username, createdAt string
+			if err := rows.Scan(&id, &username, &createdAt); err != nil {
+				continue
+			}
+			users = append(users, map[string]any{
+				"id": id, "username": username, "created_at": createdAt,
+			})
+		}
+		if users == nil {
+			users = []map[string]any{}
+		}
+		return users, nil
+	}))
+	t["delete_web_user"] = h.requireAdmin(rpc1void(func(p struct {
+		Username string `json:"username"`
+	}) error {
+		conn := backend.MultiSession().DB().Conn()
+		result, err := conn.Exec("DELETE FROM web_users WHERE username = ?", p.Username)
+		if err != nil {
+			return err
+		}
+		n, _ := result.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("user %q not found", p.Username)
+		}
+		return nil
+	}))
+
 	return t
 }
 

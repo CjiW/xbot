@@ -400,6 +400,11 @@ type cliModel struct {
 	// --- Usage query ---
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
 
+	// --- Web user management (admin only) ---
+	createWebUserFn func(username string) (password string, err error)
+	listWebUsersFn  func() ([]map[string]any, error)
+	deleteWebUserFn func(username string) error
+
 	// --- Progress ---
 	progress             *CLIProgressPayload
 	iterationHistory     []cliIterationSnapshot // 已完成迭代快照

@@ -1120,6 +1120,85 @@ func main() {
 			}
 			return app.backend.SetChannelConfig(channelName, values)
 		},
+		CreateWebUserFn: func(username string) (string, error) {
+			if app.backend == nil {
+				return "", fmt.Errorf("agent not initialized")
+			}
+			if app.backend.IsRemote() {
+				result, err := app.backend.CallRPC("create_web_user", map[string]string{"username": username})
+				if err != nil {
+					return "", err
+				}
+				var resp struct {
+					Password string `json:"password"`
+				}
+				if err := json.Unmarshal(result, &resp); err != nil {
+					return "", err
+				}
+				return resp.Password, nil
+			}
+			db := app.backend.MultiSession().DB().Conn()
+			_, password, err := channel.CreateWebUser(db, username)
+			return password, err
+		},
+		ListWebUsersFn: func() ([]map[string]any, error) {
+			if app.backend == nil {
+				return nil, fmt.Errorf("agent not initialized")
+			}
+			if app.backend.IsRemote() {
+				result, err := app.backend.CallRPC("list_web_users", nil)
+				if err != nil {
+					return nil, err
+				}
+				var users []map[string]any
+				if err := json.Unmarshal(result, &users); err != nil {
+					return nil, err
+				}
+				return users, nil
+			}
+			conn := app.backend.MultiSession().DB().Conn()
+			rows, err := conn.Query("SELECT id, username, created_at FROM web_users ORDER BY id")
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			var users []map[string]any
+			for rows.Next() {
+				var id int
+				var uname, createdAt string
+				if err := rows.Scan(&id, &uname, &createdAt); err != nil {
+					continue
+				}
+				users = append(users, map[string]any{
+					"id":         id,
+					"username":   uname,
+					"created_at": createdAt,
+				})
+			}
+			if users == nil {
+				users = []map[string]any{}
+			}
+			return users, nil
+		},
+		DeleteWebUserFn: func(username string) error {
+			if app.backend == nil {
+				return fmt.Errorf("agent not initialized")
+			}
+			if app.backend.IsRemote() {
+				_, err := app.backend.CallRPC("delete_web_user", map[string]string{"username": username})
+				return err
+			}
+			conn := app.backend.MultiSession().DB().Conn()
+			result, err := conn.Exec("DELETE FROM web_users WHERE username = ?", username)
+			if err != nil {
+				return err
+			}
+			n, _ := result.RowsAffected()
+			if n == 0 {
+				return fmt.Errorf("user %q not found", username)
+			}
+			return nil
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

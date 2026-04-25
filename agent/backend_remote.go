@@ -798,6 +798,11 @@ func (b *RemoteBackend) callRPCString(method string, params any) (string, error)
 	return s, nil
 }
 
+// CallRPC is the public wrapper for remote RPC calls. Satisfies AgentBackend interface.
+func (b *RemoteBackend) CallRPC(method string, params any) (json.RawMessage, error) {
+	return b.callRPC(method, params)
+}
+
 func (b *RemoteBackend) GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool) {
 	raw, err := b.callRPC("get_session_messages", map[string]any{
 		"channel": channelName, "chat_id": chatID,

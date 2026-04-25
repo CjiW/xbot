@@ -3,6 +3,7 @@ package serverapp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -199,10 +200,13 @@ func (b fakeBackend) ResetTokenState()                                          
 func (b fakeBackend) GetChannelConfigs() (map[string]map[string]string, error)           { return nil, nil }
 func (b fakeBackend) SetChannelConfig(channel string, values map[string]string) error    { return nil }
 func (b fakeBackend) Close() error                                                       { return nil }
-func (b fakeBackend) Run(_ context.Context) error                                        { return nil }
-func (b fakeBackend) GetLLMConcurrency(_ string) int                                     { return 0 }
-func (b fakeBackend) SetLLMConcurrency(_ string, _ int) error                            { return nil }
-func (b fakeBackend) GetContextMode() string                                             { return "" }
+func (b fakeBackend) CallRPC(string, any) (json.RawMessage, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (b fakeBackend) Run(_ context.Context) error             { return nil }
+func (b fakeBackend) GetLLMConcurrency(_ string) int          { return 0 }
+func (b fakeBackend) SetLLMConcurrency(_ string, _ int) error { return nil }
+func (b fakeBackend) GetContextMode() string                  { return "" }
 
 func TestMigrateCLIUserSettingsFromGlobalIfNeeded_SeedsOnlyWhenEmpty(t *testing.T) {
 	cfg := newTestConfig()

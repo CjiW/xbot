@@ -1,10 +1,10 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"maps"
 	"slices"
-	"sort"
 	"sync"
 
 	"xbot/llm"
@@ -247,8 +247,8 @@ func (p *MessagePipeline) Remove(name string) int {
 // sortLocked 按优先级排序中间件（稳定排序，相同优先级保持添加顺序）。
 // 调用方必须持有锁（mu.Lock）。
 func (p *MessagePipeline) sortLocked() {
-	sort.SliceStable(p.middlewares, func(i, j int) bool {
-		return p.middlewares[i].Priority() < p.middlewares[j].Priority()
+	slices.SortStableFunc(p.middlewares, func(a, b MessageMiddleware) int {
+		return cmp.Compare(a.Priority(), b.Priority())
 	})
 	p.sorted = true
 }

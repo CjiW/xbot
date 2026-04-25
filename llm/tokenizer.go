@@ -1,8 +1,9 @@
 package llm
 
 import (
+	"cmp"
 	"encoding/json"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -72,8 +73,8 @@ var getSortedPrefixes = sync.OnceValue(func() []string {
 			prefixes = append(prefixes, k)
 		}
 	}
-	sort.Slice(prefixes, func(i, j int) bool {
-		return len(prefixes[i]) > len(prefixes[j])
+	slices.SortFunc(prefixes, func(a, b string) int {
+		return cmp.Compare(len(b), len(a)) // longest first
 	})
 	return prefixes
 })

@@ -1,13 +1,14 @@
 package agent
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -155,8 +156,8 @@ func (s *ObservationMaskStore) ensureLoaded() {
 	}
 
 	// 按时间排序（保证淘汰顺序正确）
-	sort.Slice(s.entries, func(i, j int) bool {
-		return s.entries[i].MaskedAt.Before(s.entries[j].MaskedAt)
+	slices.SortFunc(s.entries, func(a, b MaskedObservation) int {
+		return a.MaskedAt.Compare(b.MaskedAt)
 	})
 
 	if len(s.entries) > 0 {
@@ -560,8 +561,8 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 	}
 
 	// 按 token 收益排序：字符数最多的优先 mask
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].chars > candidates[j].chars
+	slices.SortFunc(candidates, func(a, b maskCandidate) int {
+		return cmp.Compare(b.chars, a.chars) // descending
 	})
 
 	result := make([]llm.ChatMessage, len(messages))

@@ -1,12 +1,12 @@
 package tools
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"xbot/llm"
@@ -289,11 +289,14 @@ func buildDirectoryTree(dir string) string {
 		items = append(items, dirEntry{name: name, isDir: e.IsDir(), size: info.Size()})
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].isDir != items[j].isDir {
-			return items[i].isDir
+	slices.SortFunc(items, func(a, b dirEntry) int {
+		if a.isDir != b.isDir {
+			if a.isDir {
+				return -1
+			}
+			return 1
 		}
-		return items[i].name < items[j].name
+		return cmp.Compare(a.name, b.name)
 	})
 
 	maxEntries := 30
@@ -344,11 +347,14 @@ func buildDirectoryTreeSandboxAPI(ctx *ToolContext, dir string) string {
 		items = append(items, dirEntry{name: name, isDir: e.IsDir, size: e.Size})
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].isDir != items[j].isDir {
-			return items[i].isDir
+	slices.SortFunc(items, func(a, b dirEntry) int {
+		if a.isDir != b.isDir {
+			if a.isDir {
+				return -1
+			}
+			return 1
 		}
-		return items[i].name < items[j].name
+		return cmp.Compare(a.name, b.name)
 	})
 
 	maxEntries := 30

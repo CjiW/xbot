@@ -15,7 +15,6 @@ import (
 // Returns (model, cmds, handled). If handled is true, the caller should return
 // immediately; otherwise, post-switch processing (viewport/textarea update) should continue.
 func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Model, []tea.Cmd, bool) {
-	var cmds []tea.Cmd
 
 	// 🥚 彩蛋覆盖层激活时，按任意键退出（Ctrl+C 除外，已在上面处理）
 	if m.easterEgg != easterEggNone {
@@ -191,88 +190,10 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyEnter:
-		// Plain Enter sends. Modified/newline-intent variants should fall through to
-		// the textarea so its native multiline/internal-scroll behavior works,
-		// especially once the input reaches MaxHeight.
-		// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
-		// Note: cycleModel uses Ctrl+N (not Ctrl+M), so no need to intercept here.
-		// Enter 发送消息
-		if !m.inputReady {
-			// §Q 消息队列：typing 期间允许排队消息
-			if m.queueEditing {
-				// 正在编辑排队消息 → 保存编辑结果
-				m.messageQueue[len(m.messageQueue)-1] = m.textarea.Value()
-				m.queueEditing = false
-				m.queueEditBuf = ""
-				m.textarea.SetValue("")
-				return m, nil, true
-			}
-			if m.textarea.Value() != "" {
-				m.messageQueue = append(m.messageQueue, m.textarea.Value())
-				m.textarea.SetValue("")
-				// 显示队列提示
-				if len(m.messageQueue) == 1 {
-					m.showTempStatus(fmt.Sprintf(m.locale.MessageQueuedUp, len(m.messageQueue)))
-				} else {
-					m.showTempStatus(fmt.Sprintf(m.locale.MessageQueued, len(m.messageQueue)))
-				}
-				return m, nil, true
-			}
-			return m, nil, true
+		model, enterCmds, handled := m.handleEnterKey()
+		if handled {
+			return model, enterCmds, true
 		}
-		// §8b @ 模式：Enter 进入目录或确认文件
-		// Check fileCompletions even without Tab (fileCompActive=false):
-		// typing @path auto-populates completions via input change handler.
-		if len(m.fileCompletions) > 0 {
-			input := m.textarea.Value()
-			if ok, prefix := detectAtPrefix(input); ok {
-				selected := m.fileCompletions[m.fileCompIdx]
-				atStart := len(input) - len(prefix) - 1
-				if isDir(selected) {
-					newInput := input[:atStart] + "@" + selected + "/"
-					m.textarea.SetValue(newInput)
-					m.fileCompActive = false
-					m.populateFileCompletions(selected + "/")
-				} else {
-					newInput := input[:atStart] + "@" + selected + " "
-					m.textarea.SetValue(newInput)
-					m.fileCompActive = false
-					m.fileCompletions = nil
-					m.fileCompIdx = 0
-				}
-				return m, nil, true
-			}
-		}
-		content := strings.TrimSpace(m.textarea.Value())
-		if content != "" {
-			// §22 输入历史：保存发送的内容（去重，不保存 / 命令和空输入）
-			if !strings.HasPrefix(content, "/") {
-				if len(m.inputHistory) == 0 || m.inputHistory[0] != content {
-					m.inputHistory = append([]string{content}, m.inputHistory...)
-					if len(m.inputHistory) > 100 {
-						m.inputHistory = m.inputHistory[:100]
-					}
-				}
-			}
-			m.inputHistoryIdx = -1
-			m.inputDraft = ""
-			if m.allTodosDone() {
-				m.todos = nil
-				m.todosDoneCleared = true
-				m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-			}
-			// 发送消息（彩蛋可能返回动画 cmd）
-			if cmd := m.sendMessage(content); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			m.textarea.Reset()
-			m.autoExpandInput()
-			m.viewport.GotoBottom()
-			m.newContentHint = false
-		}
-		// NOTE: tick chain is started by startAgentTurn() inside sendMessage().
-		// No need to emit tickCmd() here — doing so would create duplicate chains.
-		return m, cmds, true
 
 	case msg.Code == tea.KeyTab:
 		// §8 Tab 命令补全
@@ -1259,4 +1180,93 @@ func (m *cliModel) handleSearchKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd, boo
 		}
 		return m, nil, true
 	}
+}
+
+// handleEnterKey processes the Enter keypress for sending messages, queue management,
+// and file completion. Returns (model, cmds, handled).
+func (m *cliModel) handleEnterKey() (tea.Model, []tea.Cmd, bool) {
+	var cmds []tea.Cmd
+
+	// Plain Enter sends. Modified/newline-intent variants should fall through to
+	// the textarea so its native multiline/internal-scroll behavior works,
+	// especially once the input reaches MaxHeight.
+	// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
+	// Note: cycleModel uses Ctrl+N (not Ctrl+M), so no need to intercept here.
+	// Enter 发送消息
+	if !m.inputReady {
+		// §Q 消息队列：typing 期间允许排队消息
+		if m.queueEditing {
+			// 正在编辑排队消息 → 保存编辑结果
+			m.messageQueue[len(m.messageQueue)-1] = m.textarea.Value()
+			m.queueEditing = false
+			m.queueEditBuf = ""
+			m.textarea.SetValue("")
+			return m, nil, true
+		}
+		if m.textarea.Value() != "" {
+			m.messageQueue = append(m.messageQueue, m.textarea.Value())
+			m.textarea.SetValue("")
+			// 显示队列提示
+			if len(m.messageQueue) == 1 {
+				m.showTempStatus(fmt.Sprintf(m.locale.MessageQueuedUp, len(m.messageQueue)))
+			} else {
+				m.showTempStatus(fmt.Sprintf(m.locale.MessageQueued, len(m.messageQueue)))
+			}
+			return m, nil, true
+		}
+		return m, nil, true
+	}
+	// §8b @ 模式：Enter 进入目录或确认文件
+	// Check fileCompletions even without Tab (fileCompActive=false):
+	// typing @path auto-populates completions via input change handler.
+	if len(m.fileCompletions) > 0 {
+		input := m.textarea.Value()
+		if ok, prefix := detectAtPrefix(input); ok {
+			selected := m.fileCompletions[m.fileCompIdx]
+			atStart := len(input) - len(prefix) - 1
+			if isDir(selected) {
+				newInput := input[:atStart] + "@" + selected + "/"
+				m.textarea.SetValue(newInput)
+				m.fileCompActive = false
+				m.populateFileCompletions(selected + "/")
+			} else {
+				newInput := input[:atStart] + "@" + selected + " "
+				m.textarea.SetValue(newInput)
+				m.fileCompActive = false
+				m.fileCompletions = nil
+				m.fileCompIdx = 0
+			}
+			return m, nil, true
+		}
+	}
+	content := strings.TrimSpace(m.textarea.Value())
+	if content != "" {
+		// §22 输入历史：保存发送的内容（去重，不保存 / 命令和空输入）
+		if !strings.HasPrefix(content, "/") {
+			if len(m.inputHistory) == 0 || m.inputHistory[0] != content {
+				m.inputHistory = append([]string{content}, m.inputHistory...)
+				if len(m.inputHistory) > 100 {
+					m.inputHistory = m.inputHistory[:100]
+				}
+			}
+		}
+		m.inputHistoryIdx = -1
+		m.inputDraft = ""
+		if m.allTodosDone() {
+			m.todos = nil
+			m.todosDoneCleared = true
+			m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+		}
+		// 发送消息（彩蛋可能返回动画 cmd）
+		if cmd := m.sendMessage(content); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.textarea.Reset()
+		m.autoExpandInput()
+		m.viewport.GotoBottom()
+		m.newContentHint = false
+	}
+	// NOTE: tick chain is started by startAgentTurn() inside sendMessage().
+	// No need to emit tickCmd() here — doing so would create duplicate chains.
+	return m, cmds, true
 }

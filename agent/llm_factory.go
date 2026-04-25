@@ -102,6 +102,16 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	if f.subscriptionSvc != nil {
 		sub, err := f.subscriptionSvc.GetDefault(senderID)
 		if err == nil && sub != nil && sub.BaseURL != "" && sub.APIKey != "" {
+			// Diagnostic: detect masked keys that would cause API auth failures
+			if strings.HasSuffix(sub.APIKey, "****") && len(sub.APIKey) <= 20 {
+				log.WithFields(log.Fields{
+					"sender_id": senderID,
+					"sub_id":    sub.ID,
+					"base_url":  sub.BaseURL,
+					"api_key":   sub.APIKey,
+					"provider":  sub.Provider,
+				}).Error("[LLMFactory] GetLLM: subscription has masked API key — real key was lost!")
+			}
 			client := f.createClientFromSub(sub, sub.Model)
 			if client != nil {
 				model := sub.Model

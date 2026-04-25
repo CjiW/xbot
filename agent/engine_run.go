@@ -749,15 +749,31 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		totalTokens = s.lastPromptTokens
 		tokenSource = "restored"
 	} else {
-		// No API token data available. This should never happen in production:
-		// - First Run: no need to compress (few messages)
-		// - Subsequent Runs: API call always sets lastPromptTokens
-		// - After restart: DB restoration sets lastPromptTokens via SaveTokenState
-		if len(s.messages) > 3 {
-			log.Ctx(ctx).Error("maybeCompress: no API token data available, skipping compress check")
+		// No API token data available. This can happen when:
+		// - First Run after upgrade (no SaveTokenState was ever called)
+		// - GetOrCreateSession failed during buildToolContextExtras (TenantID=0)
+		// - SaveTokenState callback is nil
+		// Use local estimation with 1.5x safety margin as fallback.
+		// This is less accurate than API token counts but infinitely better
+		// than totalTokens=0 which never compresses (→ context_window_exceeded).
+		estimated, estErr := llm.CountMessagesTokens(s.messages, s.cfg.Model)
+		if estErr == nil && estimated > 0 {
+			totalTokens = int64(float64(estimated) * 1.5)
+			tokenSource = "local_estimate_fallback"
+			if len(s.messages) > 3 {
+				log.Ctx(ctx).WithFields(log.Fields{
+					"estimated": estimated,
+					"adjusted":  totalTokens,
+					"msg_count": len(s.messages),
+				}).Warn("maybeCompress: no API token data, using local estimation with 1.5x margin")
+			}
+		} else {
+			if len(s.messages) > 3 {
+				log.Ctx(ctx).WithError(estErr).Error("maybeCompress: no API token data and local estimation failed, skipping compress check")
+			}
+			totalTokens = 0
+			tokenSource = "no_data"
 		}
-		totalTokens = 0
-		tokenSource = "no_data"
 	}
 
 	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)

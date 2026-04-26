@@ -33,6 +33,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $REPO = "ai-pivot/xbot"
+$FALLBACK_REPO = "CjiW/xbot"
 $BINARY = "xbot-cli.exe"
 $SERVICE_NAME = "xbot-server"
 $DEFAULT_PORT = 8082
@@ -91,8 +92,13 @@ function Get-LatestVersion {
     try {
         $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO/releases/latest" -Headers @{"User-Agent"="PowerShell"}
         return $response.tag_name
+    } catch {}
+    try {
+        Write-Warn "No releases found on $REPO, trying fallback $FALLBACK_REPO..."
+        $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$FALLBACK_REPO/releases/latest" -Headers @{"User-Agent"="PowerShell"}
+        return $response.tag_name
     } catch {
-        Write-Err "Failed to determine latest version. Set -Version explicitly."
+        Write-Err "Failed to determine latest version from both repos. Set -Version explicitly."
     }
 }
 
@@ -469,7 +475,14 @@ $tmpFile = Join-Path ([System.IO.Path]::GetTempPath()) "xbot-cli-download.exe"
 try {
     Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
 } catch {
-    Write-Err "Download failed: $_"
+    Write-Warn "Download from $REPO failed, trying fallback $FALLBACK_REPO..."
+    $fallbackUrl = "https://github.com/$FALLBACK_REPO/releases/download/$tag/xbot-cli-$platform.exe"
+    $downloadUrl = $fallbackUrl
+    try {
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
+    } catch {
+        Write-Err "Download failed from both repos: $_"
+    }
 }
 
 $checksumUrl = "https://github.com/$REPO/releases/download/$tag/checksums.txt"
@@ -488,7 +501,25 @@ try {
     }
     Remove-Item $checksumFile -Force -ErrorAction SilentlyContinue
 } catch {
-    Write-Warn "Checksum verification skipped"
+    # Try fallback repo for checksum
+    try {
+        $fallbackChecksumUrl = "https://github.com/$FALLBACK_REPO/releases/download/$tag/checksums.txt"
+        $checksumFile = Join-Path ([System.IO.Path]::GetTempPath()) "xbot-checksums.txt"
+        Invoke-WebRequest -Uri $fallbackChecksumUrl -OutFile $checksumFile -UseBasicParsing
+        $expectedLine = Get-Content $checksumFile | Where-Object { $_ -match "xbot-cli-$platform" }
+        if ($expectedLine) {
+            $expectedHash = ($expectedLine -split "\s+")[0]
+            $actualHash = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash.ToLower()
+            if ($expectedHash -ne $actualHash) {
+                Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+                Write-Err "Checksum mismatch! Expected: $expectedHash, Got: $actualHash"
+            }
+            Write-Info "Checksum verified (from fallback repo)"
+        }
+        Remove-Item $checksumFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Warn "Checksum verification skipped"
+    }
 }
 
 # Stop running xbot-cli processes and scheduled task before overwriting the binary

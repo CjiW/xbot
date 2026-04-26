@@ -1742,7 +1742,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	// Inject running background task IDs into the last user message so the LLM
 	// is aware of active tasks and doesn't try to restart them.
-	messages = a.injectSystemNotes(messages, msg.Channel, msg.ChatID)
+	// injectSystemNotes modifies the messages slice in-place (appends to last user message),
+	// so the return value is intentionally discarded.
+	_ = a.injectSystemNotes(messages, msg.Channel, msg.ChatID)
 
 	// Wire drain callback so Run loop can inject bg notifications as tool messages.
 	// Only return notifications matching THIS session's key. Other sessions' notifications

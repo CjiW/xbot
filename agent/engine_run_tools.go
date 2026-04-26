@@ -204,7 +204,7 @@ func (s *runState) dispatchToolCalls(ctx context.Context, iteration int, toolCal
 	if s.cfg.EnableReadWriteSplit {
 		s.dispatchReadWriteSplit(ctx, iteration, toolCalls, execFn)
 	} else if s.cfg.EnableConcurrentSubAgents {
-		s.dispatchConcurrentSubAgents(iteration, toolCalls, execFn)
+		s.dispatchConcurrentSubAgents(ctx, iteration, toolCalls, execFn)
 	} else {
 		s.dispatchSequential(iteration, toolCalls, execFn)
 	}
@@ -221,7 +221,7 @@ func (s *runState) dispatchSequential(iteration int, toolCalls []llm.ToolCall, e
 }
 
 // dispatchConcurrentSubAgents runs SubAgent calls concurrently and other calls sequentially.
-func (s *runState) dispatchConcurrentSubAgents(iteration int, toolCalls []llm.ToolCall, execFn func(toolCallEntry)) {
+func (s *runState) dispatchConcurrentSubAgents(ctx context.Context, iteration int, toolCalls []llm.ToolCall, execFn func(toolCallEntry)) {
 	var subAgentOps, otherOps []toolCallEntry
 	for idx, tc := range toolCalls {
 		entry := toolCallEntry{iteration: iteration, index: idx, tc: tc}
@@ -232,7 +232,7 @@ func (s *runState) dispatchConcurrentSubAgents(iteration int, toolCalls []llm.To
 		}
 	}
 	if len(subAgentOps) > 0 {
-		s.executeSubAgentOps(nil, subAgentOps, execFn)
+		s.executeSubAgentOps(ctx, subAgentOps, execFn)
 	}
 	for _, entry := range otherOps {
 		execFn(entry)

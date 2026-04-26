@@ -37,7 +37,6 @@ func isMaskedAPIKey(key string) bool {
 
 // Private scope-check wrappers — delegate to the unified registry in setting_keys.go.
 func isUserScopedSettingKey(key string) bool         { return IsUserScopedSettingKey(key) }
-func isActionSettingKey(key string) bool             { return IsActionSettingKey(key) }
 func isSubscriptionScopedSettingKey(key string) bool { return IsSubscriptionScopedSettingKey(key) }
 func cliSettingScope(key string) string              { return SettingScopeOf(key) }
 func (m *cliModel) mergeCLISettingsValues() map[string]string {

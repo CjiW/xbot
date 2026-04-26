@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -123,8 +124,8 @@ func TestResolveGlobalSkillsDirs(t *testing.T) {
 		},
 		{
 			name:            "non-empty returns single-element slice",
-			legacySkillsDir: "/path/to/skills",
-			want:            []string{"/path/to/skills"},
+			legacySkillsDir: filepath.Join("path", "to", "skills"),
+			want:            []string{filepath.Join("path", "to", "skills")},
 		},
 	}
 
@@ -139,9 +140,11 @@ func TestResolveGlobalSkillsDirs(t *testing.T) {
 				if len(got) != len(tc.want) {
 					t.Fatalf("length mismatch: got %d, want %d", len(got), len(tc.want))
 				}
+				// resolveGlobalSkillsDirs calls filepath.Abs, so compare absolute paths
+				wantAbs, _ := filepath.Abs(tc.want[0])
 				for i := range got {
-					if got[i] != tc.want[i] {
-						t.Errorf("got[%d] = %q, want %q", i, got[i], tc.want[i])
+					if got[i] != wantAbs {
+						t.Errorf("got[%d] = %q, want %q", i, got[i], wantAbs)
 					}
 				}
 			}

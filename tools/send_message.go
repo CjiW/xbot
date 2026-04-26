@@ -60,7 +60,7 @@ func (t *SendMessageTool) Parameters() []llm.ToolParam {
 func (t *SendMessageTool) Execute(ctx *ToolContext, raw string) (*ToolResult, error) {
 	var params SendMessageParams
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	channelName, chatID := parseAddress(params.To)

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -60,6 +59,20 @@ func formatErrorForUser(err error) string {
 		return fmt.Sprintf("LLM 服务调用失败，请稍后重试或检查配置。\n错误详情: %v", err)
 	}
 	return fmt.Sprintf("处理消息时发生错误: %v", err)
+}
+
+// sessionKey builds the canonical session key from channel and chatID.
+// Used throughout the agent for tracking message state, cancellation, etc.
+func sessionKey(channel, chatID string) string {
+	return channel + ":" + chatID
+}
+
+// resolveMemoryProvider returns the effective memory provider, defaulting to "flat".
+func resolveMemoryProvider(cfg string) string {
+	if cfg == "" {
+		return "flat"
+	}
+	return cfg
 }
 
 func resolveGlobalSkillsDirs(legacySkillsDir string) []string {
@@ -381,7 +394,7 @@ func (a *Agent) SetChannelFinder(fn func(name string) (channel.Channel, bool)) {
 // IsProcessing returns true if there is an active Run for the given sender.
 func (a *Agent) IsProcessing(senderID string) bool {
 	found := false
-	a.chatCancelCh.Range(func(key, _ interface{}) bool {
+	a.chatCancelCh.Range(func(key, _ any) bool {
 		if k, ok := key.(string); ok && strings.HasSuffix(k, ":"+senderID) {
 			found = true
 			return false
@@ -519,12 +532,7 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	agentStore := NewAgentStore(cfg.WorkDir, agentsDir, cfg.Sandbox)
 
 	// 确定记忆模式
-	memoryProvider := cfg.MemoryProvider
-	if memoryProvider == "" {
-		memoryProvider = "flat"
-	}
-
-	registry := tools.DefaultRegistry(memoryProvider)
+	registry := tools.DefaultRegistry(resolveMemoryProvider(cfg.MemoryProvider))
 
 	// 创建聊天历史存储
 	chatHistory := tools.NewChatHistoryStore(200) // 每个群组保留最近 200 条
@@ -556,16 +564,12 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 
 // initSession 初始化多租户会话管理器。
 func initSession(cfg Config) (*session.MultiTenantSession, error) {
-	memoryProvider := cfg.MemoryProvider
-	if memoryProvider == "" {
-		memoryProvider = "flat"
-	}
 	multiSession, err := session.NewMultiTenant(
 		cfg.DBPath,
 		session.WithMCPTimeout(cfg.MCPInactivityTimeout),
 		session.WithCleanupInterval(cfg.MCPCleanupInterval),
 		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
-		session.WithMemoryProvider(memoryProvider),
+		session.WithMemoryProvider(resolveMemoryProvider(cfg.MemoryProvider)),
 		session.WithPersonaIsolation(cfg.PersonaIsolation),
 		session.WithEmbeddingConfig(session.EmbeddingConfig{
 			Provider:   cfg.EmbeddingProvider,
@@ -591,10 +595,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	mcpConfigPath := filepath.Join(a.xbotHome, "mcp.json")
 	contextMode := resolveContextMode(cfg)
 
-	memoryProvider := cfg.MemoryProvider
-	if memoryProvider == "" {
-		memoryProvider = "flat"
-	}
+	memoryProvider := resolveMemoryProvider(cfg.MemoryProvider)
 
 	multiSession.SetMCPConfigPath(mcpConfigPath)
 
@@ -617,7 +618,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// Flat 模式：注册 flat memory tools（memory_read/write/list）
-	if memoryProvider == "flat" || memoryProvider == "" {
+	if memoryProvider == "flat" {
 		for _, tool := range tools.FlatMemoryTools() {
 			registry.RegisterCore(tool)
 		}
@@ -794,7 +795,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg.MaxContextTokens = 100000 // 默认 100k token
 	}
 	if cfg.CompressionThreshold == 0 {
-		cfg.CompressionThreshold = 0.7
+		cfg.CompressionThreshold = 0.9
 	}
 	if cfg.MaxSubAgentDepth <= 0 {
 		cfg.MaxSubAgentDepth = 6
@@ -933,6 +934,12 @@ func (a *Agent) SetMaxConcurrency(n int) {
 func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerMu.Lock()
 	a.contextManagerConfig.MaxContextTokens = n
+	a.contextManagerMu.Unlock()
+}
+
+func (a *Agent) SetCompressionThreshold(f float64) {
+	a.contextManagerMu.Lock()
+	a.contextManagerConfig.CompressionThreshold = f
 	a.contextManagerMu.Unlock()
 }
 
@@ -1107,6 +1114,28 @@ func (a *Agent) sendAck(channel, chatID string) {
 	msg := ackMessages[rand.Intn(len(ackMessages))]
 	if err := a.sendMessage(channel, chatID, msg); err != nil {
 		log.WithError(err).Warn("Failed to send ack")
+	}
+}
+
+// resetSessionState clears outbound message tracking state for the given session key.
+// Called at the start of each new message to ensure clean state.
+func (a *Agent) resetSessionState(key string) {
+	a.sessionMsgIDs.Delete(key)
+	a.sessionFinalSent.Delete(key)
+}
+
+// injectCLIUserMessage sends a user message to the CLI channel if available.
+// Used by background notification handlers to display messages in the CLI UI.
+func (a *Agent) injectCLIUserMessage(channelName, content string) {
+	if a.channelFinder == nil {
+		return
+	}
+	ch, ok := a.channelFinder(channelName)
+	if !ok {
+		return
+	}
+	if cliCh, ok := ch.(*channel.CLIChannel); ok {
+		cliCh.InjectUserMessage(content)
 	}
 }
 
@@ -1355,9 +1384,8 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 				clipanic.Go("agent.chatWorker.concurrentCommand", func() {
 					// 清除 sessionFinalSent：command 不走 processMessage，
 					// 需要手动清除否则 sendMessage 会被拦截
-					cmdKey := m.Channel + ":" + m.ChatID
-					a.sessionMsgIDs.Delete(cmdKey)
-					a.sessionFinalSent.Delete(cmdKey)
+					cmdKey := sessionKey(m.Channel, m.ChatID)
+					a.resetSessionState(cmdKey)
 
 					response, err := c.Execute(ctx, a, m)
 					if err != nil {
@@ -1459,7 +1487,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			defer func() {
 				reqCancel()
 				a.chatCancelCh.Delete(cancelKey)
-				key := msg.Channel + ":" + msg.ChatID
+				key := sessionKey(msg.Channel, msg.ChatID)
 				a.lastProgressSnapshot.Delete(key)
 				a.iterationHistories.Delete(key)
 				<-sem // 释放槽位
@@ -1592,9 +1620,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 初始化 session 消息跟踪：清除旧的已发消息 ID，记录入站消息 ID 用于首条回复
-	key := msg.Channel + ":" + msg.ChatID
-	a.sessionMsgIDs.Delete(key)
-	a.sessionFinalSent.Delete(key)
+	key := sessionKey(msg.Channel, msg.ChatID)
+	a.resetSessionState(key)
 	if msg.Metadata != nil && msg.Metadata["message_id"] != "" {
 		a.sessionReplyTo.Store(key, msg.Metadata["message_id"])
 	} else {
@@ -1715,95 +1742,15 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	// Inject running background task IDs into the last user message so the LLM
 	// is aware of active tasks and doesn't try to restart them.
-	{
-		var systemNotes []string
-
-		// Background tasks
-		if a.bgTaskMgr != nil {
-			sessionKey := msg.Channel + ":" + msg.ChatID
-			running := a.bgTaskMgr.ListRunning(sessionKey)
-			if len(running) > 0 {
-				var ids []string
-				for _, t := range running {
-					ids = append(ids, t.ID)
-				}
-				systemNotes = append(systemNotes, fmt.Sprintf("Running background tasks: %s", strings.Join(ids, ", ")))
-			}
-		}
-
-		// Interactive agent sessions
-		sessions := a.ListInteractiveSessions(msg.Channel, msg.ChatID)
-		if len(sessions) > 0 {
-			var agentParts []string
-			for _, s := range sessions {
-				status := "idle"
-				if s.Running {
-					status = "running"
-				}
-				mode := "fg"
-				if s.Background {
-					mode = "bg"
-				}
-				agentParts = append(agentParts, fmt.Sprintf("%s/%s(%s,%s)", s.Role, s.Instance, mode, status))
-			}
-			systemNotes = append(systemNotes, fmt.Sprintf("Active interactive agents: %s", strings.Join(agentParts, ", ")))
-		}
-
-		// Active group chats
-		groups := tools.ListGroups()
-		if len(groups) > 0 {
-			var groupParts []string
-			for _, g := range groups {
-				status := "open"
-				if g.Closed {
-					status = "closed"
-				}
-				members := strings.Join(g.Members, ",")
-				groupParts = append(groupParts, fmt.Sprintf("%s(%s, %d members: %s)", g.Name, status, len(g.Members), members))
-			}
-			systemNotes = append(systemNotes, fmt.Sprintf("Groups: %s", strings.Join(groupParts, "; ")))
-		}
-
-		if len(systemNotes) > 0 {
-			info := "\n[System] " + strings.Join(systemNotes, " | ")
-			// Append to a copy of the last user message to avoid mutating session data
-			for i := len(messages) - 1; i >= 0; i-- {
-				if messages[i].Role == "user" {
-					m := messages[i] // shallow copy
-					m.Content += info
-					messages[i] = m
-					break
-				}
-			}
-		}
-	}
+	// injectSystemNotes modifies the messages slice in-place (appends to last user message),
+	// so the return value is intentionally discarded.
+	_ = a.injectSystemNotes(messages, msg.Channel, msg.ChatID)
 
 	// Wire drain callback so Run loop can inject bg notifications as tool messages.
 	// Only return notifications matching THIS session's key. Other sessions' notifications
 	// are put back into the pending list to prevent cross-session contamination.
-	currentSessionKey := msg.Channel + ":" + msg.ChatID
-	cfg.DrainBgNotifications = func() []tools.BgNotification {
-		a.bgRunPendingMu.Lock()
-		pending := a.bgRunPending
-		a.bgRunPending = nil
-		a.bgRunPendingMu.Unlock()
-		var mine []tools.BgNotification
-		var others []tools.BgNotification
-		for _, n := range pending {
-			if n.SessionKey() == currentSessionKey {
-				mine = append(mine, n)
-			} else {
-				others = append(others, n)
-			}
-		}
-		// Put other sessions' notifications back
-		if len(others) > 0 {
-			a.bgRunPendingMu.Lock()
-			a.bgRunPending = append(a.bgRunPending, others...)
-			a.bgRunPendingMu.Unlock()
-		}
-		return mine
-	}
+	currentSessionKey := sessionKey(msg.Channel, msg.ChatID)
+	cfg.DrainBgNotifications = a.wireBgNotificationDrain(currentSessionKey)
 
 	// Emit SessionStart event (notification, non-blocking)
 	if a.hookManager != nil {
@@ -1837,150 +1784,18 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)
+
 	// Drain any bg notifications that arrived after Run's last iteration.
-	// Process them as user messages (idle path).
-	a.bgRunPendingMu.Lock()
-	remaining := a.bgRunPending
-	a.bgRunPending = nil
-	a.bgRunPendingMu.Unlock()
-	for _, notif := range remaining {
-		switch n := notif.(type) {
-		case *tools.BackgroundTask:
-			go a.processBgNotification(n)
-		case *tools.SubAgentBgNotify:
-			go a.processSubAgentBgNotification(n)
-		}
-	}
+	a.drainRemainingBgNotifications()
+
 	if out.Error != nil {
-		// When cancelled, save any un-persisted engine messages from the
-		// interrupted iteration. User message and completed iterations are
-		// already persisted (eager-save + incremental persistence).
 		if errors.Is(out.Error, context.Canceled) {
-			for _, em := range out.EngineMessages {
-				if err := assertNoSystemPersist(em); err != nil {
-					continue
-				}
-				if err := tenantSession.AddMessage(em); err != nil {
-					log.Ctx(ctx).WithError(err).Warn("Failed to save engine message on cancel")
-				}
-			}
-			if len(out.EngineMessages) > 0 {
-				log.Ctx(ctx).Infof("Cancelled: persisted %d un-persisted engine messages", len(out.EngineMessages))
-			}
-			// Save iteration history as an assistant message with detail,
-			// so web UI can restore it on page refresh without showing "loading".
-			if len(out.IterationHistory) > 0 {
-				cancelMsg := llm.NewAssistantMessage("")
-				cancelMsg.DisplayOnly = true
-				if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
-					cancelMsg.Detail = string(jsonBytes)
-				}
-				if err := tenantSession.AddMessage(cancelMsg); err != nil {
-					log.Ctx(ctx).WithError(err).Warn("Failed to save cancelled iteration history")
-				}
-			}
-			// Send a minimal outbound so the web channel knows processing ended.
-			// Without this, web stays in "loading" state after cancel on refresh.
-			meta := map[string]string{"cancelled": "true"}
-			if len(out.IterationHistory) > 0 {
-				if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
-					meta["progress_history"] = string(jsonBytes)
-				}
-			}
-			return &bus.OutboundMessage{
-				Channel:  msg.Channel,
-				ChatID:   msg.ChatID,
-				Content:  "",
-				Metadata: meta,
-			}, nil
+			return a.handleCancelledRun(ctx, msg, out, tenantSession)
 		}
 		return nil, out.Error
 	}
-	finalContent := out.Content
-	waitingUser := out.WaitingUser
 
-	// 如果工具正在等待用户响应，发送 WaitingUser outbound 让渠道打开交互面板
-	if waitingUser {
-		log.Ctx(ctx).Info("Tool is waiting for user response, sending WaitingUser outbound")
-		// User message and engine messages already persisted (eager-save + incremental).
-		// Send the WaitingUser outbound so CLI can open the ask-user panel.
-		// Content may be empty (no assistant reply yet), which is fine — the
-		// panel reads the question from Metadata["ask_question"].
-		meta := map[string]string{}
-		for k, v := range out.Metadata {
-			meta[k] = v
-		}
-		waitOut := &bus.OutboundMessage{
-			Channel:     msg.Channel,
-			ChatID:      msg.ChatID,
-			Content:     finalContent,
-			WaitingUser: true,
-			Metadata:    meta,
-		}
-		return waitOut, nil
-	}
-
-	// 如果最终内容为空且不是 Optional reply 策略，向用户发送提示
-	if finalContent == "" && !waitingUser && replyPolicy != bus.ReplyPolicyOptional {
-		log.Ctx(ctx).Warn("Run produced empty content without waiting for user input")
-		if err := a.sendMessage(msg.Channel, msg.ChatID, "⚠️ 处理完成，但未生成回复内容。请尝试重新描述您的需求。"); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to send empty content notification")
-		}
-		return nil, nil
-	}
-
-	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		// User message already eager-saved before Run().
-		log.Ctx(ctx).WithFields(log.Fields{
-			"channel":      msg.Channel,
-			"chat_id":      msg.ChatID,
-			"reply_policy": replyPolicy,
-		}).Info("Optional reply policy: no final response generated, skipping outbound")
-		// Send an empty outbound to clear TUI progress state (typing/progress indicator).
-		// Without this, TUI gets stuck showing progress with no way for user to interact.
-		if ch, ok := a.channelFinder(msg.Channel); ok {
-			ch.Send(bus.OutboundMessage{
-				Channel: msg.Channel,
-				ChatID:  msg.ChatID,
-				Content: "",
-			})
-		}
-		return nil, nil
-	}
-
-	// User message already eager-saved before Run(). Engine messages already
-	// incrementally persisted. Only need to save the final assistant reply.
-
-	assistantMsg := llm.NewAssistantMessage(finalContent)
-	assistantMsg.ReasoningContent = out.ReasoningContent
-	// Attach iteration history as JSON detail for UI display (not included in LLM context).
-	if len(out.IterationHistory) > 0 {
-		if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
-			assistantMsg.Detail = string(jsonBytes)
-		}
-	}
-	if err := tenantSession.AddMessage(assistantMsg); err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to save assistant message")
-	}
-
-	// 通过 sendMessage 发送最终回复（复用 session 内的消息更新跟踪）
-	sendMeta := map[string]string{}
-	if assistantMsg.Detail != "" {
-		sendMeta["progress_history"] = assistantMsg.Detail
-	}
-	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent, sendMeta); err != nil {
-		log.Ctx(ctx).WithError(err).Error("Failed to send final response via sendMessage")
-		return &bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: finalContent,
-		}, nil
-	}
-
-	// 对用户原始消息添加表情回复，表示处理完成
-	a.addReaction(msg)
-
-	return nil, nil
+	return a.handleRunOutput(ctx, msg, out, tenantSession, replyPolicy)
 }
 
 // processCronMessage 处理 cron 触发消息（不带历史上下文，使用专用系统提示词）
@@ -1997,9 +1812,8 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
 
 	// 清除旧的 session 状态，确保 cron 消息可以正常发送
-	key := msg.Channel + ":" + msg.ChatID
-	a.sessionMsgIDs.Delete(key)
-	a.sessionFinalSent.Delete(key)
+	key := sessionKey(msg.Channel, msg.ChatID)
+	a.resetSessionState(key)
 
 	// 使用创建者的工作区路径
 	senderID := msg.SenderID
@@ -2101,8 +1915,8 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		log.Ctx(ctx).WithError(err).Warn("Failed to configure session MCP scope")
 	}
 	if len(newTools) > 0 {
-		sessionKey := msg.Channel + ":" + msg.ChatID
-		a.tools.ActivateTools(sessionKey, newTools)
+		sessKey := sessionKey(msg.Channel, msg.ChatID)
+		a.tools.ActivateTools(sessKey, newTools)
 		log.Ctx(ctx).WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
 	}
 
@@ -2146,14 +1960,6 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	mc.SetExtra(ExtraKeyTenantID, tenantSession.TenantID())
 
 	return a.pipeline.Run(mc), nil
-}
-
-// max returns the larger of a and b.
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // summarizeRetryError 将 LLM 错误简化为用户友好的描述。
@@ -2206,7 +2012,7 @@ func (a *Agent) RegisterCoreTool(tool tools.Tool) {
 // sendMessage 向 IM 渠道发送消息。
 // 通过 directSend 直连或 bus.Outbound 广播。
 func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[string]string) error {
-	key := channel + ":" + chatID
+	key := sessionKey(channel, chatID)
 
 	// 工具已发送最终回复 → 跳过后续所有消息（进度更新、LLM 最终回复等）
 	if _, sent := a.sessionFinalSent.Load(key); sent {
@@ -2228,10 +2034,6 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
-		if msg.Metadata == nil {
-			msg.Metadata = make(map[string]string)
-		}
-
 		// Always include update_message_id for patch support.
 		// For cards: feishu.go will attempt patch first; if cross-type conflict occurs,
 		// it falls back to creating a new message and deleting the old progress message.
@@ -2362,15 +2164,7 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 		"chat_id": chatID,
 	}).Info("Bg task notification: injecting as user message")
 
-	// Notify CLI to display the user message in the chat UI
-	if a.channelFinder != nil {
-		if ch, ok := a.channelFinder(channelName); ok {
-			if cliCh, ok := ch.(*channel.CLIChannel); ok {
-				cliCh.InjectUserMessage(content)
-			}
-		}
-	}
-
+	a.injectCLIUserMessage(channelName, content)
 	a.injectInbound(channelName, chatID, "user", content)
 }
 
@@ -2478,149 +2272,3 @@ func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, erro
 // formatToolProgress generates a human-readable one-line summary of a tool call for progress display.
 // It parses the JSON args and extracts the most important parameter(s) based on the tool name.
 // Output is concise, max ~80 chars total.
-func formatToolProgress(name string, args string) string {
-	const maxLen = 80
-
-	// Helper to get a string field from parsed JSON
-	get := func(m map[string]interface{}, key string) string {
-		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-			// Handle numeric types (e.g., limit as float64 from JSON)
-			return fmt.Sprintf("%v", v)
-		}
-		return ""
-	}
-
-	// Try to parse JSON args
-	var m map[string]interface{}
-	parsed := json.Unmarshal([]byte(args), &m) == nil
-
-	// Helper to truncate and format the final result (rune-safe for multibyte chars)
-	truncate := func(s string, max int) string {
-		runes := []rune(s)
-		if len(runes) <= max {
-			return s
-		}
-		return string(runes[:max-3]) + "..."
-	}
-
-	if !parsed {
-		log.WithField("tool", name).WithField("raw_args", truncate(args, 200)).Debug("formatToolProgress: failed to parse tool args as JSON")
-	}
-
-	// Letta memory tools
-	switch name {
-	case "core_memory_append":
-		block := get(m, "block")
-		return truncate(fmt.Sprintf("core_memory_append: %s", block), maxLen)
-	case "core_memory_replace":
-		block := get(m, "block")
-		return truncate(fmt.Sprintf("core_memory_replace: %s", block), maxLen)
-	case "rethink":
-		block := get(m, "block")
-		return truncate(fmt.Sprintf("rethink: %s", block), maxLen)
-	case "archival_memory_insert":
-		return "archival_memory_insert"
-	case "archival_memory_search":
-		query := get(m, "query")
-		return truncate(fmt.Sprintf("archival_memory_search: %q", query), maxLen)
-	case "recall_memory_search":
-		query := get(m, "query")
-		startDate := get(m, "start_date")
-		endDate := get(m, "end_date")
-		parts := []string{}
-		if query != "" {
-			parts = append(parts, fmt.Sprintf("%q", query))
-		}
-		if startDate != "" || endDate != "" {
-			parts = append(parts, fmt.Sprintf("%s~%s", startDate, endDate))
-		}
-		return truncate(fmt.Sprintf("recall_memory_search: %s", strings.Join(parts, " ")), maxLen)
-	}
-
-	if !parsed {
-		// JSON parsing failed: show truncated raw args
-		raw := truncate(args, maxLen-len(name)-2)
-		if raw == "" {
-			return name
-		}
-		return truncate(fmt.Sprintf("%s: %s", name, raw), maxLen)
-	}
-
-	var summary string
-	switch name {
-	case "Shell":
-		summary = fmt.Sprintf("Shell: %s", get(m, "command"))
-	case "Read":
-		summary = fmt.Sprintf("Read: %s", get(m, "path"))
-	case "FileCreate":
-		summary = fmt.Sprintf("FileCreate: %s", get(m, "path"))
-	case "FileReplace":
-		summary = fmt.Sprintf("FileReplace: %s", get(m, "path"))
-	case "Grep":
-		pattern := get(m, "pattern")
-		path := get(m, "path")
-		include := get(m, "include")
-		target := path
-		if include != "" {
-			if target != "" {
-				target = include + " in " + target
-			} else {
-				target = include
-			}
-		}
-		if target != "" {
-			summary = fmt.Sprintf("Grep: %q in %s", pattern, target)
-		} else {
-			summary = fmt.Sprintf("Grep: %q", pattern)
-		}
-	case "Glob":
-		summary = fmt.Sprintf("Glob: %s", get(m, "pattern"))
-	case "WebSearch":
-		summary = fmt.Sprintf("WebSearch: %q", get(m, "query"))
-	case "Cron":
-		summary = fmt.Sprintf("Cron: %s", get(m, "action"))
-	case "SubAgent":
-		role := get(m, "role")
-		task := get(m, "task")
-		if role != "" {
-			summary = truncate(fmt.Sprintf("SubAgent [%s]: %s", role, task), maxLen)
-		} else {
-			summary = fmt.Sprintf("SubAgent: %s", task)
-		}
-	case "DownloadFile":
-		summary = fmt.Sprintf("DownloadFile: %s", get(m, "output_path"))
-	case "ChatHistory":
-		limit := get(m, "limit")
-		if limit != "" {
-			summary = fmt.Sprintf("ChatHistory: limit=%s", limit)
-		} else {
-			summary = "ChatHistory"
-		}
-	case "ManageTools":
-		action := get(m, "action")
-		mName := get(m, "name")
-		if mName != "" {
-			summary = fmt.Sprintf("ManageTools: %s %s", action, mName)
-		} else {
-			summary = fmt.Sprintf("ManageTools: %s", action)
-		}
-	case "card_create":
-		title := get(m, "title")
-		if title != "" {
-			summary = fmt.Sprintf("card_create: %q", title)
-		} else {
-			summary = "card_create"
-		}
-	default:
-		// Unknown tools (including MCP tools): show first 60 chars of args
-		raw := truncate(args, 60)
-		summary = fmt.Sprintf("%s: %s", name, raw)
-	}
-
-	// 去掉换行符，避免引用块断裂（工具参数可能含多行内容）
-	summary = strings.NewReplacer("\n", " ", "\r", "").Replace(summary)
-	return truncate(summary, maxLen)
-}

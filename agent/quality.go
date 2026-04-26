@@ -1,9 +1,10 @@
 package agent
 
 import (
+	"cmp"
 	"encoding/json"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -258,8 +259,8 @@ func ExtractActiveFiles(messages []llm.ChatMessage, lastN int) []ActiveFile {
 	}
 
 	// 按 LastSeenIter 降序排列（最近的在前）
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].LastSeenIter < result[j].LastSeenIter
+	slices.SortFunc(result, func(a, b ActiveFile) int {
+		return cmp.Compare(a.LastSeenIter, b.LastSeenIter)
 	})
 
 	return result
@@ -270,7 +271,7 @@ func extractPathsFromToolArgs(toolName, argsJSON string) []string {
 	if argsJSON == "" {
 		return nil
 	}
-	var args map[string]interface{}
+	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil
 	}

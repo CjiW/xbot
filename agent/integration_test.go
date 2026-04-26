@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -507,10 +508,10 @@ func TestIntegration_Offload_RecallAfterOffload(t *testing.T) {
 // ============================================================================
 
 // parseToolArgs parses JSON tool call arguments into a map.
-func parseToolArgs(args string) map[string]interface{} {
-	var m map[string]interface{}
+func parseToolArgs(args string) map[string]any {
+	var m map[string]any
 	if err := json.Unmarshal([]byte(args), &m); err != nil {
-		return map[string]interface{}{}
+		return map[string]any{}
 	}
 	return m
 }
@@ -626,14 +627,9 @@ func TestIntegration_ContextEdit_DeleteMessage(t *testing.T) {
 	// Use out.Messages (Run's internal messages) instead of external messages,
 	// because Run() may reallocate the slice via append, causing ContextEditor
 	// to modify a different slice than the external one.
-	found := false
-	for _, m := range out.Messages {
-		if strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "deleted") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(out.Messages, func(m llm.ChatMessage) bool {
+		return strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "deleted")
+	}) {
 		t.Error("expected to find a deleted message placeholder")
 	}
 }
@@ -695,14 +691,9 @@ func TestIntegration_ContextEdit_TruncateMessage(t *testing.T) {
 	}
 
 	// Check truncation happened (use out.Messages, not external messages)
-	found := false
-	for _, m := range out.Messages {
-		if strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "truncated") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(out.Messages, func(m llm.ChatMessage) bool {
+		return strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "truncated")
+	}) {
 		t.Error("expected to find a truncated message marker")
 	}
 }
@@ -1063,15 +1054,4 @@ func TestIntegration_MessagesMutationByRun(t *testing.T) {
 			}
 		}
 	}
-}
-
-// ============================================================================
-// Helper for min (Go 1.20 compat)
-// ============================================================================
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

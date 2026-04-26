@@ -9,7 +9,7 @@ import (
 
 // ContextEditHandler 是 engine 层实现的消息编辑回调接口。
 type ContextEditHandler interface {
-	HandleRequest(action string, params map[string]interface{}) (string, error)
+	HandleRequest(action string, params map[string]any) (string, error)
 }
 
 // ContextEditTool 允许 Agent 精确编辑上下文中的历史消息。
@@ -61,9 +61,9 @@ func (t *ContextEditTool) Execute(ctx *ToolContext, args string) (*ToolResult, e
 		return nil, fmt.Errorf("context edit handler not available")
 	}
 
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(args), &raw); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	action, ok := raw["action"].(string)

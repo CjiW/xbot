@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -267,7 +267,7 @@ func doCleanup(dir string, maxAge int) {
 
 	// 按名称排序，保证输出稳定
 	if len(deleted) > 0 {
-		sort.Strings(deleted)
+		slices.Sort(deleted)
 		fmt.Fprintf(os.Stderr, "[logger] cleaned up %d old log file(s): %s\n", len(deleted), strings.Join(deleted, ", "))
 	}
 }

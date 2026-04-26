@@ -2,9 +2,11 @@ package channel
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	log "xbot/logger"
 )
@@ -13,7 +15,6 @@ import (
 // Returns (model, cmds, handled). If handled is true, the caller should return
 // immediately; otherwise, post-switch processing (viewport/textarea update) should continue.
 func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Model, []tea.Cmd, bool) {
-	var cmds []tea.Cmd
 
 	// 🥚 彩蛋覆盖层激活时，按任意键退出（Ctrl+C 除外，已在上面处理）
 	if m.easterEgg != easterEggNone {
@@ -113,37 +114,9 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyUp && msg.Mod == tea.ModShift:
-		// Shift+Up: recall queued message for editing / browse input history.
-		if m.panelMode == "" && m.textarea.Value() != "" {
-			return m, nil, true
-		}
-		if !m.viewport.AtBottom() {
-			return m, nil, true
-		}
-		// §Q 消息队列：typing 时 Shift+↑ 追回最后一条排队消息编辑
-		if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
-			if !m.queueEditing && m.textarea.Value() == "" {
-				// 追回最后一条排队消息
-				m.queueEditing = true
-				m.queueEditBuf = m.messageQueue[len(m.messageQueue)-1]
-				m.textarea.SetValue(m.queueEditBuf)
-				m.autoExpandInput()
-				return m, nil, true
-			}
-		}
-		if m.panelMode == "" && !m.typing {
-			// 空输入时浏览历史
-			if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
-				if m.inputHistoryIdx == -1 {
-					m.inputDraft = "" // 保存空草稿
-					m.inputHistoryIdx = 0
-				} else if m.inputHistoryIdx < len(m.inputHistory)-1 {
-					m.inputHistoryIdx++
-				}
-				m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
-				m.autoExpandInput()
-				return m, nil, true
-			}
+		model, cmd, handled := m.handleShiftUp()
+		if handled {
+			return model, cmd, true
 		}
 
 	case msg.Code == tea.KeyUp:
@@ -159,23 +132,9 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyDown && msg.Mod == tea.ModShift:
-		// Shift+Down: browse input history backwards.
-		if m.panelMode == "" && m.textarea.Value() != "" {
-			return m, nil, true
-		}
-		if !m.viewport.AtBottom() {
-			return m, nil, true
-		}
-		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
-			if m.inputHistoryIdx > 0 {
-				m.inputHistoryIdx--
-				m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
-			} else {
-				m.inputHistoryIdx = -1
-				m.textarea.SetValue(m.inputDraft)
-			}
-			m.autoExpandInput()
-			return m, nil, true
+		model, cmd, handled := m.handleShiftDown()
+		if handled {
+			return model, cmd, true
 		}
 
 	case msg.Code == tea.KeyDown:
@@ -189,88 +148,10 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyEnter:
-		// Plain Enter sends. Modified/newline-intent variants should fall through to
-		// the textarea so its native multiline/internal-scroll behavior works,
-		// especially once the input reaches MaxHeight.
-		// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
-		// Note: cycleModel uses Ctrl+N (not Ctrl+M), so no need to intercept here.
-		// Enter 发送消息
-		if !m.inputReady {
-			// §Q 消息队列：typing 期间允许排队消息
-			if m.queueEditing {
-				// 正在编辑排队消息 → 保存编辑结果
-				m.messageQueue[len(m.messageQueue)-1] = m.textarea.Value()
-				m.queueEditing = false
-				m.queueEditBuf = ""
-				m.textarea.SetValue("")
-				return m, nil, true
-			}
-			if m.textarea.Value() != "" {
-				m.messageQueue = append(m.messageQueue, m.textarea.Value())
-				m.textarea.SetValue("")
-				// 显示队列提示
-				if len(m.messageQueue) == 1 {
-					m.showTempStatus(fmt.Sprintf(m.locale.MessageQueuedUp, len(m.messageQueue)))
-				} else {
-					m.showTempStatus(fmt.Sprintf(m.locale.MessageQueued, len(m.messageQueue)))
-				}
-				return m, nil, true
-			}
-			return m, nil, true
+		model, enterCmds, handled := m.handleEnterKey()
+		if handled {
+			return model, enterCmds, true
 		}
-		// §8b @ 模式：Enter 进入目录或确认文件
-		// Check fileCompletions even without Tab (fileCompActive=false):
-		// typing @path auto-populates completions via input change handler.
-		if len(m.fileCompletions) > 0 {
-			input := m.textarea.Value()
-			if ok, prefix := detectAtPrefix(input); ok {
-				selected := m.fileCompletions[m.fileCompIdx]
-				atStart := len(input) - len(prefix) - 1
-				if isDir(selected) {
-					newInput := input[:atStart] + "@" + selected + "/"
-					m.textarea.SetValue(newInput)
-					m.fileCompActive = false
-					m.populateFileCompletions(selected + "/")
-				} else {
-					newInput := input[:atStart] + "@" + selected + " "
-					m.textarea.SetValue(newInput)
-					m.fileCompActive = false
-					m.fileCompletions = nil
-					m.fileCompIdx = 0
-				}
-				return m, nil, true
-			}
-		}
-		content := strings.TrimSpace(m.textarea.Value())
-		if content != "" {
-			// §22 输入历史：保存发送的内容（去重，不保存 / 命令和空输入）
-			if !strings.HasPrefix(content, "/") {
-				if len(m.inputHistory) == 0 || m.inputHistory[0] != content {
-					m.inputHistory = append([]string{content}, m.inputHistory...)
-					if len(m.inputHistory) > 100 {
-						m.inputHistory = m.inputHistory[:100]
-					}
-				}
-			}
-			m.inputHistoryIdx = -1
-			m.inputDraft = ""
-			if m.allTodosDone() {
-				m.todos = nil
-				m.todosDoneCleared = true
-				m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-			}
-			// 发送消息（彩蛋可能返回动画 cmd）
-			if cmd := m.sendMessage(content); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			m.textarea.Reset()
-			m.autoExpandInput()
-			m.viewport.GotoBottom()
-			m.newContentHint = false
-		}
-		// NOTE: tick chain is started by startAgentTurn() inside sendMessage().
-		// No need to emit tickCmd() here — doing so would create duplicate chains.
-		return m, cmds, true
 
 	case msg.Code == tea.KeyTab:
 		// §8 Tab 命令补全
@@ -296,6 +177,106 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 
 	// Unhandled key — let post-switch processing handle it (viewport/textarea update)
 	return m, nil, false
+}
+
+// restoreIterationHistory converts IterationHistory from a reconnect snapshot
+// into local iteration history, bootstrapping tool StartedAt timestamps.
+func (m *cliModel) restoreIterationHistory(payload *CLIProgressPayload) {
+	if payload == nil || len(payload.IterationHistory) == 0 || len(m.iterationHistory) > 0 {
+		return
+	}
+	for _, ih := range payload.IterationHistory {
+		snap := cliIterationSnapshot{
+			Iteration: ih.Iteration,
+			Thinking:  ih.Thinking,
+			Reasoning: ih.Reasoning,
+			Tools:     ih.CompletedTools,
+		}
+		for i := range snap.Tools {
+			t := &snap.Tools[i]
+			if t.StartedAt.IsZero() && t.Elapsed > 0 {
+				t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+			}
+		}
+		m.iterationHistory = append(m.iterationHistory, snap)
+	}
+	if len(m.iterationHistory) > 0 {
+		lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
+		if lastIter > m.lastSeenIteration {
+			m.lastSeenIteration = lastIter
+		}
+	}
+	m.removeAllToolSummaries()
+}
+
+// carryForwardProgressState preserves transient state across progress updates
+// (StartedAt timers, CompletedTools, Reasoning/Thinking content, SubAgent trees).
+func (m *cliModel) carryForwardProgressState(prev *CLIProgressPayload) {
+	if m.progress == nil {
+		return
+	}
+
+	// Preserve StartedAt across progress updates so live timers don't reset.
+	startedAtMap := make(map[string]time.Time)
+	if prev != nil {
+		for _, t := range prev.ActiveTools {
+			if !t.StartedAt.IsZero() {
+				startedAtMap[t.Name] = t.StartedAt
+			}
+		}
+	}
+	for i := range m.progress.ActiveTools {
+		t := &m.progress.ActiveTools[i]
+		if sa, ok := startedAtMap[t.Name]; ok {
+			t.StartedAt = sa
+		} else if t.StartedAt.IsZero() {
+			if t.Elapsed > 0 {
+				t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+			} else {
+				t.StartedAt = time.Now()
+			}
+		}
+	}
+
+	if prev == nil {
+		return
+	}
+	sameIter := m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0
+
+	// Carry forward CompletedTools from previous progress within the same iteration.
+	if len(m.progress.CompletedTools) == 0 && len(prev.CompletedTools) > 0 && sameIter {
+		m.progress.CompletedTools = prev.CompletedTools
+	}
+
+	// Carry forward Reasoning/Thinking content.
+	if m.progress.Reasoning == "" && prev.Reasoning != "" && sameIter {
+		m.progress.Reasoning = prev.Reasoning
+	}
+	if m.progress.Thinking == "" && prev.Thinking != "" && sameIter {
+		m.progress.Thinking = prev.Thinking
+	}
+	if m.progress.ReasoningStreamContent == "" && prev.ReasoningStreamContent != "" && sameIter {
+		if m.progress.StreamContent == "" {
+			m.progress.ReasoningStreamContent = prev.ReasoningStreamContent
+		}
+	}
+
+	// Preserve SubAgent tree within the same iteration (not across iterations).
+	if m.progress.Phase == "done" {
+		return
+	}
+	iterationChanged := m.progress.Iteration != prev.Iteration && m.progress.Iteration > 0
+	if iterationChanged {
+		m.progress.SubAgents = nil
+	} else {
+		newDepth := maxTreeDepth(m.progress.SubAgents)
+		prevDepth := maxTreeDepth(prev.SubAgents)
+		if len(m.progress.SubAgents) == 0 && len(prev.SubAgents) > 0 {
+			m.progress.SubAgents = prev.SubAgents
+		} else if newDepth < prevDepth && newDepth > 0 {
+			m.progress.SubAgents = prev.SubAgents
+		}
+	}
 }
 
 // handleProgressMsg processes progress update events from the agent.
@@ -364,120 +345,23 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	}
 	m.progress = msg.payload
 
-	// Restore iteration history from reconnect/GetActiveProgress snapshot.
-	// When a CLI reconnects mid-turn, the server sends completed iterations
-	// in IterationHistory. Convert them to cliIterationSnapshot for rendering.
-	if m.progress != nil && len(m.progress.IterationHistory) > 0 && len(m.iterationHistory) == 0 {
-		for _, ih := range m.progress.IterationHistory {
-			snap := cliIterationSnapshot{
-				Iteration: ih.Iteration,
-				Thinking:  ih.Thinking,
-				Reasoning: ih.Reasoning,
-				Tools:     ih.CompletedTools,
-			}
-			// Restore StartedAt for tools that have Elapsed but zero StartedAt.
-			for i := range snap.Tools {
-				t := &snap.Tools[i]
-				if t.StartedAt.IsZero() && t.Elapsed > 0 {
-					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
-				}
-			}
-			m.iterationHistory = append(m.iterationHistory, snap)
-		}
-		// Set lastSeenIteration to the latest restored iteration so we don't
-		// re-snapshot it when the next progress event arrives.
-		if len(m.iterationHistory) > 0 {
-			lastIter := m.iterationHistory[len(m.iterationHistory)-1].Iteration
-			if lastIter > m.lastSeenIteration {
-				m.lastSeenIteration = lastIter
-			}
-		}
-		// Deduplicate: remove ALL tool_summary messages. When progress is
-		// active, the progress block owns iteration display — any static
-		// tool_summary would duplicate content with mismatched iteration numbers.
-		m.removeAllToolSummaries()
+	// Cache token usage for context bar display — every progress event
+	// carries fresh token counts from the agent's updateTokenUsage().
+	if m.progress != nil {
+		m.cacheTokenUsage(m.progress.TokenUsage)
+	}
+	if m.cachedMaxContextTokens == 0 {
+		m.cachedMaxContextTokens = m.resolveMaxContextTokens()
+	}
+	if m.cachedCompressRatio == 0 {
+		m.cachedCompressRatio = m.resolveCompressRatio()
 	}
 
-	// Preserve StartedAt across progress updates so live timers don't reset.
-	// Each structured progress event replaces ActiveTools entirely (StartedAt=zero),
-	// so we must carry forward the previous StartedAt values by matching tool name.
-	startedAtMap := make(map[string]time.Time)
-	if prev != nil {
-		for _, t := range prev.ActiveTools {
-			if !t.StartedAt.IsZero() {
-				startedAtMap[t.Name] = t.StartedAt
-			}
-		}
-	}
-	if m.progress != nil {
-		for i := range m.progress.ActiveTools {
-			t := &m.progress.ActiveTools[i]
-			// Restore from previous progress if available
-			if prev, ok := startedAtMap[t.Name]; ok {
-				t.StartedAt = prev
-			} else if t.StartedAt.IsZero() {
-				// First appearance: bootstrap from Elapsed or now
-				if t.Elapsed > 0 {
-					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
-				} else {
-					t.StartedAt = time.Now()
-				}
-			}
-		}
-		// Carry forward CompletedTools from previous progress within the same iteration.
-		// Progress events may arrive without CompletedTools (e.g. a thinking-phase event
-		// after tool completion), which would cause completed tools to flicker/disappear.
-		if len(m.progress.CompletedTools) == 0 && prev != nil && len(prev.CompletedTools) > 0 {
-			if m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0 {
-				m.progress.CompletedTools = prev.CompletedTools
-			}
-		}
-		// Carry forward Reasoning/Thinking from previous progress within the same iteration.
-		// When a tool completes, the server sends a new progress event (Phase="tool") that
-		// may not include Reasoning — replacing progress would clear it mid-iteration.
-		if prev != nil {
-			sameIter := m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0
-			if m.progress.Reasoning == "" && prev.Reasoning != "" && sameIter {
-				m.progress.Reasoning = prev.Reasoning
-			}
-			if m.progress.Thinking == "" && prev.Thinking != "" && sameIter {
-				m.progress.Thinking = prev.Thinking
-			}
-			// ReasoningStreamContent: carry forward if new payload doesn't have it
-			// and we're still in reasoning streaming phase (no StreamContent yet).
-			if m.progress.ReasoningStreamContent == "" && prev.ReasoningStreamContent != "" && sameIter {
-				if m.progress.StreamContent == "" {
-					m.progress.ReasoningStreamContent = prev.ReasoningStreamContent
-				}
-			}
-		}
-	}
-	// Preserve SubAgent tree across progress updates within the SAME iteration.
-	// Progress events may arrive with incomplete subagent data (missing deep
-	// nodes) or no subagent data at all. We preserve the deepest tree seen
-	// during the current turn to prevent the TUI from losing deep agent nodes.
-	// PhaseDone is the exception — it intentionally clears the tree.
-	// When iteration changes, the tree MUST be cleared — there are no cross-iteration
-	// active tools, and stale SubAgent markers in progressLines from previous
-	// iterations would cause phantom agents to persist.
-	if m.progress != nil && m.progress.Phase != "done" && prev != nil {
-		iterationChanged := m.progress.Iteration != prev.Iteration && m.progress.Iteration > 0
-		if iterationChanged {
-			// New iteration started — clear stale SubAgent tree
-			m.progress.SubAgents = nil
-		} else {
-			newDepth := maxTreeDepth(m.progress.SubAgents)
-			prevDepth := maxTreeDepth(prev.SubAgents)
-			if len(m.progress.SubAgents) == 0 && len(prev.SubAgents) > 0 {
-				// New payload has no tree — carry forward old tree
-				m.progress.SubAgents = prev.SubAgents
-			} else if newDepth < prevDepth && newDepth > 0 {
-				// New tree is shallower than old — carry forward old tree
-				// (deeper nodes are still running even if this event didn't include them)
-				m.progress.SubAgents = prev.SubAgents
-			}
-		}
-	}
+	// Restore iteration history from reconnect/GetActiveProgress snapshot.
+	m.restoreIterationHistory(m.progress)
+
+	m.carryForwardProgressState(prev)
+
 	// Update bg task count from callback
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()
@@ -495,56 +379,9 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 
 	if msg.payload != nil {
 		// Sync todo items from progress event
-		if len(msg.payload.Todos) > 0 {
-			allDone := true
-			for _, t := range msg.payload.Todos {
-				if !t.Done {
-					allDone = false
-					break
-				}
-			}
-			if m.todosDoneCleared && allDone {
-				// Already cleared by user input; don't re-accept stale all-done list
-			} else {
-				m.todos = make([]CLITodoItem, len(msg.payload.Todos))
-				copy(m.todos, msg.payload.Todos)
-				m.todosDoneCleared = false
-				m.relayoutViewport() // TODO 行数可能变化，重新计算 viewport 高度
-			}
-		} else {
-			prevTodoCount := len(m.todos)
-			m.todos = nil
-			if prevTodoCount > 0 {
-				m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-			}
-		}
-		// Detect iteration change: snapshot previous iteration into history
-		if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
-			// Snapshot all completed tools from prev — they belong to iterations
-			// that finished before this new iteration started. Don't filter by
-			// Iteration field because tools from earlier iterations may have been
-			// carried forward via the CompletedTools carry-forward logic.
-			prevIterTools := prev.CompletedTools
-			prevReasoning := prev.Reasoning
-			if prevReasoning == "" {
-				prevReasoning = prev.ReasoningStreamContent
-			}
-			if len(prevIterTools) > 0 || prev.Thinking != "" || prevReasoning != "" {
-				snap := cliIterationSnapshot{
-					Iteration:   m.lastSeenIteration,
-					Thinking:    prev.Thinking,
-					Reasoning:   prevReasoning,
-					Tools:       prevIterTools,
-					ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
-				}
-				m.iterationHistory = append(m.iterationHistory, snap)
-			}
-			// Clear lastCompletedTools to prevent stale tools from being
-			// re-snapshotted when the final iteration is snapshotted in handleAgentMessage.
-			m.lastCompletedTools = m.lastCompletedTools[:0]
-			m.lastSeenIteration = msg.payload.Iteration
-			m.iterationStartTime = time.Now()
-		}
+		m.syncProgressTodos(msg.payload)
+		// Detect iteration change and snapshot previous iteration
+		m.snapshotIterationChange(msg.payload, prev)
 
 		// §2 工具可视化：快照 CompletedTools 到独立字段
 		// Accept all completed tools regardless of their Iteration field — they
@@ -554,112 +391,167 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			copy(m.lastCompletedTools, msg.payload.CompletedTools)
 		}
 		if msg.payload.Phase == "done" {
-			// Snapshot the final iteration before clearing progress.
-			// This handles the case where PhaseDone arrives before
-			// handleAgentMessage (e.g. agent error/cancel).
-			// Skip if handleAgentMessage already processed (m.typing == false
-			// means the reply arrived and cleaned up iteration state).
-			if m.typing && m.lastSeenIteration >= 0 {
-				alreadySnapped := false
-				for _, s := range m.iterationHistory {
-					if s.Iteration == m.lastSeenIteration {
-						alreadySnapped = true
-						break
-					}
-				}
-				if !alreadySnapped {
-					var finalTools []CLIToolProgress
-					// Check progress.CompletedTools first (set by progressFinalizer)
-					finalTools = append(finalTools, msg.payload.CompletedTools...)
-					// Also include any from lastCompletedTools (race safety)
-					for _, t := range m.lastCompletedTools {
-						dup := false
-						for _, existing := range finalTools {
-							if existing.Name == t.Name && existing.Label == t.Label {
-								dup = true
-								break
-							}
-						}
-						if !dup {
-							finalTools = append(finalTools, t)
-						}
-					}
-					snap := cliIterationSnapshot{
-						Iteration:   m.lastSeenIteration,
-						Thinking:    msg.payload.Thinking,
-						Tools:       finalTools,
-						ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
-					}
-					// Carry over reasoning: priority is lastReasoning (captured before progress clear)
-					// > prev progress Reasoning > prev ReasoningStreamContent
-					// > PhaseDone payload Reasoning
-					if m.lastReasoning != "" {
-						snap.Reasoning = m.lastReasoning
-					} else if prev != nil && prev.Reasoning != "" {
-						snap.Reasoning = prev.Reasoning
-					} else if prev != nil && prev.ReasoningStreamContent != "" {
-						snap.Reasoning = prev.ReasoningStreamContent
-					} else if msg.payload.Reasoning != "" {
-						snap.Reasoning = msg.payload.Reasoning
-					}
-					if len(finalTools) > 0 || snap.Thinking != "" || snap.Reasoning != "" {
-						m.iterationHistory = append(m.iterationHistory, snap)
-					}
-				}
-				// Generate tool_summary if we have iteration history.
-				// Append to end immediately so cancel/error cases (no handleAgentMessage)
-				// still display the summary. handleAgentMessage will relocate it before
-				// the assistant reply if one follows.
-				if len(m.iterationHistory) > 0 {
-					m.pendingToolSummary = &cliMessage{
-						role:       "tool_summary",
-						content:    "",
-						timestamp:  time.Now(),
-						iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
-						dirty:      true,
-					}
-					m.messages = append(m.messages, *m.pendingToolSummary)
-					m.renderCacheValid = false
-				}
-			}
-			// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
-			m.todos = nil
-			m.todosDoneCleared = false
-			m.endAgentTurn(turnID)
-			if turnID == m.agentTurnID {
-				m.inputReady = true
-				if len(m.messageQueue) > 0 {
-					m.needFlushQueue = true
-				}
-			}
-
-			// For agent sessions (interactive SubAgent viewer), the outbound
-			// message goes back to the parent agent's channel/chatID — it never
-			// arrives as a cliOutboundMsg for this session view. So we must
-			// synthesize the assistant message from the progress payload's final
-			// content (Thinking field carries the last clean assistant text).
-			// For main sessions, handleAgentMessage handles this and will
-			// relocate the tool_summary before the assistant reply.
-			if m.channelName == "agent" && !m.typing {
-				assistantContent := msg.payload.Thinking
-				if assistantContent == "" {
-					assistantContent = msg.payload.StreamContent
-				}
-				if assistantContent != "" {
-					m.messages = append(m.messages, cliMessage{
-						role:      "assistant",
-						content:   assistantContent,
-						timestamp: time.Now(),
-						dirty:     true,
-					})
-					m.renderCacheValid = false
-				}
-			}
-
-			m.relayoutViewport()
+			m.handleProgressDone(msg, prev, turnID)
 		}
 	}
 	m.updateViewportContent()
+}
+
+// syncProgressTodos syncs todo items from the progress payload.
+func (m *cliModel) syncProgressTodos(payload *CLIProgressPayload) {
+	if payload == nil {
+		return
+	}
+	if len(payload.Todos) > 0 {
+		allDone := true
+		for _, t := range payload.Todos {
+			if !t.Done {
+				allDone = false
+				break
+			}
+		}
+		if m.todosDoneCleared && allDone {
+			// Already cleared by user input; don't re-accept stale all-done list
+		} else {
+			m.todos = make([]CLITodoItem, len(payload.Todos))
+			copy(m.todos, payload.Todos)
+			m.todosDoneCleared = false
+			m.relayoutViewport()
+		}
+	} else {
+		prevTodoCount := len(m.todos)
+		m.todos = nil
+		if prevTodoCount > 0 {
+			m.relayoutViewport()
+		}
+	}
+}
+
+// snapshotIterationChange detects iteration changes and snapshots the previous
+// iteration's tools/reasoning into iteration history.
+func (m *cliModel) snapshotIterationChange(payload *CLIProgressPayload, prev *CLIProgressPayload) {
+	if payload == nil {
+		return
+	}
+	if payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
+		prevIterTools := prev.CompletedTools
+		prevReasoning := prev.Reasoning
+		if prevReasoning == "" {
+			prevReasoning = prev.ReasoningStreamContent
+		}
+		if len(prevIterTools) > 0 || prev.Thinking != "" || prevReasoning != "" {
+			snap := cliIterationSnapshot{
+				Iteration:   m.lastSeenIteration,
+				Thinking:    prev.Thinking,
+				Reasoning:   prevReasoning,
+				Tools:       prevIterTools,
+				ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
+			}
+			m.iterationHistory = append(m.iterationHistory, snap)
+		}
+		m.lastCompletedTools = m.lastCompletedTools[:0]
+		m.lastSeenIteration = payload.Iteration
+		m.iterationStartTime = time.Now()
+	}
+}
+
+// handleProgressDone handles the Phase "done" case: snapshots the final iteration,
+// generates tool summary, resets iteration tracking state, and synthesizes agent messages.
+func (m *cliModel) handleProgressDone(msg cliProgressMsg, prev *CLIProgressPayload, turnID uint64) {
+	// Snapshot the final iteration before clearing progress.
+	// This handles the case where PhaseDone arrives before
+	// handleAgentMessage (e.g. agent error/cancel).
+	// Skip if handleAgentMessage already processed (m.typing == false
+	// means the reply arrived and cleaned up iteration state).
+	if m.typing && m.lastSeenIteration >= 0 {
+		alreadySnapped := slices.ContainsFunc(m.iterationHistory, func(s cliIterationSnapshot) bool {
+			return s.Iteration == m.lastSeenIteration
+		})
+		if !alreadySnapped {
+			var finalTools []CLIToolProgress
+			// Check progress.CompletedTools first (set by progressFinalizer)
+			finalTools = append(finalTools, msg.payload.CompletedTools...)
+			// Also include any from lastCompletedTools (race safety)
+			for _, t := range m.lastCompletedTools {
+				if !slices.ContainsFunc(finalTools, func(existing CLIToolProgress) bool {
+					return existing.Name == t.Name && existing.Label == t.Label
+				}) {
+					finalTools = append(finalTools, t)
+				}
+			}
+			snap := cliIterationSnapshot{
+				Iteration:   m.lastSeenIteration,
+				Thinking:    msg.payload.Thinking,
+				Tools:       finalTools,
+				ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
+			}
+			// Carry over reasoning: priority is lastReasoning (captured before progress clear)
+			// > prev progress Reasoning > prev ReasoningStreamContent
+			// > PhaseDone payload Reasoning
+			if m.lastReasoning != "" {
+				snap.Reasoning = m.lastReasoning
+			} else if prev != nil && prev.Reasoning != "" {
+				snap.Reasoning = prev.Reasoning
+			} else if prev != nil && prev.ReasoningStreamContent != "" {
+				snap.Reasoning = prev.ReasoningStreamContent
+			} else if msg.payload.Reasoning != "" {
+				snap.Reasoning = msg.payload.Reasoning
+			}
+			if len(finalTools) > 0 || snap.Thinking != "" || snap.Reasoning != "" {
+				m.iterationHistory = append(m.iterationHistory, snap)
+			}
+		}
+		// Generate tool_summary if we have iteration history.
+		// Append to end immediately so cancel/error cases (no handleAgentMessage)
+		// still display the summary. handleAgentMessage will relocate it before
+		// the assistant reply if one follows.
+		if len(m.iterationHistory) > 0 {
+			m.pendingToolSummary = &cliMessage{
+				role:       "tool_summary",
+				content:    "",
+				timestamp:  time.Now(),
+				iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
+				dirty:      true,
+			}
+			m.messages = append(m.messages, *m.pendingToolSummary)
+			m.renderCacheValid = false
+		}
+	}
+	// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
+	m.todos = nil
+	m.todosDoneCleared = false
+	m.endAgentTurn(turnID)
+	if turnID == m.agentTurnID {
+		m.inputReady = true
+		if len(m.messageQueue) > 0 {
+			m.needFlushQueue = true
+		}
+	}
+
+	// For agent sessions (interactive SubAgent viewer), the outbound
+	// message goes back to the parent agent's channel/chatID — it never
+	// arrives as a cliOutboundMsg for this session view. So we must
+	// synthesize the assistant message from the progress payload's final
+	// content (Thinking field carries the last clean assistant text).
+	// For main sessions, handleAgentMessage handles this and will
+	// relocate the tool_summary before the assistant reply.
+	if m.channelName == "agent" && !m.typing {
+		assistantContent := msg.payload.Thinking
+		if assistantContent == "" {
+			assistantContent = msg.payload.StreamContent
+		}
+		if assistantContent != "" {
+			m.messages = append(m.messages, cliMessage{
+				role:      "assistant",
+				content:   assistantContent,
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+			m.renderCacheValid = false
+		}
+	}
+
+	m.relayoutViewport()
 }
 
 // handleInjectedUserMsg processes user messages injected by the agent (e.g. bg task completion).
@@ -959,4 +851,457 @@ func maxTreeDepth(agents []CLISubAgent) int {
 		}
 	}
 	return max
+}
+
+// handleCtrlC handles the unified Ctrl+C keypress.
+// Returns (model, cmd, handled). If handled is true, Update() returns immediately.
+func (m *cliModel) handleCtrlC() (tea.Model, tea.Cmd, bool) {
+	// 1. 关闭所有 overlay/panel
+	if m.quickSwitchMode != "" {
+		m.quickSwitchMode = ""
+	}
+	if m.rewindMode {
+		m.closeRewindPanel()
+	}
+	if m.panelMode != "" {
+		m.closePanel()
+	}
+	if m.searchMode {
+		m.exitSearch()
+	}
+	// 2. 取消正在编辑的排队消息
+	if m.queueEditing {
+		m.queueEditing = false
+		m.queueEditBuf = ""
+		m.textarea.SetValue("")
+	}
+	// 3. 如果 agent 正在处理：
+	//    - 有排队消息：只清空队列，不发 cancel（需要再按一次 Ctrl+C 才 cancel）
+	//    - 无排队消息：发送 cancel
+	if m.typing {
+		queueLen := len(m.messageQueue)
+		if queueLen > 0 {
+			m.messageQueue = nil
+			m.showSystemMsg(fmt.Sprintf(m.locale.QueueCleared, queueLen), feedbackInfo)
+		} else {
+			m.sendCancel()
+		}
+		return m, nil, true
+	}
+	// 4. 空闲状态：清空输入
+	if m.textarea.Value() != "" {
+		m.textarea.Reset()
+		m.inputHistoryIdx = -1
+		m.inputDraft = ""
+		m.autoExpandInput()
+	}
+	return m, nil, true
+}
+
+// handleSwitchLLMDoneMsg processes async subscription switch completion.
+// Returns (model, cmd, handled).
+func (m *cliModel) handleSwitchLLMDoneMsg(done cliSwitchLLMDoneMsg) (tea.Model, tea.Cmd, bool) {
+	returnToSettings := m.quickSwitchReturnToPanel
+	m.quickSwitchReturnToPanel = false
+	if done.err != nil {
+		m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
+	} else if done.mgr != nil {
+		if err := done.mgr.SetDefault(done.subID, m.chatID); err != nil {
+			m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
+		} else {
+			m.subGeneration++ // subscription actually changed
+			m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
+			// Refresh values cache so GetCurrentValues() reflects the new subscription.
+			if m.channel != nil && m.channel.config.RefreshValuesCache != nil {
+				m.channel.config.RefreshValuesCache()
+			}
+		}
+		// Update cached model name directly from the switch result
+		// (same pattern as model-switch case — avoids stale config/RPC reads)
+		if done.subModel != "" {
+			m.cachedModelName = done.subModel
+			// Always refresh modelCount after subscription switch
+			// so status bar shows correct count and [Ctrl+N] hint.
+			if m.channel.modelLister != nil {
+				m.modelCount = len(m.channel.modelLister.ListModels())
+			}
+		} else {
+			// Subscription has no model configured — clear stale model name.
+			m.cachedModelName = ""
+		}
+	}
+	// If we came from the settings panel, re-open it so the user can continue editing
+	if returnToSettings {
+		m.openSettingsFromQuickSwitch()
+	}
+	// Drain pendingCmds (e.g. showTempStatus timer) — must not return nil cmds
+	var cmd tea.Cmd
+	if len(m.pendingCmds) > 0 {
+		cmd = tea.Batch(m.pendingCmds...)
+		m.pendingCmds = nil
+	}
+	return m, cmd, true
+}
+
+// handleTickMsg processes the fast tick (100ms) message.
+// Returns tea.Cmds to batch with other commands.
+func (m *cliModel) handleTickMsg() []tea.Cmd {
+	var cmds []tea.Cmd
+
+	// Always refresh bg task count on tick so status bar updates immediately
+	// when a bg task completes (even when no progress event is coming)
+	if m.bgTaskCountFn != nil {
+		prev := m.bgTaskCount
+		m.bgTaskCount = m.bgTaskCountFn()
+		// Force re-render when count changes (e.g. task killed in panel)
+		if m.bgTaskCount != prev {
+			m.renderCacheValid = false
+		}
+	}
+	// Refresh agent count on tick
+	if m.agentCountFn != nil {
+		prev := m.agentCount
+		m.agentCount = m.agentCountFn()
+		if m.agentCount != prev {
+			m.renderCacheValid = false
+		}
+	}
+	// Schedule next tick when agent is active or bg tasks are running.
+	// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
+	// (two tickCmd() would double the message count every 100ms → CPU explosion).
+	busy := m.typing || m.progress != nil
+	if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || (m.agentCountFn != nil && m.agentCount > 0) || busy {
+		m.fastTickActive = true
+		cmds = append(cmds, tickCmd())
+	} else if m.needFlushQueue && len(m.messageQueue) > 0 {
+		m.fastTickActive = true
+		// Pending queue flush — use fast tick so the queued message
+		// is sent promptly (not waiting 3s for idleTickCmd).
+		cmds = append(cmds, tickCmd())
+	} else {
+		// Transition to idle: start low-frequency tick for placeholder rotation
+		m.fastTickActive = false
+		cmds = append(cmds, idleTickCmd())
+	}
+	if busy {
+		// Advance spinner frame on every tick so the animation stays in sync
+		// with elapsed time display. Previously driven by a separate tickerTickMsg
+		// chain that could break when m.progress briefly went nil.
+		m.ticker.tick()
+		// Typewriter is now driven by its own typewriterTickMsg chain (50ms).
+		// Start the typewriter chain if there's stream or reasoning content to reveal.
+		hasStreamContent := m.progress != nil && m.progress.StreamContent != "" && m.twVisible < len([]rune(m.progress.StreamContent))
+		hasReasoningContent := m.progress != nil && m.progress.ReasoningStreamContent != "" && m.rwVisible < len([]rune(m.progress.ReasoningStreamContent))
+		if hasStreamContent || hasReasoningContent {
+			if !m.typewriterTickActive {
+				m.typewriterTickActive = true
+				cmds = append(cmds, typewriterTickCmd())
+			}
+		}
+		m.updateViewportContent()
+	} else {
+		// Not busy: stop typewriter chain
+		m.typewriterTickActive = false
+		// Still refresh viewport if messages were added/changed (e.g. assistant
+		// reply arrived via handleAgentMessage after PhaseDone cleared progress).
+		if !m.renderCacheValid {
+			m.updateViewportContent()
+		}
+	}
+
+	// §Q Flush message queue on tick (not in cliProgressMsg/cliOutboundMsg).
+	// This ensures the previous reply is already appended to m.messages before
+	// the queued message gets sent, producing correct order: msg1, reply1, msg2.
+	// Guard: only flush when NOT typing (previous turn fully complete).
+	if m.needFlushQueue && !m.typing && len(m.messageQueue) > 0 {
+		m.needFlushQueue = false
+		m.flushMessageQueue()
+		// Always return after flush so the tickCmd queued by startAgentTurn()
+		// (inside sendMessageFromQueue → sendMessage) gets picked up in cmds.
+		return cmds
+	}
+
+	return cmds
+}
+
+// handleIdleTick processes the low-frequency idle tick for placeholder rotation.
+func (m *cliModel) handleIdleTick() []tea.Cmd {
+	var cmds []tea.Cmd
+	// Low-frequency idle tick: rotate placeholder and keep alive
+	// Remote mode: keep retrying model name fetch until we get one.
+	if m.cachedModelName == "" && m.remoteMode {
+		m.refreshCachedModelName()
+	}
+	if !m.typing && m.progress == nil {
+		m.updatePlaceholder()
+		cmds = append(cmds, idleTickCmd())
+	} else if !m.fastTickActive {
+		// Self-healing: if fast tick chain broke but we're still busy
+		// (typing or progress active), re-arm fast tick.
+		m.fastTickActive = true
+		cmds = append(cmds, tickCmd())
+	}
+	return cmds
+}
+
+// handleTypewriterTick advances the typewriter effect and continues the chain.
+func (m *cliModel) handleTypewriterTick() []tea.Cmd {
+	var cmds []tea.Cmd
+	// Advance typewriter by 1 rune on its own 50ms cadence.
+	m.advanceTypewriter()
+	m.updateViewportContent()
+	// Continue chain if still behind on either stream or reasoning content
+	streamBehind := m.progress != nil && m.progress.StreamContent != "" && m.twVisible < len([]rune(m.progress.StreamContent))
+	reasoningBehind := m.progress != nil && m.progress.ReasoningStreamContent != "" && m.rwVisible < len([]rune(m.progress.ReasoningStreamContent))
+	if m.typewriterTickActive && (streamBehind || reasoningBehind) {
+		cmds = append(cmds, typewriterTickCmd())
+	} else {
+		m.typewriterTickActive = false
+	}
+	return cmds
+}
+
+// handleSplashDone processes the splash screen completion.
+func (m *cliModel) handleSplashDone() []tea.Cmd {
+	var cmds []tea.Cmd
+	// §14 启动画面结束确认
+	m.splashDone = true
+	// Remote mode: retry model name fetch — the initial call in cli.go:76
+	// may have failed if the WS RPC wasn't fully ready yet.
+	if m.cachedModelName == "" && m.remoteMode {
+		m.refreshCachedModelName()
+	}
+	if m.typing && m.progress != nil && !m.fastTickActive {
+		m.fastTickActive = true
+		cmds = append(cmds, tickCmd())
+	} else if !m.typing || m.progress == nil {
+		cmds = append(cmds, idleTickCmd())
+	}
+	return cmds
+}
+
+// handleHistoryLoad loads pre-converted history messages into the model.
+func (m *cliModel) handleHistoryLoad(msg cliHistoryLoadMsg) {
+	if len(msg.history) > 0 {
+		m.messages = append(m.messages, msg.history...)
+		m.invalidateAllCache(false)
+		m.updateViewportContent()
+		if m.streamingMsgIdx < 0 {
+			m.viewport.GotoBottom()
+		}
+		log.WithFields(log.Fields{"count": len(msg.history)}).Info("Applied history load in Update loop")
+	}
+}
+
+// handleApprovalRequest shows the approval dialog for a permission request.
+func (m *cliModel) handleApprovalRequest(msg approvalRequestMsg) (tea.Model, tea.Cmd) {
+	// Permission control: show approval dialog
+	m.approvalRequest = &msg.request
+	m.approvalResultCh = msg.resultCh
+	m.approvalCursor = 0 // default to Approve
+	m.approvalEnteringDeny = false
+	m.approvalDenyInput = textinput.New()
+	m.approvalDenyInput.Placeholder = "Optional deny reason for LLM"
+	m.approvalDenyInput.CharLimit = 200
+	m.approvalDenyInput.SetWidth(60)
+	m.panelMode = "approval"
+	m.renderCacheValid = false
+	return m, nil
+}
+
+// handleSearchKey processes key events when search mode is active.
+// Returns (model, cmd, handled). If handled is true, Update() returns immediately.
+func (m *cliModel) handleSearchKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	switch {
+	case m.searchEditing:
+		switch key.String() {
+		case "enter":
+			m.executeSearch()
+			return m, nil, true
+		case "esc":
+			m.exitSearch()
+			return m, nil, true
+		}
+		var cmd tea.Cmd
+		m.searchTI, cmd = m.searchTI.Update(key)
+		return m, cmd, true
+	default:
+		switch key.String() {
+		case "n":
+			if len(m.searchResults) > 0 {
+				next := m.searchIdx + 1
+				if next >= len(m.searchResults) {
+					next = 0
+				}
+				m.jumpToSearchResult(next)
+				m.renderCacheValid = false
+				m.updateViewportContent()
+			}
+			return m, nil, true
+		case "N":
+			if len(m.searchResults) > 0 {
+				prev := m.searchIdx - 1
+				if prev < 0 {
+					prev = len(m.searchResults) - 1
+				}
+				m.jumpToSearchResult(prev)
+				m.renderCacheValid = false
+				m.updateViewportContent()
+			}
+			return m, nil, true
+		case "esc":
+			m.exitSearch()
+			return m, nil, true
+		}
+		return m, nil, true
+	}
+}
+
+// handleEnterKey processes the Enter keypress for sending messages, queue management,
+// and file completion. Returns (model, cmds, handled).
+func (m *cliModel) handleEnterKey() (tea.Model, []tea.Cmd, bool) {
+	var cmds []tea.Cmd
+
+	// Plain Enter sends. Modified/newline-intent variants should fall through to
+	// the textarea so its native multiline/internal-scroll behavior works,
+	// especially once the input reaches MaxHeight.
+	// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
+	// Note: cycleModel uses Ctrl+N (not Ctrl+M), so no need to intercept here.
+	// Enter 发送消息
+	if !m.inputReady {
+		// §Q 消息队列：typing 期间允许排队消息
+		if m.queueEditing {
+			// 正在编辑排队消息 → 保存编辑结果
+			m.messageQueue[len(m.messageQueue)-1] = m.textarea.Value()
+			m.queueEditing = false
+			m.queueEditBuf = ""
+			m.textarea.SetValue("")
+			return m, nil, true
+		}
+		if m.textarea.Value() != "" {
+			m.messageQueue = append(m.messageQueue, m.textarea.Value())
+			m.textarea.SetValue("")
+			// 显示队列提示
+			if len(m.messageQueue) == 1 {
+				m.showTempStatus(fmt.Sprintf(m.locale.MessageQueuedUp, len(m.messageQueue)))
+			} else {
+				m.showTempStatus(fmt.Sprintf(m.locale.MessageQueued, len(m.messageQueue)))
+			}
+			return m, nil, true
+		}
+		return m, nil, true
+	}
+	// §8b @ 模式：Enter 进入目录或确认文件
+	// Check fileCompletions even without Tab (fileCompActive=false):
+	// typing @path auto-populates completions via input change handler.
+	if len(m.fileCompletions) > 0 {
+		input := m.textarea.Value()
+		if ok, prefix := detectAtPrefix(input); ok {
+			selected := m.fileCompletions[m.fileCompIdx]
+			atStart := len(input) - len(prefix) - 1
+			if isDir(selected) {
+				newInput := input[:atStart] + "@" + selected + "/"
+				m.textarea.SetValue(newInput)
+				m.fileCompActive = false
+				m.populateFileCompletions(selected + "/")
+			} else {
+				newInput := input[:atStart] + "@" + selected + " "
+				m.textarea.SetValue(newInput)
+				m.fileCompActive = false
+				m.fileCompletions = nil
+				m.fileCompIdx = 0
+			}
+			return m, nil, true
+		}
+	}
+	content := strings.TrimSpace(m.textarea.Value())
+	if content != "" {
+		// §22 输入历史：保存发送的内容（去重，不保存 / 命令和空输入）
+		if !strings.HasPrefix(content, "/") {
+			if len(m.inputHistory) == 0 || m.inputHistory[0] != content {
+				m.inputHistory = append([]string{content}, m.inputHistory...)
+				if len(m.inputHistory) > 100 {
+					m.inputHistory = m.inputHistory[:100]
+				}
+			}
+		}
+		m.inputHistoryIdx = -1
+		m.inputDraft = ""
+		if m.allTodosDone() {
+			m.todos = nil
+			m.todosDoneCleared = true
+			m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+		}
+		// 发送消息（彩蛋可能返回动画 cmd）
+		if cmd := m.sendMessage(content); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		m.textarea.Reset()
+		m.autoExpandInput()
+		m.viewport.GotoBottom()
+		m.newContentHint = false
+	}
+	// NOTE: tick chain is started by startAgentTurn() inside sendMessage().
+	// No need to emit tickCmd() here — doing so would create duplicate chains.
+	return m, cmds, true
+}
+
+// handleShiftUp handles Shift+Up for queue recall and input history browsing.
+func (m *cliModel) handleShiftUp() (tea.Model, []tea.Cmd, bool) {
+	// Shift+Up: recall queued message for editing / browse input history.
+	if m.panelMode == "" && m.textarea.Value() != "" {
+		return m, nil, true
+	}
+	if !m.viewport.AtBottom() {
+		return m, nil, true
+	}
+	// §Q 消息队列：typing 时 Shift+↑ 追回最后一条排队消息编辑
+	if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
+		if !m.queueEditing && m.textarea.Value() == "" {
+			// 追回最后一条排队消息
+			m.queueEditing = true
+			m.queueEditBuf = m.messageQueue[len(m.messageQueue)-1]
+			m.textarea.SetValue(m.queueEditBuf)
+			m.autoExpandInput()
+			return m, nil, true
+		}
+	}
+	if m.panelMode == "" && !m.typing {
+		// 空输入时浏览历史
+		if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
+			if m.inputHistoryIdx == -1 {
+				m.inputDraft = "" // 保存空草稿
+				m.inputHistoryIdx = 0
+			} else if m.inputHistoryIdx < len(m.inputHistory)-1 {
+				m.inputHistoryIdx++
+			}
+			m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+			m.autoExpandInput()
+			return m, nil, true
+		}
+	}
+	return m, nil, false
+}
+
+// handleShiftDown handles Shift+Down for reverse input history browsing.
+func (m *cliModel) handleShiftDown() (tea.Model, []tea.Cmd, bool) {
+	// Shift+Down: browse input history backwards.
+	if m.panelMode == "" && m.textarea.Value() != "" {
+		return m, nil, true
+	}
+	if !m.viewport.AtBottom() {
+		return m, nil, true
+	}
+	if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
+		if m.inputHistoryIdx > 0 {
+			m.inputHistoryIdx--
+			m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+		} else {
+			m.inputHistoryIdx = -1
+			m.textarea.SetValue(m.inputDraft)
+		}
+		m.autoExpandInput()
+		return m, nil, true
+	}
+	return m, nil, false
 }

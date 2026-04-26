@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,6 +19,14 @@ import (
 	"xbot/session"
 	"xbot/storage/sqlite"
 	"xbot/tools"
+)
+
+// Sentinel errors for service availability checks.
+var (
+	ErrSettingsUnavailable      = errors.New("settings service not available")
+	ErrBgTasksUnavailable       = errors.New("background tasks not available")
+	ErrSubscriptionsUnavailable = errors.New("subscription service not available")
+	ErrNoSessionManager         = errors.New("no session manager")
 )
 
 // LocalBackend runs the agent in-process. It wraps an agent.Agent directly,
@@ -85,7 +94,7 @@ func (b *LocalBackend) IsRemote() bool { return false }
 func (b *LocalBackend) IsProcessing(ch, chatID string) bool {
 	prefix := ch + ":" + chatID + ":"
 	found := false
-	b.agent.chatCancelCh.Range(func(key, _ interface{}) bool {
+	b.agent.chatCancelCh.Range(func(key, _ any) bool {
 		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
 			found = true
 			return false
@@ -216,7 +225,7 @@ func (b *LocalBackend) SetCWD(ch, chatID, dir string) error {
 		return fmt.Errorf("CWD sync not supported in %s sandbox mode", b.agent.sandboxMode)
 	}
 	if b.agent.MultiSession() == nil {
-		return fmt.Errorf("no session manager")
+		return ErrNoSessionManager
 	}
 	sess, err := b.agent.MultiSession().GetOrCreateSession(ch, chatID)
 	if err != nil {
@@ -241,6 +250,10 @@ func (b *LocalBackend) SetMaxConcurrency(n int) {
 
 func (b *LocalBackend) SetMaxContextTokens(n int) {
 	b.agent.SetMaxContextTokens(n)
+}
+
+func (b *LocalBackend) SetCompressionThreshold(f float64) {
+	b.agent.SetCompressionThreshold(f)
 }
 
 func (b *LocalBackend) SetSandbox(sb tools.Sandbox, mode string) {
@@ -342,14 +355,14 @@ func (b *LocalBackend) GetContextMode() string {
 
 func (b *LocalBackend) GetSettings(namespace, senderID string) (map[string]string, error) {
 	if b.agent.settingsSvc == nil {
-		return nil, fmt.Errorf("settings service not available")
+		return nil, ErrSettingsUnavailable
 	}
 	return b.agent.settingsSvc.GetSettings(namespace, senderID)
 }
 
 func (b *LocalBackend) SetSetting(namespace, senderID, key, value string) error {
 	if b.agent.settingsSvc == nil {
-		return fmt.Errorf("settings service not available")
+		return ErrSettingsUnavailable
 	}
 	return b.agent.settingsSvc.SetSetting(namespace, senderID, key, value)
 }
@@ -454,7 +467,7 @@ func (b *LocalBackend) ListBgTasks(sessionKey string) ([]BgTaskJSON, error) {
 
 func (b *LocalBackend) KillBgTask(taskID string) error {
 	if b.agent.bgTaskMgr == nil {
-		return fmt.Errorf("background tasks not available")
+		return ErrBgTasksUnavailable
 	}
 	return b.agent.bgTaskMgr.Kill(taskID)
 }
@@ -532,7 +545,7 @@ func (b *LocalBackend) GetDefaultSubscription(senderID string) (*channel.Subscri
 func (b *LocalBackend) AddSubscription(senderID string, sub channel.Subscription) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
-		return fmt.Errorf("subscription service not available")
+		return ErrSubscriptionsUnavailable
 	}
 	if err := svc.Add(&sqlite.LLMSubscription{
 		ID: sub.ID, SenderID: senderID, Name: sub.Name,
@@ -548,7 +561,7 @@ func (b *LocalBackend) AddSubscription(senderID string, sub channel.Subscription
 func (b *LocalBackend) RemoveSubscription(id string) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
-		return fmt.Errorf("subscription service not available")
+		return ErrSubscriptionsUnavailable
 	}
 	sub, err := svc.Get(id)
 	if err != nil {
@@ -566,7 +579,7 @@ func (b *LocalBackend) RemoveSubscription(id string) error {
 func (b *LocalBackend) SetDefaultSubscription(id string, chatID string) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
-		return fmt.Errorf("subscription service not available")
+		return ErrSubscriptionsUnavailable
 	}
 	if err := svc.SetDefault(id); err != nil {
 		return err
@@ -584,7 +597,7 @@ func (b *LocalBackend) SetDefaultSubscription(id string, chatID string) error {
 func (b *LocalBackend) RenameSubscription(id, name string) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
-		return fmt.Errorf("subscription service not available")
+		return ErrSubscriptionsUnavailable
 	}
 	return svc.Rename(id, name)
 }
@@ -592,7 +605,7 @@ func (b *LocalBackend) RenameSubscription(id, name string) error {
 func (b *LocalBackend) UpdateSubscription(id string, sub channel.Subscription) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
-		return fmt.Errorf("subscription service not available")
+		return ErrSubscriptionsUnavailable
 	}
 	existing, err := svc.Get(id)
 	if err != nil {
@@ -628,7 +641,7 @@ func (b *LocalBackend) UpdateSubscription(id string, sub channel.Subscription) e
 func (b *LocalBackend) SetSubscriptionModel(id, model string) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {
-		return fmt.Errorf("subscription service not available")
+		return ErrSubscriptionsUnavailable
 	}
 	sub, err := svc.Get(id)
 	if err != nil {
@@ -657,6 +670,26 @@ func (b *LocalBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage, 
 		return nil, err
 	}
 	return channel.ConvertMessagesToHistory(msgs), nil
+}
+
+func (b *LocalBackend) GetTokenState(ch, chatID string) (int64, int64, error) {
+	ms := b.agent.MultiSession()
+	if ms == nil {
+		return 0, 0, nil
+	}
+	sess, err := ms.GetOrCreateSession(ch, chatID)
+	if err != nil {
+		return 0, 0, err
+	}
+	memSvc := sess.MemoryService()
+	if memSvc == nil {
+		return 0, 0, nil
+	}
+	pt, ct, err := memSvc.GetTokenState(context.Background(), sess.TenantID())
+	if err != nil {
+		return 0, 0, err
+	}
+	return pt, ct, nil
 }
 
 func (b *LocalBackend) TrimHistory(ch, chatID string, cutoff time.Time) error {

@@ -18,10 +18,10 @@ type WriteMsg struct {
 }
 
 // LogFunc 是日志回调函数类型。
-type LogFunc func(format string, args ...interface{})
+type LogFunc func(format string, args ...any)
 
 // callLogf 安全调用日志函数（nil 保护）。
-func callLogf(logf LogFunc, format string, args ...interface{}) {
+func callLogf(logf LogFunc, format string, args ...any) {
 	if logf != nil {
 		logf(format, args...)
 	}

@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"xbot/llm"
@@ -1393,15 +1394,12 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 				if cur == "" && def.DefaultValue != "" {
 					cur = def.DefaultValue
 				}
-				found := false
-				for i, opt := range def.Options {
-					if opt.Value == cur && i < len(def.Options)-1 {
-						m.panelValues[def.Key] = def.Options[i+1].Value
-						found = true
-						break
-					}
-				}
-				if !found && len(def.Options) > 0 {
+				idx := slices.IndexFunc(def.Options, func(opt SettingOption) bool {
+					return opt.Value == cur
+				})
+				if idx >= 0 && idx < len(def.Options)-1 {
+					m.panelValues[def.Key] = def.Options[idx+1].Value
+				} else if len(def.Options) > 0 {
 					m.panelValues[def.Key] = def.Options[0].Value
 				}
 				return true, m, nil

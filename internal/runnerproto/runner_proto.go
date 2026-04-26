@@ -203,7 +203,7 @@ func ProtoErrorCode(err error) string {
 }
 
 // MakeResponse creates a RunnerMessage with the given type and body.
-func MakeResponse(id, respType string, body interface{}) *RunnerMessage {
+func MakeResponse(id, respType string, body any) *RunnerMessage {
 	data, _ := json.Marshal(body)
 	return &RunnerMessage{ID: id, Type: respType, Body: data}
 }

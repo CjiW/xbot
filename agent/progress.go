@@ -83,6 +83,7 @@ type TokenUsageSnapshot struct {
 	CompletionTokens int64
 	TotalTokens      int64
 	CacheHitTokens   int64
+	MaxOutputTokens  int64 // output token reservation (for context bar display)
 }
 
 // SubAgentProgressDetail 携带层级信息的 SubAgent 进度回调参数。

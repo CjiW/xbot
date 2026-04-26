@@ -70,16 +70,16 @@ type manageToolsArgs struct {
 }
 
 func (t *ManageTools) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args manageToolsArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
+	args, err := parseToolArgs[manageToolsArgs](input)
+	if err != nil {
+		return nil, err
 	}
 
 	switch args.Action {
 	case "add_mcp":
-		return t.addMCP(ctx, args)
+		return t.addMCP(ctx, *args)
 	case "remove_mcp":
-		return t.removeMCP(ctx, args)
+		return t.removeMCP(ctx, *args)
 	case "list_mcp":
 		return t.listMCP(ctx)
 	case "reload":

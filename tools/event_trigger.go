@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,7 +60,7 @@ type eventTriggerParams struct {
 func (t *EventTriggerTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	p, err := parseToolArgs[eventTriggerParams](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	senderID := ""
@@ -152,8 +152,8 @@ func (t *EventTriggerTool) listTriggers(senderID string) (*ToolResult, error) {
 		return NewResult("No event triggers registered."), nil
 	}
 
-	sort.Slice(triggers, func(i, j int) bool {
-		return triggers[i].CreatedAt.Before(triggers[j].CreatedAt)
+	slices.SortFunc(triggers, func(a, b *event.Trigger) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
 	})
 
 	var sb strings.Builder

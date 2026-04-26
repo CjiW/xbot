@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -393,14 +394,7 @@ func TestRun_ProgressNotification(t *testing.T) {
 		t.Error("expected progress notifications")
 	}
 	// Should have at least the tool progress notification
-	found := false
-	for _, n := range notifications {
-		if strings.Contains(n, "Shell") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(notifications, func(n string) bool { return strings.Contains(n, "Shell") }) {
 		t.Errorf("no Shell tool notification found in: %v", notifications)
 	}
 }
@@ -1576,7 +1570,7 @@ func TestRun_TokenUsageInProgress(t *testing.T) {
 	if capturedSnapshot.CompletionTokens != 300 {
 		t.Errorf("CompletionTokens = %d, want 300", capturedSnapshot.CompletionTokens)
 	}
-	if capturedSnapshot.TotalTokens != 1800 {
-		t.Errorf("TotalTokens = %d, want 1800", capturedSnapshot.TotalTokens)
+	if capturedSnapshot.TotalTokens != 1500 {
+		t.Errorf("TotalTokens = %d, want 1500 (context fill = prompt tokens only)", capturedSnapshot.TotalTokens)
 	}
 }

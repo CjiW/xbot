@@ -399,3 +399,341 @@ func TestInvalidate_DoesNotAffectOtherUsers(t *testing.T) {
 		t.Errorf("userB model after Invalidate(userA) = %q, want claude-3-opus", modelB)
 	}
 }
+
+// TestGetLLMForModel_ConfigSubExactMatch verifies the config.json subscription path:
+// when configSubsFn returns a subscription whose Model matches the resolved tier model,
+// GetLLMForModel should use that subscription (usedCustom=true).
+func TestGetLLMForModel_ConfigSubExactMatch(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+	f.defaultThinkingMode = "auto"
+
+	// Configure tier so "vanguard" resolves to "gpt-4o"
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "gpt-4o",
+	})
+
+	// Set up configSubsFn with a matching subscription
+	f.SetConfigSubs(func() []config.SubscriptionConfig {
+		return []config.SubscriptionConfig{
+			{
+				ID:       "sub-1",
+				Name:     "test-sub",
+				Provider: "openai",
+				BaseURL:  "https://api.test/v1",
+				APIKey:   "sk-test",
+				Model:    "gpt-4o",
+			},
+		}
+	})
+
+	client, model, _, _, usedCustom := f.GetLLMForModel("user1", "vanguard")
+	if !usedCustom {
+		t.Error("usedCustom should be true when config sub matches resolved model")
+	}
+	if model != "gpt-4o" {
+		t.Errorf("model = %q, want %q", model, "gpt-4o")
+	}
+	if client == nil {
+		t.Error("client should not be nil when config sub matches")
+	}
+}
+
+// TestGetLLMForModel_ConfigSubNoMatch verifies that when configSubsFn returns
+// subscriptions but none match the resolved tier model, it falls back to the
+// default LLM (usedCustom=false, model=default-model).
+func TestGetLLMForModel_ConfigSubNoMatch(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+	f.defaultThinkingMode = "auto"
+
+	// Configure tier so "vanguard" resolves to "gpt-4o"
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "gpt-4o",
+	})
+
+	// Config sub has a different model — no match
+	f.SetConfigSubs(func() []config.SubscriptionConfig {
+		return []config.SubscriptionConfig{
+			{
+				ID:       "sub-1",
+				Name:     "other-sub",
+				Provider: "openai",
+				BaseURL:  "https://api.test/v1",
+				APIKey:   "sk-test",
+				Model:    "other-model",
+			},
+		}
+	})
+
+	client, model, _, _, usedCustom := f.GetLLMForModel("user1", "vanguard")
+	if usedCustom {
+		t.Error("usedCustom should be false when no config sub matches resolved model")
+	}
+	if model != "default-model" {
+		t.Errorf("model = %q, want %q (fallback to default)", model, "default-model")
+	}
+	if client == nil {
+		t.Error("client should not be nil (fallback default client)")
+	}
+}
+
+// TestGetLLMForModel_ConfigSubSkipsEmptyCredentials verifies that config
+// subscriptions with matching Model but empty BaseURL or APIKey are skipped,
+// and the function falls through to the default LLM.
+func TestGetLLMForModel_ConfigSubSkipsEmptyCredentials(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+	f.defaultThinkingMode = "auto"
+
+	// Configure tier so "vanguard" resolves to "gpt-4o"
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "gpt-4o",
+	})
+
+	// Sub-tests for empty BaseURL and empty APIKey
+	tests := []struct {
+		name string
+		sub  config.SubscriptionConfig
+	}{
+		{
+			name: "empty BaseURL",
+			sub: config.SubscriptionConfig{
+				ID:       "sub-empty-url",
+				Name:     "no-url",
+				Provider: "openai",
+				BaseURL:  "",
+				APIKey:   "sk-test",
+				Model:    "gpt-4o",
+			},
+		},
+		{
+			name: "empty APIKey",
+			sub: config.SubscriptionConfig{
+				ID:       "sub-empty-key",
+				Name:     "no-key",
+				Provider: "openai",
+				BaseURL:  "https://api.test/v1",
+				APIKey:   "",
+				Model:    "gpt-4o",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.SetConfigSubs(func() []config.SubscriptionConfig {
+				return []config.SubscriptionConfig{tt.sub}
+			})
+
+			_, model, _, _, usedCustom := f.GetLLMForModel("user1", "vanguard")
+			if usedCustom {
+				t.Error("usedCustom should be false when config sub has empty credentials")
+			}
+			if model != "default-model" {
+				t.Errorf("model = %q, want %q (fallback to default)", model, "default-model")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for buildModelSubscriptionMap & configSubToLLMSubscription
+// ---------------------------------------------------------------------------
+
+// TestBuildModelSubscriptionMap_ConfigSubs verifies that config subscriptions
+// with different models each produce an entry in the model→subscription map.
+func TestBuildModelSubscriptionMap_ConfigSubs(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+
+	f.SetConfigSubs(func() []config.SubscriptionConfig {
+		return []config.SubscriptionConfig{
+			{
+				ID:       "sub-a",
+				Name:     "OpenAI",
+				Provider: "openai",
+				BaseURL:  "https://api.openai.com/v1",
+				APIKey:   "sk-openai",
+				Model:    "gpt-4o",
+			},
+			{
+				ID:       "sub-b",
+				Name:     "Anthropic",
+				Provider: "anthropic",
+				BaseURL:  "https://api.anthropic.com",
+				APIKey:   "sk-ant-key",
+				Model:    "claude-sonnet-4-20250514",
+			},
+		}
+	})
+
+	m := f.buildModelSubscriptionMap("user1")
+
+	if len(m) != 2 {
+		t.Fatalf("map size = %d, want 2", len(m))
+	}
+	if sub, ok := m["gpt-4o"]; !ok {
+		t.Error("missing gpt-4o entry")
+	} else if sub.ID != "sub-a" {
+		t.Errorf("gpt-4o mapped to sub %q, want sub-a", sub.ID)
+	}
+	if sub, ok := m["claude-sonnet-4-20250514"]; !ok {
+		t.Error("missing claude-sonnet-4-20250514 entry")
+	} else if sub.ID != "sub-b" {
+		t.Errorf("claude-sonnet-4-20250514 mapped to sub %q, want sub-b", sub.ID)
+	}
+}
+
+// TestBuildModelSubscriptionMap_ConfigSubsSkipsEmptyCredentials verifies that
+// config subscriptions with empty BaseURL or APIKey are not added to the map.
+func TestBuildModelSubscriptionMap_ConfigSubsSkipsEmptyCredentials(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+
+	// Sub with matching Model but empty BaseURL — must be skipped.
+	f.SetConfigSubs(func() []config.SubscriptionConfig {
+		return []config.SubscriptionConfig{
+			{
+				ID:       "sub-empty-url",
+				Name:     "No URL",
+				Provider: "openai",
+				BaseURL:  "",
+				APIKey:   "sk-test",
+				Model:    "gpt-4o",
+			},
+			{
+				ID:       "sub-empty-key",
+				Name:     "No Key",
+				Provider: "openai",
+				BaseURL:  "https://api.openai.com/v1",
+				APIKey:   "",
+				Model:    "gpt-4o-mini",
+			},
+		}
+	})
+
+	m := f.buildModelSubscriptionMap("user1")
+
+	if len(m) != 0 {
+		t.Fatalf("map size = %d, want 0 (both subs have empty credentials)", len(m))
+	}
+}
+
+// TestBuildModelSubscriptionMap_EmptySenderID verifies that with an empty
+// senderID and nil subscriptionSvc, only config subs are included.
+func TestBuildModelSubscriptionMap_EmptySenderID(t *testing.T) {
+	f := NewLLMFactory(nil, &llm.MockLLM{}, "default-model")
+	// subscriptionSvc is nil by default — no DB path at all.
+
+	f.SetConfigSubs(func() []config.SubscriptionConfig {
+		return []config.SubscriptionConfig{
+			{
+				ID:       "cfg-1",
+				Name:     "ConfigSub",
+				Provider: "openai",
+				BaseURL:  "https://api.test/v1",
+				APIKey:   "sk-cfg",
+				Model:    "gpt-4o",
+			},
+		}
+	})
+
+	// Empty senderID — DB path is also gated by senderID != ""
+	m := f.buildModelSubscriptionMap("")
+
+	if len(m) != 1 {
+		t.Fatalf("map size = %d, want 1 (only config sub)", len(m))
+	}
+	if _, ok := m["gpt-4o"]; !ok {
+		t.Error("missing gpt-4o entry from config sub")
+	}
+}
+
+// TestConfigSubToLLMSubscription verifies that configSubToLLMSubscription
+// correctly maps every field from SubscriptionConfig to LLMSubscription.
+func TestConfigSubToLLMSubscription(t *testing.T) {
+	cs := config.SubscriptionConfig{
+		ID:              "sub-42",
+		Name:            "My Sub",
+		Provider:        "deepseek",
+		BaseURL:         "https://api.deepseek.com/v1",
+		APIKey:          "sk-deep",
+		Model:           "deepseek-chat",
+		MaxOutputTokens: 4096,
+		ThinkingMode:    "enabled",
+	}
+
+	sub := configSubToLLMSubscription(cs)
+
+	if sub.ID != "sub-42" {
+		t.Errorf("ID = %q, want %q", sub.ID, "sub-42")
+	}
+	if sub.Name != "My Sub" {
+		t.Errorf("Name = %q, want %q", sub.Name, "My Sub")
+	}
+	if sub.Provider != "deepseek" {
+		t.Errorf("Provider = %q, want %q", sub.Provider, "deepseek")
+	}
+	if sub.BaseURL != "https://api.deepseek.com/v1" {
+		t.Errorf("BaseURL = %q, want %q", sub.BaseURL, "https://api.deepseek.com/v1")
+	}
+	if sub.APIKey != "sk-deep" {
+		t.Errorf("APIKey = %q, want %q", sub.APIKey, "sk-deep")
+	}
+	if sub.Model != "deepseek-chat" {
+		t.Errorf("Model = %q, want %q", sub.Model, "deepseek-chat")
+	}
+	if sub.MaxOutputTokens != 4096 {
+		t.Errorf("MaxOutputTokens = %d, want 4096", sub.MaxOutputTokens)
+	}
+	if sub.ThinkingMode != "enabled" {
+		t.Errorf("ThinkingMode = %q, want %q", sub.ThinkingMode, "enabled")
+	}
+}
+
+// --- chatKey tests ---
+
+func TestChatKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		senderID string
+		chatID   string
+		want     string
+	}{
+		{"normal", "user123", "chat456", "user123:chat456"},
+		{"empty senderID", "", "chat456", ":chat456"},
+		{"empty chatID", "user123", "", "user123:"},
+		{"both empty", "", "", ":"},
+		{"colons in values", "user:1", "chat:2", "user:1:chat:2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chatKey(tt.senderID, tt.chatID)
+			if got != tt.want {
+				t.Errorf("chatKey(%q, %q) = %q, want %q", tt.senderID, tt.chatID, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- parseOrDefault tests ---
+
+func TestParseOrDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		defaultVal int
+		want       int
+	}{
+		{"empty string returns default", "", 42, 42},
+		{"valid positive int", "100", 42, 100},
+		{"zero returns default", "0", 42, 42},
+		{"negative returns default", "-5", 42, 42},
+		{"non-numeric returns default", "abc", 42, 42},
+		{"whitespace-padded number", "  7", 42, 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseOrDefault(tt.input, tt.defaultVal)
+			if got != tt.want {
+				t.Errorf("parseOrDefault(%q, %d) = %d, want %d", tt.input, tt.defaultVal, got, tt.want)
+			}
+		})
+	}
+}

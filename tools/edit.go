@@ -2,7 +2,6 @@ package tools
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -12,6 +11,11 @@ import (
 
 	"xbot/internal/cmdbuilder"
 	"xbot/llm"
+)
+
+const (
+	tipFileCreated   = "文件已创建。建议用 Read 验证内容。"
+	tipEditCompleted = "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"
 )
 
 // ============================================================================
@@ -52,9 +56,9 @@ type FileCreateParams struct {
 }
 
 func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params FileCreateParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	params, err := parseToolArgs[FileCreateParams](input)
+	if err != nil {
+		return nil, err
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -66,15 +70,15 @@ func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 		params.Reason = ""
 	}
 
-	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
-		return nil, fmt.Errorf("run_as and reason must be provided together")
+	if err := validateRunAsReason(params.RunAs, params.Reason); err != nil {
+		return nil, err
 	}
 
 	if shouldUseSandbox(ctx) {
 		sandboxPath := resolveSandboxPath(ctx, params.Path)
 		return t.sandboxCreate(ctx, sandboxPath, params.Content)
 	}
-	return t.executeLocal(ctx, params)
+	return t.executeLocal(ctx, *params)
 }
 
 func (t *FileCreateTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
@@ -82,7 +86,7 @@ func (t *FileCreateTool) sandboxCreate(ctx *ToolContext, path, content string) (
 		return nil, err
 	}
 	summary := fmt.Sprintf("File created successfully: %s", path)
-	return &ToolResult{Summary: summary, Tips: "文件已创建。建议用 Read 验证内容。"}, nil
+	return &ToolResult{Summary: summary, Tips: tipFileCreated}, nil
 }
 
 func (t *FileCreateTool) executeLocal(ctx *ToolContext, params FileCreateParams) (*ToolResult, error) {
@@ -113,7 +117,7 @@ func (t *FileCreateTool) executeLocal(ctx *ToolContext, params FileCreateParams)
 	}
 
 	summary := fmt.Sprintf("File created successfully: %s", filePath)
-	return &ToolResult{Summary: summary, Tips: "文件已创建。建议用 Read 验证内容。"}, nil
+	return &ToolResult{Summary: summary, Tips: tipFileCreated}, nil
 }
 
 // ============================================================================
@@ -175,9 +179,9 @@ type FileReplaceParams struct {
 }
 
 func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params FileReplaceParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	params, err := parseToolArgs[FileReplaceParams](input)
+	if err != nil {
+		return nil, err
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -192,8 +196,8 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 		params.Reason = ""
 	}
 
-	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
-		return nil, fmt.Errorf("run_as and reason must be provided together")
+	if err := validateRunAsReason(params.RunAs, params.Reason); err != nil {
+		return nil, err
 	}
 
 	// When only end_line is specified, default start_line to 1
@@ -203,9 +207,9 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 
 	if shouldUseSandbox(ctx) {
 		sandboxPath := resolveSandboxPath(ctx, params.Path)
-		return t.executeInSandbox(ctx, sandboxPath, params)
+		return t.executeInSandbox(ctx, sandboxPath, *params)
 	}
-	return t.executeLocal(ctx, params)
+	return t.executeLocal(ctx, *params)
 }
 
 func (t *FileReplaceTool) executeInSandbox(ctx *ToolContext, path string, params FileReplaceParams) (*ToolResult, error) {
@@ -223,7 +227,7 @@ func (t *FileReplaceTool) executeInSandbox(ctx *ToolContext, path string, params
 		return nil, err
 	}
 
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: tipEditCompleted}, nil
 }
 
 func (t *FileReplaceTool) executeLocal(ctx *ToolContext, params FileReplaceParams) (*ToolResult, error) {
@@ -252,7 +256,7 @@ func (t *FileReplaceTool) executeLocal(ctx *ToolContext, params FileReplaceParam
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: tipEditCompleted}, nil
 }
 
 // ============================================================================

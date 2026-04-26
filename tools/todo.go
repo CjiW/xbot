@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"encoding/json"
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -136,12 +136,12 @@ type todoWriteArgs struct {
 }
 
 func (t *TodoWriteTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var a todoWriteArgs
-	if err := json.Unmarshal([]byte(input), &a); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	a, err := parseToolArgs[todoWriteArgs](input)
+	if err != nil {
+		return nil, err
 	}
 	sk := t.Manager.sessionKey(ctx)
-	sort.Slice(a.Todos, func(i, j int) bool { return a.Todos[i].ID < a.Todos[j].ID })
+	slices.SortFunc(a.Todos, func(a, b TodoItem) int { return cmp.Compare(a.ID, b.ID) })
 	t.Manager.SetTodos(sk, a.Todos)
 	done := 0
 	for _, item := range a.Todos {

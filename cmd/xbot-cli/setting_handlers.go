@@ -51,6 +51,18 @@ var cliSettingHandlers = map[string]cliSettingHandler{
 		ApplyConfig: func(cfg *config.Config, value string) { cfg.Sandbox.Mode = value },
 		// sandbox ReinitSandbox is handled separately in local mode (needs app.workDir)
 	},
+	"compression_threshold": {
+		ApplyConfig: func(cfg *config.Config, value string) {
+			if f, err := strconv.ParseFloat(value, 64); err == nil && f > 0 {
+				cfg.Agent.CompressionThreshold = f
+			}
+		},
+		ApplyBackend: func(backend agent.AgentBackend, senderID, value string) {
+			if f, err := strconv.ParseFloat(value, 64); err == nil && f > 0 {
+				backend.SetCompressionThreshold(f)
+			}
+		},
+	},
 	"memory_provider": {
 		ApplyConfig: func(cfg *config.Config, value string) { cfg.Agent.MemoryProvider = value },
 	},
@@ -173,11 +185,5 @@ func isKnownNonRuntimeKey(key string) bool {
 // missingCLIHandlerKeys returns keys from channel.CLIRuntimeSettingKeys
 // that are missing from cliSettingHandlers.
 func missingCLIHandlerKeys() []string {
-	var missing []string
-	for _, k := range channel.CLIRuntimeSettingKeys {
-		if _, ok := cliSettingHandlers[k]; !ok {
-			missing = append(missing, k)
-		}
-	}
-	return missing
+	return channel.MissingRegistryKeys(cliSettingHandlers)
 }

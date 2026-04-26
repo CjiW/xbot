@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -91,14 +92,10 @@ func (m *cliModel) populateFileCompletions(prefix string) {
 		return
 	}
 	// 过滤隐藏文件（以 . 开头）
-	filtered := matches[:0]
-	for _, f := range matches {
+	matches = slices.DeleteFunc(matches, func(f string) bool {
 		base := filepath.Base(f)
-		if len(base) > 0 && base[0] != '.' {
-			filtered = append(filtered, f)
-		}
-	}
-	matches = filtered
+		return len(base) > 0 && base[0] == '.'
+	})
 	sort.Slice(matches, func(i, j int) bool {
 		di, dj := isDir(matches[i]), isDir(matches[j])
 		if di != dj {
@@ -633,6 +630,10 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 	// Empty content with no waiting user: end turn and flush queue,
 	// but don't append a blank message.
 	if content == "" && !msg.WaitingUser && len(msg.ToolsUsed) == 0 {
+		// Persist token usage before clearing progress
+		if m.progress != nil {
+			m.cacheTokenUsage(m.progress.TokenUsage)
+		}
 		m.streamingMsgIdx = -1
 		m.progress = nil
 		m.endAgentTurn(turnID)

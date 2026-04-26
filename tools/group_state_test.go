@@ -1,6 +1,9 @@
 package tools
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestGroupCreateAndGet(t *testing.T) {
 	gm := CreateGroup("test1", []string{"agent:a/r1", "agent:b/r2"})
@@ -73,14 +76,7 @@ func TestListGroups(t *testing.T) {
 		t.Fatalf("expected at least 2 groups, got %d", len(groups))
 	}
 
-	found := false
-	for _, g := range groups {
-		if g.ID == "la1" && len(g.Members) == 1 {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(groups, func(g GroupSummary) bool { return g.ID == "la1" && len(g.Members) == 1 }) {
 		t.Error("la1 group not found in listing")
 	}
 }

@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -52,15 +51,15 @@ func (t *ShellTool) Parameters() []llm.ToolParam {
 }
 
 func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, error) {
-	var params struct {
+	params, err := parseToolArgs[struct {
 		Command    string  `json:"command"`
 		Timeout    float64 `json:"timeout"`
 		Background bool    `json:"background"`
 		RunAs      string  `json:"run_as"`
 		Reason     string  `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}](input)
+	if err != nil {
+		return nil, err
 	}
 
 	if params.Command == "" {
@@ -74,8 +73,8 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		params.Reason = ""
 	}
 
-	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
-		return nil, fmt.Errorf("run_as and reason must be provided together")
+	if err := validateRunAsReason(params.RunAs, params.Reason); err != nil {
+		return nil, err
 	}
 
 	// 检测命令中的控制字符和 null bytes

@@ -36,14 +36,14 @@ func (m *phase1Manager) ShouldCompress(messages []llm.ChatMessage, model string,
 	if err != nil {
 		return false
 	}
-	return shouldCompact(msgTokens+toolTokens, m.config.MaxContextTokens)
+	return shouldCompact(msgTokens+toolTokens, m.config.MaxContextTokens, m.config.CompressionThreshold)
 }
 
 // Compress executes structured compaction via a single LLM call.
 func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
 	originalTokens, _ := llm.CountMessagesTokens(messages, model)
 
-	log.Ctx(ctx).WithFields(map[string]interface{}{
+	log.Ctx(ctx).WithFields(map[string]any{
 		"original_tokens": originalTokens,
 		"max_tokens":      m.config.MaxContextTokens,
 	}).Info("Context compaction: starting")
@@ -60,14 +60,14 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 	}
 
 	if reductionRate < 0.10 {
-		log.Ctx(ctx).WithFields(map[string]interface{}{
+		log.Ctx(ctx).WithFields(map[string]any{
 			"reduction_rate":  reductionRate,
 			"new_tokens":      newTokens,
 			"original_tokens": originalTokens,
 		}).Warn("Context compaction: low reduction rate")
 	}
 
-	log.Ctx(ctx).WithFields(map[string]interface{}{
+	log.Ctx(ctx).WithFields(map[string]any{
 		"reduction_rate": reductionRate,
 		"new_tokens":     newTokens,
 	}).Info("Context compaction completed")
@@ -87,7 +87,7 @@ func (m *phase1Manager) ContextInfo(messages []llm.ChatMessage, model string, to
 		roleTokens = llm.RoleTokenCount{System: msgTokens}
 	}
 	totalTokens := roleTokens.System + roleTokens.User + roleTokens.Assistant + roleTokens.Tool + toolTokens
-	threshold := int(float64(m.config.MaxContextTokens) * 0.75)
+	threshold := int(float64(m.config.MaxContextTokens) * m.config.CompressionThreshold)
 
 	return &ContextStats{
 		SystemTokens:      roleTokens.System,

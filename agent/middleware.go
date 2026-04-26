@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"maps"
+	"slices"
 	"sync"
 
 	"xbot/llm"
@@ -123,11 +125,7 @@ func (mc *MessageContext) BuildSystemPrompt() string {
 		return ""
 	}
 
-	keys := make([]string, 0, len(mc.SystemParts))
-	for k := range mc.SystemParts {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(mc.SystemParts))
 
 	var total int
 	for _, k := range keys {
@@ -238,24 +236,19 @@ func (p *MessagePipeline) Use(mw ...MessageMiddleware) {
 func (p *MessagePipeline) Remove(name string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	n := 0
-	filtered := p.middlewares[:0]
-	for _, mw := range p.middlewares {
-		if mw.Name() == name {
-			n++
-		} else {
-			filtered = append(filtered, mw)
-		}
-	}
-	p.middlewares = filtered
+	before := len(p.middlewares)
+	p.middlewares = slices.DeleteFunc(p.middlewares, func(mw MessageMiddleware) bool {
+		return mw.Name() == name
+	})
+	n := before - len(p.middlewares)
 	return n
 }
 
 // sortLocked 按优先级排序中间件（稳定排序，相同优先级保持添加顺序）。
 // 调用方必须持有锁（mu.Lock）。
 func (p *MessagePipeline) sortLocked() {
-	sort.SliceStable(p.middlewares, func(i, j int) bool {
-		return p.middlewares[i].Priority() < p.middlewares[j].Priority()
+	slices.SortStableFunc(p.middlewares, func(a, b MessageMiddleware) int {
+		return cmp.Compare(a.Priority(), b.Priority())
 	})
 	p.sorted = true
 }

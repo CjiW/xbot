@@ -71,7 +71,7 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 		Type       string `json:"type"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.OutputPath == "" {

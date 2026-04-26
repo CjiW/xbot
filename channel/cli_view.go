@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"image/color"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -13,40 +14,21 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// View 渲染界面
-func (m *cliModel) View() tea.View {
-	// §14 启动画面：品牌展示动画（~2.4 秒后自动消失）
-	if !m.splashDone {
-		v := tea.NewView(m.renderSplash())
-		v.AltScreen = true // 使用 AltScreen 避免残留到主终端缓冲区
-		return v
+// appendStatusHint appends a styled hint to the status line, with proper spacing.
+func appendStatusHint(status, hint string) string {
+	if hint == "" {
+		return status
 	}
-
-	if !m.ready {
-		v := tea.NewView("\n  " + m.locale.SplashLoading)
-		v.AltScreen = true
-		return v
+	if status == "" {
+		return hint
 	}
+	return status + "  " + hint
+}
 
-	// 🥚 彩蛋覆盖层：有彩蛋激活时优先渲染全屏覆盖
-	if m.easterEgg != easterEggNone {
-		v := tea.NewView(m.renderEasterEggOverlay())
-		v.AltScreen = true
-		return v
-	}
-
-	// /su 切换用户后加载历史中的 loading 画面
-	if m.suLoading {
-		v := tea.NewView(m.renderSuLoading())
-		v.AltScreen = true
-		return v
-	}
-
-	// ========== 样式定义 ==========
-
-	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
+// renderTitleBar builds the top title bar with mode label, hints, runner status,
+// and user identity indicator.
+func (m *cliModel) renderTitleBar() string {
 	titleLeft := m.titleText()
-	// 标题栏右侧快捷键提示：紧凑的点分隔，比 | 更柔和
 	titleRight := m.locale.TitleHint
 	// Askuser panel: override titleRight with panel-specific hints (always visible)
 	if m.panelMode == "askuser" {
@@ -70,34 +52,26 @@ func (m *cliModel) View() tea.View {
 	if titlePad < 1 {
 		titlePad = 1
 	}
-	titleBar := m.styles.TitleBar.
-		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
+	return m.styles.TitleBar.Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
+}
 
-		// 输入框样式：根据输入内容动态设置边框颜色
-		// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
-	inputValue := m.textarea.Value()
-	borderColor, completionsHint := m.renderCompletionsHint(inputValue)
-
+// renderInputArea renders the textarea input box with dynamic border color
+// and manual placeholder overlay (avoids textarea's built-in placeholder
+// which triggers CJK rendering bugs on Windows Terminal).
+func (m *cliModel) renderInputArea(borderColor color.Color) string {
 	inputBoxStyle := m.styles.InputBox.BorderForeground(borderColor)
-
 	inputArea := m.textarea.View()
 
-	// §23 Render placeholder manually when textarea is empty.
-	// This avoids textarea's built-in placeholder which causes a view-mode
-	// switch that triggers CJK rendering bugs on Windows Terminal.
+	// Render placeholder manually when textarea is empty.
 	if m.textarea.Value() == "" && m.placeholderText != "" {
-		// Build a 3-line placeholder view matching the textarea's height (minTaHeight=3).
 		taHeight := minTaHeight
 		if h := m.textarea.Height(); h > 0 {
 			taHeight = h
 		}
-		// Truncate placeholder to fit the textarea content width on narrow terminals.
 		ph := m.placeholderText
 		if tw := m.textarea.Width(); tw > 0 {
 			ph = truncateToWidth(ph, tw)
 		}
-		// Render the first character of placeholder as a virtual cursor (reverse style),
-		// using the same cursor color as textarea's normal mode (TACursor).
 		phRunes := []rune(ph)
 		if len(phRunes) > 0 {
 			first := string(phRunes[0])
@@ -114,255 +88,235 @@ func (m *cliModel) View() tea.View {
 		}
 	}
 
-	// 状态栏样式
-	readyStatusStyle := m.styles.ReadyStatus
+	return inputBoxStyle.Render(inputArea)
+}
 
-	// §20 使用缓存样式
-	thinkingStatusStyle := m.styles.ThinkingSt
-
-	// §20 进度样式 → 缓存
-	progressStyle := m.styles.Progress
-	toolStyle := m.styles.Tool
-
-	// ========== 渲染各部分 ==========
-
-	// 输入区
-	input := inputBoxStyle.Render(inputArea)
-
-	// Build content string
-	var content string
-
-	// §16 Toast 通知渲染
-	toastStr := m.renderToast()
-
-	// §21 搜索模式
-	if m.searchMode {
-		var searchBar string
-		if m.searchEditing {
-			searchBar = m.styles.SearchBar.Render(m.searchTI.View())
+// renderReadyStatus builds the "Ready" status bar line with message count,
+// model name, agent session indicator, and right-aligned context usage bar.
+func (m *cliModel) renderReadyStatus() string {
+	readyParts := []string{m.locale.StatusReady}
+	// Session indicator (for agent sessions)
+	if m.channelName == "agent" {
+		parts := strings.SplitN(m.chatID, "/", 2)
+		if len(parts) == 2 {
+			readyParts = append(readyParts, fmt.Sprintf("🤖 %s", parts[1]))
 		} else {
-			searchBar = m.styles.SearchBar.Render(
-				fmt.Sprintf(m.locale.SearchNavFormat, m.searchQuery, m.searchIdx+1, len(m.searchResults)))
+			readyParts = append(readyParts, fmt.Sprintf("🤖 %s", m.chatID))
 		}
-		content = fmt.Sprintf(
-			"%s\n%s\n%s\n%s%s",
-			titleBar,
-			m.viewport.View(),
-			searchBar,
-			input,
-			toastStr,
-		)
-	} else if m.panelMode == "askuser" {
-		// §12b AskUser split layout: viewport visible above, panel at bottom
-		// Note: no panelFooter here — hints are inside the panel (viewAskUserPanel)
-		askRaw := m.viewAskUserPanel()
-		m.clampAskUserPanelScroll(askRaw)
-		askLines := strings.Split(askRaw, "\n")
-		// Calculate available height for the ask panel
-		fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
-		panelBorder := 2
-		viewportH := m.layoutViewportHeight()
-		askVisibleH := m.height - fixedLines - viewportH - panelBorder
-		if askVisibleH < 3 {
-			askVisibleH = 3
+	}
+	// Message count
+	msgCount := len(m.messages)
+	if msgCount > 0 {
+		s := ""
+		if msgCount > 1 {
+			s = "s"
 		}
-		if m.askPanelScrollY+askVisibleH > len(askLines) {
-			m.askPanelScrollY = max(0, len(askLines)-askVisibleH)
+		readyParts = append(readyParts, fmt.Sprintf("%d msg%s", msgCount, s))
+	}
+	// Model name (cached, avoids per-frame lookup)
+	if m.cachedModelName != "" {
+		modelHint := m.cachedModelName
+		if m.modelCount > 1 {
+			modelHint += " [Ctrl+N]"
 		}
-		end := m.askPanelScrollY + askVisibleH
-		if end > len(askLines) {
-			end = len(askLines)
-		}
-		visibleAsk := askLines[m.askPanelScrollY:end]
-		askContent := strings.Join(visibleAsk, "\n")
-		boxedAsk := m.styles.PanelBox.Render(askContent)
-		// Scroll indicator
-		totalAskLines := len(askLines)
-		scrollHint := ""
-		if totalAskLines > askVisibleH {
-			pct := (m.askPanelScrollY + askVisibleH) * 100 / totalAskLines
-			scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] Ctrl+↑↓/PgUp/PgDn", pct))
-		}
-		content = fmt.Sprintf(
-			"%s\n%s\n%s%s%s",
-			titleBar,
-			m.viewport.View(),
-			boxedAsk,
-			scrollHint,
-			toastStr,
-		)
-	} else if m.panelMode != "" {
-		// §12 Panel mode: 手动切片 + PanelBox 包裹（边框永远在屏幕内）
-		panelFooter := m.renderFooter()
-		rawContent := m.viewPanel() // 原始内容，无 PanelBox
-		m.clampPanelScroll(rawContent)
-		rawLines := strings.Split(rawContent, "\n")
-		visibleH := m.panelVisibleHeight()
-		// 切片可见行
-		if m.panelScrollY+visibleH > len(rawLines) {
-			m.panelScrollY = max(0, len(rawLines)-visibleH)
-		}
-		end := m.panelScrollY + visibleH
-		if end > len(rawLines) {
-			end = len(rawLines)
-		}
-		visible := rawLines[m.panelScrollY:end]
-		panelContent := strings.Join(visible, "\n")
-		// PanelBox 包裹（边框在切片之后，保证完整显示）
-		boxedContent := m.styles.PanelBox.Render(panelContent)
-		content = fmt.Sprintf(
-			"%s\n%s%s%s",
-			titleBar,
-			boxedContent,
-			panelFooter,
-			toastStr,
-		)
+		readyParts = append(readyParts, modelHint)
+	}
+	leftParts := strings.Join(readyParts, " · ")
+
+	// Context usage bar (right-aligned)
+	if ctxBar := m.renderContextUsage(); ctxBar != "" {
+		return m.styles.ReadyStatus.Render(padBetween(leftParts, ctxBar, m.width))
+	}
+	return m.styles.ReadyStatus.Render(leftParts)
+}
+
+// layoutSearch renders the search-mode layout: title bar, viewport, search bar,
+// input box, and toast.
+func (m *cliModel) layoutSearch(titleBar, input, toast string) string {
+	var searchBar string
+	if m.searchEditing {
+		searchBar = m.styles.SearchBar.Render(m.searchTI.View())
 	} else {
-		// 输入区
-		var status string
-		if m.typing || m.progress != nil {
-			// 显示 spinner + 进度信息
-			status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
-		} else if m.checkingUpdate {
-			status = thinkingStatusStyle.Render(m.locale.CheckingUpdates)
-		} else if completionsHint != "" {
-			// 显示补全候选提示
-			status = completionsHint
-		} else {
-			// 就绪态：显示消息计数 + 当前模型（如果有覆盖）
-			readyParts := []string{m.locale.StatusReady}
-			// Session indicator (for agent sessions)
-			if m.channelName == "agent" {
-				// Extract role/instance from chatID format: "channel:chatID/role:instance"
-				parts := strings.SplitN(m.chatID, "/", 2)
-				if len(parts) == 2 {
-					readyParts = append(readyParts, fmt.Sprintf("🤖 %s", parts[1]))
-				} else {
-					readyParts = append(readyParts, fmt.Sprintf("🤖 %s", m.chatID))
-				}
-			}
-			// 消息计数
-			msgCount := len(m.messages)
-			if msgCount > 0 {
-				readyParts = append(readyParts, fmt.Sprintf("%d msg%s", msgCount, func() string {
-					if msgCount > 1 {
-						return "s"
-					}
-					return ""
-				}()))
-			}
-			// 模型名称（使用缓存，避免每次 View() 重复查找）
-			if m.cachedModelName != "" {
-				modelHint := m.cachedModelName
-				if m.modelCount > 1 {
-					modelHint += " [Ctrl+N]"
-				}
-				readyParts = append(readyParts, modelHint)
-			}
-			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
-		}
-		// 临时状态提示（自动过期）
-		if m.tempStatus != "" {
-			ts := m.styles.WarningSt.Render(m.tempStatus)
-			if status != "" {
-				status += "  " + ts
-			} else {
-				status = ts
-			}
-		}
-		// 新消息提示：用户上滚且有新内容时显示
-		if m.newContentHint {
-			hint := m.styles.InfoSt.Render(m.locale.NewContentHint)
-			if status != "" {
-				status += "  " + hint
-			} else {
-				status = hint
-			}
-		}
-		// Background task indicator
-		if m.bgTaskCount > 0 {
-			bgHint := m.styles.WarningSt.Render(
-				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount))
-			if status != "" {
-				status += "  " + bgHint
-			} else {
-				status = bgHint
-			}
-		}
-		// Agent indicator
-		if m.agentCount > 0 {
-			agentHint := m.styles.WarningSt.Render(
-				fmt.Sprintf(m.locale.AgentRunning, m.agentCount))
-			if status != "" {
-				status += "  " + agentHint
-			} else {
-				status = agentHint
-			}
-		}
-		// Message queue indicator (persistent, not temp status)
-		if len(m.messageQueue) > 0 {
-			queueHint := m.styles.InfoSt.Render(
-				fmt.Sprintf(m.locale.QueuePending, len(m.messageQueue)))
-			if status != "" {
-				status += "  " + queueHint
-			} else {
-				status = queueHint
-			}
-		}
+		searchBar = m.styles.SearchBar.Render(
+			fmt.Sprintf(m.locale.SearchNavFormat, m.searchQuery, m.searchIdx+1, len(m.searchResults)))
+	}
+	return fmt.Sprintf("%s\n%s\n%s\n%s%s",
+		titleBar, m.viewport.View(), searchBar, input, toast)
+}
 
-		todoBar := m.renderTodoBar()
-		// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
-		footer := m.renderFooter()
+// layoutAskUser renders the askuser panel layout: title bar, viewport,
+// scrollable ask panel with progress indicator, and toast.
+func (m *cliModel) layoutAskUser(titleBar, toast string) string {
+	askRaw := m.viewAskUserPanel()
+	m.clampAskUserPanelScroll(askRaw)
+	askLines := strings.Split(askRaw, "\n")
+	fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
+	panelBorder := 2
+	viewportH := m.layoutViewportHeight()
+	askVisibleH := m.height - fixedLines - viewportH - panelBorder
+	if askVisibleH < 3 {
+		askVisibleH = 3
+	}
+	if m.askPanelScrollY+askVisibleH > len(askLines) {
+		m.askPanelScrollY = max(0, len(askLines)-askVisibleH)
+	}
+	end := m.askPanelScrollY + askVisibleH
+	if end > len(askLines) {
+		end = len(askLines)
+	}
+	visibleAsk := askLines[m.askPanelScrollY:end]
+	askContent := strings.Join(visibleAsk, "\n")
+	boxedAsk := m.styles.PanelBox.Render(askContent)
+	// Scroll indicator
+	scrollHint := ""
+	totalAskLines := len(askLines)
+	if totalAskLines > askVisibleH {
+		pct := (m.askPanelScrollY + askVisibleH) * 100 / totalAskLines
+		scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] Ctrl+↑↓/PgUp/PgDn", pct))
+	}
+	return fmt.Sprintf("%s\n%s\n%s%s%s",
+		titleBar, m.viewport.View(), boxedAsk, scrollHint, toast)
+}
 
-		switch {
-		case todoBar != "":
-			content = fmt.Sprintf(
-				"%s\n%s\n%s\n%s\n%s%s",
-				titleBar,
-				m.viewport.View(),
-				status,
-				todoBar,
-				input,
-				toastStr,
-			)
-		case footer != "":
-			content = fmt.Sprintf(
-				"%s\n%s\n%s\n%s\n%s%s",
-				titleBar,
-				m.viewport.View(),
-				status,
-				footer,
-				input,
-				toastStr,
-			)
-		default:
-			content = fmt.Sprintf(
-				"%s\n%s\n%s\n%s%s",
-				titleBar,
-				m.viewport.View(),
-				status,
-				input,
-				toastStr,
-			)
-		}
+// layoutPanel renders the generic panel-mode layout: title bar, scrollable
+// panel content in a bordered box, panel footer, and toast.
+func (m *cliModel) layoutPanel(titleBar, toast string) string {
+	panelFooter := m.renderFooter()
+	rawContent := m.viewPanel()
+	m.clampPanelScroll(rawContent)
+	rawLines := strings.Split(rawContent, "\n")
+	visibleH := m.panelVisibleHeight()
+	if m.panelScrollY+visibleH > len(rawLines) {
+		m.panelScrollY = max(0, len(rawLines)-visibleH)
+	}
+	end := m.panelScrollY + visibleH
+	if end > len(rawLines) {
+		end = len(rawLines)
+	}
+	visible := rawLines[m.panelScrollY:end]
+	panelContent := strings.Join(visible, "\n")
+	boxedContent := m.styles.PanelBox.Render(panelContent)
+	return fmt.Sprintf("%s\n%s%s%s",
+		titleBar, boxedContent, panelFooter, toast)
+}
+
+// layoutMain renders the primary chat layout: title bar, viewport, status bar
+// (with hints for temp status, new content, background tasks, agents, and queue),
+// optional footer/todo bar, input box, and toast.
+func (m *cliModel) layoutMain(titleBar, input, toast, completionsHint string) string {
+	// Render status bar
+	var status string
+	if m.typing || m.progress != nil {
+		thinkingStatusStyle := m.styles.ThinkingSt
+		progressStyle := m.styles.Progress
+		toolStyle := m.styles.Tool
+		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
+	} else if m.checkingUpdate {
+		status = m.styles.ThinkingSt.Render(m.locale.CheckingUpdates)
+	} else if completionsHint != "" {
+		status = completionsHint
+	} else {
+		status = m.renderReadyStatus()
+	}
+
+	// Accumulate status hints
+	var hints []string
+	if m.tempStatus != "" {
+		hints = append(hints, m.styles.WarningSt.Render(m.tempStatus))
+	}
+	if m.newContentHint {
+		hints = append(hints, m.styles.InfoSt.Render(m.locale.NewContentHint))
+	}
+	if m.bgTaskCount > 0 {
+		hints = append(hints, m.styles.WarningSt.Render(fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount)))
+	}
+	if m.agentCount > 0 {
+		hints = append(hints, m.styles.WarningSt.Render(fmt.Sprintf(m.locale.AgentRunning, m.agentCount)))
+	}
+	if len(m.messageQueue) > 0 {
+		hints = append(hints, m.styles.InfoSt.Render(fmt.Sprintf(m.locale.QueuePending, len(m.messageQueue))))
+	}
+	if len(hints) > 0 {
+		status = appendStatusHint(status, strings.Join(hints, "  "))
+	}
+
+	// Layout assembly
+	todoBar := m.renderTodoBar()
+	footer := m.renderFooter()
+
+	switch {
+	case todoBar != "":
+		return fmt.Sprintf("%s\n%s\n%s\n%s\n%s%s",
+			titleBar, m.viewport.View(), status, todoBar, input, toast)
+	case footer != "":
+		return fmt.Sprintf("%s\n%s\n%s\n%s\n%s%s",
+			titleBar, m.viewport.View(), status, footer, input, toast)
+	default:
+		return fmt.Sprintf("%s\n%s\n%s\n%s%s",
+			titleBar, m.viewport.View(), status, input, toast)
+	}
+}
+
+// View renders the CLI interface.
+func (m *cliModel) View() tea.View {
+	// Splash screen
+	if !m.splashDone {
+		v := tea.NewView(m.renderSplash())
+		v.AltScreen = true
+		return v
+	}
+	if !m.ready {
+		v := tea.NewView("\n  " + m.locale.SplashLoading)
+		v.AltScreen = true
+		return v
+	}
+
+	// Easter egg overlay
+	if m.easterEgg != easterEggNone {
+		v := tea.NewView(m.renderEasterEggOverlay())
+		v.AltScreen = true
+		return v
+	}
+
+	// /su loading
+	if m.suLoading {
+		v := tea.NewView(m.renderSuLoading())
+		v.AltScreen = true
+		return v
+	}
+
+	// Build shared components
+	titleBar := m.renderTitleBar()
+	borderColor, completionsHint := m.renderCompletionsHint(m.textarea.Value())
+	input := m.renderInputArea(borderColor)
+	toast := m.renderToast()
+
+	// Layout selection
+	var content string
+	switch {
+	case m.searchMode:
+		content = m.layoutSearch(titleBar, input, toast)
+	case m.panelMode == "askuser":
+		content = m.layoutAskUser(titleBar, toast)
+	case m.panelMode != "":
+		content = m.layoutPanel(titleBar, toast)
+	default:
+		content = m.layoutMain(titleBar, input, toast, completionsHint)
 	}
 
 	v := tea.NewView(content)
 	v.AltScreen = true
 
-	// §15 Quick switch overlay (subscription/model picker)
-	// Rendered as a centered panel replacing the entire view.
+	// Quick switch overlay
 	if m.quickSwitchMode != "" {
-		overlay := m.viewQuickSwitch(m.width, m.height)
-		if overlay != "" {
+		if overlay := m.viewQuickSwitch(m.width, m.height); overlay != "" {
 			v.Content = overlay
 		}
 	}
 
-	// §9 Rewind overlay (/rewind command)
+	// Rewind overlay
 	if m.rewindMode {
-		overlay := m.viewRewindPanel(m.width, m.height)
-		if overlay != "" {
+		if overlay := m.viewRewindPanel(m.width, m.height); overlay != "" {
 			v.Content = overlay
 		}
 	}
@@ -809,7 +763,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 	if m.progress != nil {
 		fmt.Fprintf(&sb, "#%d", m.progress.Iteration)
 
-		// Phase hint (active tool is shown in progress block, skip here to avoid duplication)
+		// Phase hint
 		switch m.progress.Phase {
 		case "thinking":
 			sb.WriteString(" · " + m.pickVerb(m.ticker.ticks))
@@ -833,33 +787,220 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		sb.WriteString(formatElapsed(elapsed))
 	}
 
-	// §18 Token 使用量显示
-	if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.TotalTokens > 0 {
+	// §18 Context usage bar — right-aligned so position stays fixed
+	var ctxBar string
+	if ctxHint := m.renderContextUsage(); ctxHint != "" {
+		ctxBar = ctxHint
+	} else if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.TotalTokens > 0 {
+		// Fallback: raw token count when context bar data is not yet available
 		tu := m.progress.TokenUsage
-		// §20 tokenStyle → s.TokenUsage
-		sb.WriteString(" · ")
-		sb.WriteString(s.TokenUsage.Render(formatTokenCount(tu)))
+		ctxBar = s.TokenUsage.Render(formatTokenCount(tu))
 	}
 
-	return sb.String()
+	// Queue indicator (persistent during typing, not just temp status)
+	if len(m.messageQueue) > 0 {
+		sb.WriteString(" · ")
+		fmt.Fprintf(&sb, m.locale.QueuePending, len(m.messageQueue))
+	}
+
+	leftText := sb.String()
+	if ctxBar != "" {
+		return padBetween(leftText, ctxBar, m.width)
+	}
+	return leftText
 }
 
-// formatTokenCount 格式化 Token 使用量为紧凑字符串
+// formatTokenCount formats token usage for the fallback status line (when context bar is unavailable).
+// Shows prompt tokens (context fill) as the primary metric.
 func formatTokenCount(tu *CLITokenUsage) string {
-	if tu.TotalTokens < 1000 {
-		return fmt.Sprintf("tokens: %d", tu.TotalTokens)
+	if tu.PromptTokens < 1000 {
+		return fmt.Sprintf("ctx: %d tokens", tu.PromptTokens)
 	}
-	parts := []string{}
-	if tu.PromptTokens > 0 {
-		parts = append(parts, fmt.Sprintf("in:%d", tu.PromptTokens))
+	return fmt.Sprintf("ctx: %s", formatTokenCompact(tu.PromptTokens))
+}
+
+// Pre-created styles for context bar (avoid per-frame allocation).
+var ctxBarStyles = struct {
+	fillGreen  lipgloss.Style
+	fillYellow lipgloss.Style
+	fillRed    lipgloss.Style
+	dim        lipgloss.Style
+	empty      lipgloss.Style
+	threshold  lipgloss.Style
+	label      lipgloss.Style
+	pctGreen   lipgloss.Style
+	pctYellow  lipgloss.Style
+	pctRed     lipgloss.Style
+}{
+	fillGreen:  lipgloss.NewStyle().Foreground(lipgloss.Color("#6bcb77")),
+	fillYellow: lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd93d")),
+	fillRed:    lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")),
+	dim:        lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Faint(true),
+	empty:      lipgloss.NewStyle().Foreground(lipgloss.Color("#333333")),
+	threshold:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")).Bold(true),
+	label:      lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")),
+	pctGreen:   lipgloss.NewStyle().Foreground(lipgloss.Color("#6bcb77")),
+	pctYellow:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ffd93d")),
+	pctRed:     lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b")),
+}
+
+// renderContextUsage returns a context usage bar for the status bar.
+// Uses cached rendering — only recomputes when token data or terminal width changes.
+//
+// Shows a segmented progress bar with:
+//   - Filled portion (prompt tokens used) — color-coded by fill ratio
+//   - Output reservation marker (right-side dim segment)
+//   - Compression threshold marker
+//   - Numeric label: "prompt/budget"
+func (m *cliModel) renderContextUsage() string {
+	if m.lastTokenUsage == nil || m.cachedMaxContextTokens <= 0 {
+		return ""
 	}
-	if tu.CompletionTokens > 0 {
-		parts = append(parts, fmt.Sprintf("out:%d", tu.CompletionTokens))
+	promptTokens := m.lastTokenUsage.PromptTokens
+	maxTokens := int64(m.cachedMaxContextTokens)
+	if promptTokens <= 0 || maxTokens <= 0 {
+		return ""
 	}
-	if len(parts) > 0 {
-		return "tokens: " + strings.Join(parts, " ") + fmt.Sprintf(" = %d", tu.TotalTokens)
+
+	// Cache key: re-render only when data changes
+	cacheKey := fmt.Sprintf("%d:%d:%d:%d:%g", promptTokens, maxTokens, m.cachedMaxOutputTokens, m.width, m.cachedCompressRatio)
+	if cacheKey == m.ctxBarCacheKey && m.ctxBarCache != "" {
+		return m.ctxBarCache
 	}
-	return fmt.Sprintf("tokens: %d", tu.TotalTokens)
+
+	maxOutputTokens := m.cachedMaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 8192
+	}
+	promptBudget := maxTokens - maxOutputTokens
+	if promptBudget <= 0 {
+		promptBudget = maxTokens / 2
+	}
+
+	// Use cached compression ratio (set during progress events), not GetCurrentValues()
+	compressRatio := m.cachedCompressRatio
+	if compressRatio <= 0 {
+		compressRatio = 0.9
+	}
+	compressThreshold := int64(float64(promptBudget) * compressRatio)
+
+	// Bar width: adapt to terminal width
+	barWidth := 20
+	if m.width > 120 {
+		barWidth = 30
+	}
+	if m.width < 80 {
+		barWidth = 12
+	}
+
+	promptFill := promptTokens
+	if promptFill > maxTokens {
+		promptFill = maxTokens
+	}
+	filledCells := int(float64(barWidth) * float64(promptFill) / float64(maxTokens))
+	if filledCells > barWidth {
+		filledCells = barWidth
+	}
+
+	outputCells := int(float64(barWidth) * float64(maxOutputTokens) / float64(maxTokens))
+	if outputCells < 1 {
+		outputCells = 1
+	}
+	if outputCells > barWidth-1 {
+		outputCells = barWidth - 1
+	}
+
+	compressPos := int(float64(barWidth) * float64(compressThreshold) / float64(maxTokens))
+	if compressPos < 1 {
+		compressPos = 1
+	}
+	if compressPos >= barWidth {
+		compressPos = barWidth - 1
+	}
+
+	pct := float64(promptTokens) / float64(maxTokens) * 100
+
+	// Select pre-created style (no allocation)
+	var fillColor, pctStyle lipgloss.Style
+	switch {
+	case pct > 80:
+		fillColor = ctxBarStyles.fillRed
+		pctStyle = ctxBarStyles.pctRed
+	case pct > 50:
+		fillColor = ctxBarStyles.fillYellow
+		pctStyle = ctxBarStyles.pctYellow
+	default:
+		fillColor = ctxBarStyles.fillGreen
+		pctStyle = ctxBarStyles.pctGreen
+	}
+
+	// Build bar runes first (single allocation)
+	outputStart := barWidth - outputCells
+	if outputStart < filledCells {
+		outputStart = filledCells
+	}
+
+	// Render bar segments as batch strings (3 segments max, not barWidth calls)
+	var barStr strings.Builder
+	// Segment 1: filled area
+	if filledCells > 0 {
+		barStr.WriteString(fillColor.Render(strings.Repeat("█", filledCells)))
+	}
+	// Segment 2: empty area (may contain threshold marker)
+	emptyStart := filledCells
+	emptyEnd := outputStart
+	if emptyEnd > emptyStart {
+		if compressPos >= emptyStart && compressPos < emptyEnd {
+			// Split empty into two parts around threshold marker
+			before := compressPos - emptyStart
+			after := emptyEnd - compressPos - 1
+			if before > 0 {
+				barStr.WriteString(ctxBarStyles.empty.Render(strings.Repeat("░", before)))
+			}
+			barStr.WriteString(ctxBarStyles.threshold.Render("┊"))
+			if after > 0 {
+				barStr.WriteString(ctxBarStyles.empty.Render(strings.Repeat("░", after)))
+			}
+		} else {
+			barStr.WriteString(ctxBarStyles.empty.Render(strings.Repeat("░", emptyEnd-emptyStart)))
+		}
+	}
+	// Segment 3: output reservation
+	if barWidth-outputStart > 0 {
+		barStr.WriteString(ctxBarStyles.dim.Render(strings.Repeat("▒", barWidth-outputStart)))
+	}
+
+	pctStr := pctStyle.Render(fmt.Sprintf("%.0f%%", pct))
+
+	var result string
+	if m.width < 100 {
+		result = fmt.Sprintf("%s %s", pctStr, barStr.String())
+	} else {
+		usageStr := formatTokenCompact(promptTokens)
+		budgetStr := formatTokenCompact(promptBudget)
+		label := ctxBarStyles.label.Render(fmt.Sprintf("%s/%s", usageStr, budgetStr))
+		result = fmt.Sprintf("%s %s %s", pctStr, barStr.String(), label)
+	}
+
+	m.ctxBarCache = result
+	m.ctxBarCacheKey = cacheKey
+	return result
+}
+
+// formatTokenCompact formats token counts as compact human-readable strings.
+// e.g. 12500 → "12.5K", 128000 → "128K", 500 → "500"
+func formatTokenCompact(tokens int64) string {
+	if tokens >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(tokens)/1_000_000)
+	}
+	if tokens >= 1000 {
+		val := float64(tokens) / 1000
+		if val == float64(int(val)) {
+			return fmt.Sprintf("%dK", int(val))
+		}
+		return fmt.Sprintf("%.1fK", val)
+	}
+	return fmt.Sprintf("%d", tokens)
 }
 
 // ---------------------------------------------------------------------------

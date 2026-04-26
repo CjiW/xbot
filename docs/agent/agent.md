@@ -6,13 +6,17 @@
 |------|---------|
 | `agent.go` | Agent struct, lifecycle, HandleMessage, Run loop (~2366 lines) |
 | `engine.go` | Engine interface, SubAgent progress, nested context |
-| `engine_run.go` | Tool call execution: execOne, concurrency, read/write split (~1461 lines) |
+| `engine_run.go` | runState struct, Run() loop, LLM/tool execution, compress/persist orchestration (~1561 lines) |
 | `engine_wire.go` | Dependency injection: buildSubAgentRunConfig, HookChain/LLMFactory inheritance (~1282 lines) |
 | `context.go` | MessageContext, PromptData, initPipelines() |
 | `middleware.go` | MessagePipeline, MessageMiddleware interface |
 | `middleware_builtin.go` | Built-in middleware implementations |
 | `interactive.go` | Interactive SubAgent: multi-turn sessions, inspect/tail (~870 lines) |
 | `compress.go` | Context compression via LLM (~600 lines) |
+| `compress_pipeline.go` | CompressPipeline: unified compress→persist→cleanup flow |
+| `token_tracker.go` | TokenTracker: token accounting per Run |
+| `persist_bridge.go` | PersistenceBridge: incremental session persistence |
+| `runstate_invariant.go` | ValidateInvariants: debug-mode state consistency checks |
 | `reminder.go` | System reminder injection (<system-reminder>) |
 | `skills.go` | SkillStore: directory scan, TTL cache, catalog generation |
 | `agents.go` | AgentStore: subagent role discovery, catalog generation |

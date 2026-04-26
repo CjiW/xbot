@@ -97,11 +97,31 @@ func (app *cliApp) refreshRemoteValuesCache() {
 		vals["max_concurrency"] = "3"
 	}
 	if _, ok := vals["max_context_tokens"]; !ok {
-		vals["max_context_tokens"] = "0"
+		vals["max_context_tokens"] = "200000" // default from config.go
+	}
+	if _, ok := vals["compression_threshold"]; !ok {
+		vals["compression_threshold"] = "0.9"
 	}
 	app.valuesCacheMu.Lock()
 	app.valuesCache = vals
 	app.valuesCacheMu.Unlock()
+
+	// Sync tier model mappings to local LLMFactory so SubAgent model resolution
+	// works in remote mode (tier models are now user-scoped, persisted in DB).
+	if app.backend != nil && app.backend.LLMFactory() != nil {
+		llmCfg := app.cfg.LLM // start from current config
+		if v, ok := vals["vanguard_model"]; ok {
+			llmCfg.VanguardModel = v
+		}
+		if v, ok := vals["balance_model"]; ok {
+			llmCfg.BalanceModel = v
+		}
+		if v, ok := vals["swift_model"]; ok {
+			llmCfg.SwiftModel = v
+		}
+		app.cfg.LLM = llmCfg
+		app.backend.LLMFactory().SetModelTiers(llmCfg)
+	}
 }
 
 func saveCLIConfig(cfg *config.Config) error {
@@ -115,9 +135,28 @@ func saveCLIConfig(cfg *config.Config) error {
 			return fmt.Errorf("config file parse error, not overwriting")
 		}
 	}
-	// CLI only ever modifies these sections:
-	merged.LLM = cfg.LLM     // via settings panel / subscription switch
-	merged.Agent = cfg.Agent // via settings panel (max_iterations, etc.)
+	// Agent settings: always write back (max_iterations, max_concurrency, etc.)
+	merged.Agent = cfg.Agent
+
+	// LLM tier model mappings: always write back (vanguard/balance/swift models).
+	// These are global preferences, not subscription credentials.
+	merged.LLM.VanguardModel = cfg.LLM.VanguardModel
+	merged.LLM.BalanceModel = cfg.LLM.BalanceModel
+	merged.LLM.SwiftModel = cfg.LLM.SwiftModel
+
+	// LLM credentials (Provider, BaseURL, APIKey, Model, MaxOutputTokens, ThinkingMode):
+	// Single source of truth is user_llm_subscriptions DB, NOT config.json.
+	// Only write credentials to config.json if there are no DB subscriptions
+	// (first-run / legacy mode where config.json is the only data source).
+	if len(merged.Subscriptions) == 0 {
+		merged.LLM.Provider = cfg.LLM.Provider
+		merged.LLM.BaseURL = cfg.LLM.BaseURL
+		merged.LLM.APIKey = cfg.LLM.APIKey
+		merged.LLM.Model = cfg.LLM.Model
+		merged.LLM.MaxOutputTokens = cfg.LLM.MaxOutputTokens
+		merged.LLM.ThinkingMode = cfg.LLM.ThinkingMode
+	}
+
 	// CLI remote connection settings: only write if non-empty (e.g. first setup)
 	if cfg.CLI.ServerURL != "" || cfg.CLI.Token != "" {
 		merged.CLI = cfg.CLI
@@ -822,6 +861,12 @@ func main() {
 				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
 				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
+				"compression_threshold": func() string {
+					if app.cfg.Agent.CompressionThreshold > 0 {
+						return fmt.Sprintf("%g", app.cfg.Agent.CompressionThreshold)
+					}
+					return "0.9"
+				}(),
 				"max_output_tokens": func() string {
 					// Prefer subscription value (single source of truth)
 					if activeSub != nil && activeSub.MaxOutputTokens > 0 {
@@ -1265,6 +1310,17 @@ func main() {
 				}
 				return channel.ConvertMessagesToHistory(msgs), nil
 			}
+			// Restore token state from DB so the context bar shows immediately
+			// on startup (not just after the first LLM call of the new session).
+			cliMemSvc := sqlite.NewMemoryService(app.db)
+			cliCfg.TokenStateLoader = func() (promptTokens, completionTokens int64) {
+				pt, ct, err := cliMemSvc.GetTokenState(context.Background(), cliTenantID)
+				if err != nil {
+					log.WithError(err).Warn("Failed to load token state")
+					return 0, 0
+				}
+				return pt, ct
+			}
 		}
 	}
 	// Remote mode: history loaded after backend.Start() via cliCh.LoadHistory()
@@ -1296,6 +1352,15 @@ func main() {
 				channelName = "cli"
 			}
 			return backend.GetHistory(channelName, chatID)
+		}
+		// Restore token state from server DB so context bar shows on startup
+		cliCfg.TokenStateLoader = func() (promptTokens, completionTokens int64) {
+			pt, ct, err := backend.GetTokenState("cli", absWorkDir)
+			if err != nil {
+				log.WithError(err).Warn("Failed to load token state from server")
+				return 0, 0
+			}
+			return pt, ct
 		}
 	}
 

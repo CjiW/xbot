@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -150,7 +150,7 @@ func (s *SkillStore) refreshSkills(ctx context.Context, senderID string) ([]Skil
 	// 扫描用户目录（沙箱感知）
 	s.scanUserSkills(ctx, senderID, merged, &orderedNames)
 
-	sort.Strings(orderedNames)
+	slices.Sort(orderedNames)
 	skills := make([]SkillInfo, 0, len(orderedNames))
 	for _, name := range orderedNames {
 		skills = append(skills, merged[name])

@@ -14,7 +14,7 @@ type MaskedRecallStore interface {
 	// RecallMasked 按 ID 召回已遮蔽的内容，返回 (toolName, fullContent, error)
 	RecallMasked(id string) (toolName string, content string, err error)
 	// ListMasked 列出所有已遮蔽的 observation，返回 JSON 格式的列表
-	ListMasked() []map[string]interface{}
+	ListMasked() []map[string]any
 }
 
 // RecallMaskedTool 召回已被 observation masking 遮蔽的工具结果。
@@ -62,7 +62,7 @@ func (t *RecallMaskedTool) Execute(ctx *ToolContext, args string) (*ToolResult, 
 
 	var params recallMaskedParams
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	// 列出所有已遮蔽的 observation

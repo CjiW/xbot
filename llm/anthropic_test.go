@@ -37,7 +37,7 @@ func TestBuildAnthropicSystem_SingleNoCache_ReturnsString(t *testing.T) {
 	}
 
 	// 验证 JSON 序列化后 system 是字符串而非数组
-	data, _ := json.Marshal(map[string]interface{}{"system": result})
+	data, _ := json.Marshal(map[string]any{"system": result})
 	if string(data) != `{"system":"You are a helpful assistant."}` {
 		t.Errorf("JSON should be plain string, got %s", string(data))
 	}
@@ -73,7 +73,7 @@ func TestBuildAnthropicSystem_StaticCacheHint(t *testing.T) {
 	}
 
 	// 验证 JSON 序列化包含 cache_control
-	data, _ := json.Marshal(map[string]interface{}{"system": result})
+	data, _ := json.Marshal(map[string]any{"system": result})
 	s := string(data)
 	if jsonValid := json.Valid([]byte(s)); !jsonValid {
 		t.Errorf("invalid JSON: %s", s)
@@ -119,7 +119,7 @@ func TestBuildAnthropicSystem_MixedStaticAndDynamic(t *testing.T) {
 	}
 
 	// 验证 JSON 序列化
-	data, _ := json.Marshal(map[string]interface{}{"system": result})
+	data, _ := json.Marshal(map[string]any{"system": result})
 	s := string(data)
 	if !json.Valid([]byte(s)) {
 		t.Errorf("invalid JSON: %s", s)

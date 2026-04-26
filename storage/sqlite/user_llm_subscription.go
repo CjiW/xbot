@@ -41,7 +41,7 @@ func NewLLMSubscriptionService(db *DB) *LLMSubscriptionService {
 
 // scanSubscription scans a single subscription row from the given scanner.
 // SQLite stores created_at/updated_at as TEXT, so we scan into string and parse.
-func scanSubscription(scanner interface{ Scan(...interface{}) error }, sub *LLMSubscription) (string, int, error) {
+func scanSubscription(scanner interface{ Scan(...any) error }, sub *LLMSubscription) (string, int, error) {
 	var encryptedAPIKey string
 	var isDefault int
 	var createdAt, updatedAt string

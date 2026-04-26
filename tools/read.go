@@ -46,7 +46,7 @@ func (t *ReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		Offset   int    `json:"offset"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.Path == "" {

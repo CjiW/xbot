@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -334,14 +335,9 @@ func TestMaskOldToolResults_FoldPreservesToolPairing(t *testing.T) {
 		if msg.Role == "assistant" {
 			// Check pairing: each ToolCall ID must have a corresponding tool message
 			for _, tc := range msg.ToolCalls {
-				found := false
-				for j := i + 1; j < len(result) && result[j].Role == "tool"; j++ {
-					if result[j].ToolCallID == tc.ID {
-						found = true
-						break
-					}
-				}
-				if !found {
+				if !slices.ContainsFunc(result[i+1:], func(m llm.ChatMessage) bool {
+					return m.Role == "tool" && m.ToolCallID == tc.ID
+				}) {
 					t.Errorf("assistant at index %d has ToolCall %q but no matching tool message (orphaned tool_use)", i, tc.ID)
 				}
 			}
@@ -351,12 +347,9 @@ func TestMaskOldToolResults_FoldPreservesToolPairing(t *testing.T) {
 			found := false
 			for j := i - 1; j >= 0; j-- {
 				if result[j].Role == "assistant" {
-					for _, tc := range result[j].ToolCalls {
-						if tc.ID == msg.ToolCallID {
-							found = true
-							break
-						}
-					}
+					found = slices.ContainsFunc(result[j].ToolCalls, func(tc llm.ToolCall) bool {
+						return tc.ID == msg.ToolCallID
+					})
 					break
 				}
 			}

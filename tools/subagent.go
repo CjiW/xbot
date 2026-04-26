@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"xbot/llm"
@@ -96,7 +95,7 @@ func (t *SubAgentTool) Parameters() []llm.ToolParam {
 }
 
 func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params struct {
+	params, err := parseToolArgs[struct {
 		Task        string `json:"task"`
 		Role        string `json:"role"`
 		Interactive bool   `json:"interactive"`
@@ -105,9 +104,9 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		Instance    string `json:"instance"`
 		Tail        int    `json:"tail"`
 		ModelTier   string `json:"model_tier"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}](input)
+	if err != nil {
+		return nil, err
 	}
 
 	requiresTask := params.Action == "" || params.Action == "send"

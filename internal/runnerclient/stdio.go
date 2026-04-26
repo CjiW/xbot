@@ -306,7 +306,7 @@ func (sm *stdioManager) Cleanup() {
 	sm.procs = make(map[string]*stdioProcess)
 }
 
-func mustMarshal(v interface{}) json.RawMessage {
+func mustMarshal(v any) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
 }

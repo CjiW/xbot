@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -35,11 +34,11 @@ func (t *TaskStatusTool) Execute(toolCtx *ToolContext, input string) (*ToolResul
 		return nil, fmt.Errorf("background tasks not supported")
 	}
 
-	var params struct {
+	params, err := parseToolArgs[struct {
 		TaskID string `json:"task_id"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}](input)
+	if err != nil {
+		return nil, err
 	}
 
 	task, err := toolCtx.BgTaskManager.Status(params.TaskID)
@@ -73,11 +72,11 @@ func (t *TaskKillTool) Execute(toolCtx *ToolContext, input string) (*ToolResult,
 		return nil, fmt.Errorf("background tasks not supported")
 	}
 
-	var params struct {
+	params, err := parseToolArgs[struct {
 		TaskID string `json:"task_id"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}](input)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := toolCtx.BgTaskManager.Kill(params.TaskID); err != nil {
@@ -113,12 +112,12 @@ func (t *TaskReadTool) Execute(toolCtx *ToolContext, input string) (*ToolResult,
 		return nil, fmt.Errorf("background tasks not supported")
 	}
 
-	var params struct {
+	params, err := parseToolArgs[struct {
 		TaskID string `json:"task_id"`
 		Tail   int    `json:"tail"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}](input)
+	if err != nil {
+		return nil, err
 	}
 
 	task, err := toolCtx.BgTaskManager.Status(params.TaskID)

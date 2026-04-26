@@ -93,7 +93,7 @@ func (t *WebSearchTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 		IncludeAnswer *bool  `json:"include_answer"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.Query == "" {

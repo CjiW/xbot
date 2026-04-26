@@ -66,6 +66,18 @@ var settingHandlerRegistry = map[string]settingHandler{
 			backend.SetSandbox(tools.GetSandbox(), value)
 		},
 	},
+	"compression_threshold": {
+		ApplyConfig: func(cfg *config.Config, value string) {
+			if f, err := strconv.ParseFloat(value, 64); err == nil && f > 0 {
+				cfg.Agent.CompressionThreshold = f
+			}
+		},
+		ApplyBackend: func(backend agent.AgentBackend, senderID, value string) {
+			if f, err := strconv.ParseFloat(value, 64); err == nil && f > 0 {
+				backend.SetCompressionThreshold(f)
+			}
+		},
+	},
 	"memory_provider": {
 		ApplyConfig: func(cfg *config.Config, value string) { cfg.Agent.MemoryProvider = value },
 	},
@@ -217,15 +229,5 @@ func applyRuntimeSettings(cfg *config.Config, backend agent.AgentBackend, sender
 // missingHandlerKeys returns keys from channel.CLIRuntimeSettingKeys
 // that are missing from settingHandlerRegistry.
 func missingHandlerKeys() []string {
-	expected := make(map[string]bool, len(channel.CLIRuntimeSettingKeys))
-	for _, k := range channel.CLIRuntimeSettingKeys {
-		expected[k] = true
-	}
-	var missing []string
-	for k := range expected {
-		if _, ok := settingHandlerRegistry[k]; !ok {
-			missing = append(missing, k)
-		}
-	}
-	return missing
+	return channel.MissingRegistryKeys(settingHandlerRegistry)
 }

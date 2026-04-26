@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -545,7 +545,7 @@ func summarizeRead(args, content string) string {
 	}
 
 	if len(funcNames) > 0 {
-		sort.Strings(funcNames)
+		slices.Sort(funcNames)
 		fmt.Fprintf(&sb, "Key functions: %s\n", strings.Join(funcNames[:min(len(funcNames), 10)], ", "))
 	}
 

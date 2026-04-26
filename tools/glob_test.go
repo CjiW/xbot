@@ -291,8 +291,8 @@ func TestGlobTool_InvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
-	if !strings.Contains(err.Error(), "invalid parameters") {
-		t.Errorf("expected 'invalid parameters' error, got: %v", err)
+	if !strings.Contains(err.Error(), "parse args") {
+		t.Errorf("expected 'parse args' error, got: %v", err)
 	}
 }
 

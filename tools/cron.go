@@ -2,7 +2,7 @@ package tools
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,7 +60,7 @@ type cronParams struct {
 func (t *CronTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	p, err := parseToolArgs[cronParams](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	senderID := ""
@@ -178,8 +178,8 @@ func (t *CronTool) listJobs(senderID string) (*ToolResult, error) {
 	}
 
 	// Sort by created time
-	sort.Slice(jobs, func(i, j int) bool {
-		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
+	slices.SortFunc(jobs, func(a, b *sqlite.CronJob) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
 	})
 
 	var sb strings.Builder

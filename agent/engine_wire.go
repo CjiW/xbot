@@ -205,304 +205,12 @@ func (a *Agent) buildMainRunConfig(
 		// CLI 渠道进度处理
 		switch channel {
 		case "cli":
-			var cliCh *channelpkg.CLIChannel
-			var remoteCLICh *channelpkg.RemoteCLIChannel
-			if a.channelFinder != nil {
-				if ch, ok := a.channelFinder("cli"); ok {
-					if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-						cliCh = cc
-					} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
-						remoteCLICh = rc
-					} else {
-						log.WithField("type", fmt.Sprintf("%T", ch)).Warn("buildMainRunConfig: channelFinder('cli') returned unexpected type")
-					}
-				} else {
-					log.Warn("buildMainRunConfig: channelFinder('cli') returned not found")
-				}
-			} else {
-				log.Warn("buildMainRunConfig: channelFinder is nil")
-			}
-			log.WithFields(log.Fields{
-				"hasCliCh":       cliCh != nil,
-				"hasRemoteCLICh": remoteCLICh != nil,
-				"progressKey":    channel + ":" + chatID,
-			}).Info("buildMainRunConfig: cli channel resolution")
-			if cliCh != nil || remoteCLICh != nil {
-				progressKey := channel + ":" + chatID
-				cfg.ProgressEventHandler = func(event *ProgressEvent) {
-					if event == nil || event.Structured == nil {
-						return
-					}
-					s := event.Structured
-					if cliCh != nil {
-						payload := &channelpkg.CLIProgressPayload{
-							ChatID:           progressKey,
-							Phase:            string(s.Phase),
-							Iteration:        s.Iteration,
-							Thinking:         s.ThinkingContent,
-							Reasoning:        s.ReasoningContent,
-							HistoryCompacted: s.HistoryCompacted,
-						}
-						for _, t := range s.ActiveTools {
-							payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
-								Name:      t.Name,
-								Label:     t.Label,
-								Status:    string(t.Status),
-								Elapsed:   t.Elapsed.Milliseconds(),
-								Iteration: t.Iteration,
-								Summary:   t.Summary,
-							})
-						}
-						for _, t := range s.CompletedTools {
-							payload.CompletedTools = append(payload.CompletedTools, channelpkg.CLIToolProgress{
-								Name:      t.Name,
-								Label:     t.Label,
-								Status:    string(t.Status),
-								Elapsed:   t.Elapsed.Milliseconds(),
-								Iteration: t.Iteration,
-								Summary:   t.Summary,
-							})
-						}
-						if len(event.Lines) > 0 {
-							subAgents := ExtractSubAgentTree(event.Lines)
-							if len(subAgents) > 0 {
-								cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
-								for i, sa := range subAgents {
-									cliSubAgents[i] = channelpkg.CLISubAgent{
-										Role:     sa.Role,
-										Status:   sa.Status,
-										Desc:     sa.Desc,
-										Children: convertCLISubAgentTree(sa.Children),
-									}
-								}
-								payload.SubAgents = cliSubAgents
-							}
-						}
-						if len(s.Todos) > 0 {
-							payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
-							for i, td := range s.Todos {
-								payload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
-							}
-						}
-						if s.TokenUsage != nil {
-							payload.TokenUsage = &channelpkg.CLITokenUsage{
-								PromptTokens:     s.TokenUsage.PromptTokens,
-								CompletionTokens: s.TokenUsage.CompletionTokens,
-								TotalTokens:      s.TokenUsage.TotalTokens,
-								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
-							}
-						}
-						cliCh.SendProgress(chatID, payload)
-						// Save snapshot + track iteration history for mid-session reconnect.
-						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
-							return s.Iteration > prev.Iteration && prev.Iteration >= 0
-						})
-						a.lastProgressSnapshot.Store(progressKey, payload)
-					}
-					if remoteCLICh != nil {
-						payload := &channelpkg.WsProgressPayload{
-							ChatID:    progressKey,
-							Phase:     string(s.Phase),
-							Iteration: s.Iteration,
-							Thinking:  s.ThinkingContent,
-							Reasoning: s.ReasoningContent,
-						}
-						for _, t := range s.ActiveTools {
-							payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
-								Name:      t.Name,
-								Label:     t.Label,
-								Status:    string(t.Status),
-								Elapsed:   t.Elapsed.Milliseconds(),
-								Summary:   t.Summary,
-								Iteration: t.Iteration,
-							})
-						}
-						for _, t := range s.CompletedTools {
-							payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
-								Name:      t.Name,
-								Label:     t.Label,
-								Status:    string(t.Status),
-								Elapsed:   t.Elapsed.Milliseconds(),
-								Summary:   t.Summary,
-								Iteration: t.Iteration,
-							})
-						}
-						if len(event.Lines) > 0 {
-							subAgents := ExtractSubAgentTree(event.Lines)
-							if len(subAgents) > 0 {
-								wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
-								for i, sa := range subAgents {
-									wsSubAgents[i] = channelpkg.WsSubAgent{Role: sa.Role, Status: sa.Status, Desc: sa.Desc, Children: convertWsSubAgentTree(sa.Children)}
-								}
-								payload.SubAgents = wsSubAgents
-							}
-						}
-						if len(s.Todos) > 0 {
-							payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
-							for i, td := range s.Todos {
-								payload.Todos[i] = channelpkg.WsTodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
-							}
-						}
-						if s.TokenUsage != nil {
-							payload.TokenUsage = &channelpkg.WsTokenUsage{
-								PromptTokens:     s.TokenUsage.PromptTokens,
-								CompletionTokens: s.TokenUsage.CompletionTokens,
-								TotalTokens:      s.TokenUsage.TotalTokens,
-								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
-							}
-						}
-						remoteCLICh.SendProgress(chatID, payload)
-						// Store progress snapshot for remote CLI reconnect recovery.
-						// Without this, GetActiveProgress returns nil after CLI restart
-						// because only the local cliCh path stored snapshots.
-						cliPayload := &channelpkg.CLIProgressPayload{
-							ChatID:    progressKey,
-							Phase:     string(s.Phase),
-							Iteration: s.Iteration,
-							Thinking:  s.ThinkingContent,
-							Reasoning: s.ReasoningContent,
-						}
-						for _, t := range s.ActiveTools {
-							cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
-								Name: t.Name, Label: t.Label, Status: string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
-							})
-						}
-						for _, t := range s.CompletedTools {
-							cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
-								Name: t.Name, Label: t.Label, Status: string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
-							})
-						}
-						if len(event.Lines) > 0 {
-							subAgents := ExtractSubAgentTree(event.Lines)
-							if len(subAgents) > 0 {
-								cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
-								for i, sa := range subAgents {
-									cliSubAgents[i] = channelpkg.CLISubAgent{
-										Role:     sa.Role,
-										Status:   sa.Status,
-										Desc:     sa.Desc,
-										Children: convertCLISubAgentTree(sa.Children),
-									}
-								}
-								cliPayload.SubAgents = cliSubAgents
-							}
-						}
-						if len(s.Todos) > 0 {
-							cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
-							for i, td := range s.Todos {
-								cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
-							}
-						}
-						if s.TokenUsage != nil {
-							cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
-								PromptTokens:     s.TokenUsage.PromptTokens,
-								CompletionTokens: s.TokenUsage.CompletionTokens,
-								TotalTokens:      s.TokenUsage.TotalTokens,
-								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
-							}
-						}
-						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
-							return s.Iteration > prev.Iteration && prev.Iteration >= 0
-						})
-						a.lastProgressSnapshot.Store(progressKey, cliPayload)
-						log.WithFields(log.Fields{
-							"key":       progressKey,
-							"phase":     cliPayload.Phase,
-							"iteration": cliPayload.Iteration,
-							"active":    len(cliPayload.ActiveTools),
-							"completed": len(cliPayload.CompletedTools),
-						}).Info("remote CLI: stored progress snapshot")
-					}
-				}
+			if handler := a.buildCLIProgressEventHandler(chatID, channel); handler != nil {
+				cfg.ProgressEventHandler = handler
 			}
 		case "web":
-			if ch, ok := a.channelFinder("web"); ok {
-				if wc, ok := ch.(*channelpkg.WebChannel); ok {
-					progressKey := channel + ":" + chatID
-					cfg.ProgressEventHandler = func(event *ProgressEvent) {
-						if event == nil || event.Structured == nil {
-							return
-						}
-						s := event.Structured
-						payload := &channelpkg.WsProgressPayload{
-							Phase:     string(s.Phase),
-							Iteration: s.Iteration,
-							Thinking:  s.ThinkingContent,
-						}
-						for _, t := range s.ActiveTools {
-							payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
-								Name:      t.Name,
-								Label:     t.Label,
-								Status:    string(t.Status),
-								Elapsed:   t.Elapsed.Milliseconds(),
-								Summary:   t.Summary,
-								Iteration: t.Iteration,
-							})
-						}
-						for _, t := range s.CompletedTools {
-							payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
-								Name:      t.Name,
-								Label:     t.Label,
-								Status:    string(t.Status),
-								Elapsed:   t.Elapsed.Milliseconds(),
-								Summary:   t.Summary,
-								Iteration: t.Iteration,
-							})
-						}
-						// Parse sub-agent tree from progress lines
-						if len(event.Lines) > 0 {
-							subAgents := ExtractSubAgentTree(event.Lines)
-							if len(subAgents) > 0 {
-								wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
-								for i, sa := range subAgents {
-									wsSubAgents[i] = channelpkg.WsSubAgent{
-										Role:     sa.Role,
-										Status:   sa.Status,
-										Desc:     sa.Desc,
-										Children: convertWsSubAgentTree(sa.Children),
-									}
-								}
-								payload.SubAgents = wsSubAgents
-							}
-						}
-						// Copy todo items for web display
-						if len(s.Todos) > 0 {
-							payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
-							for i, td := range s.Todos {
-								payload.Todos[i] = channelpkg.WsTodoItem{
-									ID:   td.ID,
-									Text: td.Text,
-									Done: td.Done,
-								}
-							}
-						}
-						// Pass token usage snapshot
-						if s.TokenUsage != nil {
-							payload.TokenUsage = &channelpkg.WsTokenUsage{
-								PromptTokens:     s.TokenUsage.PromptTokens,
-								CompletionTokens: s.TokenUsage.CompletionTokens,
-								TotalTokens:      s.TokenUsage.TotalTokens,
-								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
-							}
-						}
-
-						// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
-						wc.SendProgress(chatID, payload)
-
-						// Track iteration history: when iteration advances, snapshot the
-						// PREVIOUS iteration into the history list for mid-session reconnect.
-						cliSnapshot := payload.ToCLIProgressPayload()
-						a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
-							return s.Iteration > prev.Iteration && prev.Iteration >= 0
-						})
-						// Save current iteration snapshot
-						a.lastProgressSnapshot.Store(progressKey, cliSnapshot)
-					}
-				} else {
-					log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
-				}
+			if handler := a.buildWebProgressEventHandler(chatID, channel); handler != nil {
+				cfg.ProgressEventHandler = handler
 			}
 		}
 	}
@@ -544,43 +252,7 @@ func (a *Agent) buildMainRunConfig(
 	if !streamDisabled {
 		cfg.Stream = true
 		if a.channelFinder != nil {
-			var cliCh *channelpkg.CLIChannel
-			var remoteCLICh *channelpkg.RemoteCLIChannel
-			if ch, ok := a.channelFinder("cli"); ok {
-				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-					cliCh = cc
-				} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
-					remoteCLICh = rc
-				}
-			}
-			var webCh *channelpkg.WebChannel
-			if ch, ok := a.channelFinder("web"); ok {
-				if wc, ok := ch.(*channelpkg.WebChannel); ok {
-					webCh = wc
-				}
-			}
-			cfg.StreamContentFunc = func(content string) {
-				if cliCh != nil {
-					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, StreamContent: content})
-				}
-				if remoteCLICh != nil {
-					remoteCLICh.SendStreamContent(chatID, content, "")
-				}
-				if webCh != nil {
-					webCh.SendStreamContent(chatID, content, "")
-				}
-			}
-			cfg.StreamReasoningFunc = func(content string) {
-				if cliCh != nil {
-					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: channel + ":" + chatID, ReasoningStreamContent: content})
-				}
-				if remoteCLICh != nil {
-					remoteCLICh.SendStreamContent(chatID, "", content)
-				}
-				if webCh != nil {
-					webCh.SendStreamContent(chatID, "", content)
-				}
-			}
+			cfg.StreamContentFunc, cfg.StreamReasoningFunc = a.buildStreamCallbacks(chatID, channel)
 		}
 	}
 
@@ -1599,4 +1271,370 @@ func convertCLISubAgentTree(nodes []SubAgentNode) []channelpkg.CLISubAgent {
 		}
 	}
 	return result
+}
+
+// buildCLIProgressEventHandler creates the progress event handler for CLI channels
+// (both local and remote). Returns nil if no CLI channel is available.
+func (a *Agent) buildCLIProgressEventHandler(chatID, channel string) func(*ProgressEvent) {
+	var cliCh *channelpkg.CLIChannel
+	var remoteCLICh *channelpkg.RemoteCLIChannel
+	if a.channelFinder != nil {
+		if ch, ok := a.channelFinder("cli"); ok {
+			if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+				cliCh = cc
+			} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+				remoteCLICh = rc
+			} else {
+				log.WithField("type", fmt.Sprintf("%T", ch)).Warn("buildCLIProgressEventHandler: channelFinder('cli') returned unexpected type")
+			}
+		} else {
+			log.Warn("buildCLIProgressEventHandler: channelFinder('cli') returned not found")
+		}
+	} else {
+		log.Warn("buildCLIProgressEventHandler: channelFinder is nil")
+	}
+	log.WithFields(log.Fields{
+		"hasCliCh":       cliCh != nil,
+		"hasRemoteCLICh": remoteCLICh != nil,
+		"progressKey":    sessionKey(channel, chatID),
+	}).Info("buildCLIProgressEventHandler: cli channel resolution")
+
+	if cliCh == nil && remoteCLICh == nil {
+		return nil
+	}
+
+	progressKey := sessionKey(channel, chatID)
+	return func(event *ProgressEvent) {
+		if event == nil || event.Structured == nil {
+			return
+		}
+		s := event.Structured
+		if cliCh != nil {
+			payload := &channelpkg.CLIProgressPayload{
+				ChatID:           progressKey,
+				Phase:            string(s.Phase),
+				Iteration:        s.Iteration,
+				Thinking:         s.ThinkingContent,
+				Reasoning:        s.ReasoningContent,
+				HistoryCompacted: s.HistoryCompacted,
+			}
+			for _, t := range s.ActiveTools {
+				payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
+					Name:      t.Name,
+					Label:     t.Label,
+					Status:    string(t.Status),
+					Elapsed:   t.Elapsed.Milliseconds(),
+					Iteration: t.Iteration,
+					Summary:   t.Summary,
+				})
+			}
+			for _, t := range s.CompletedTools {
+				payload.CompletedTools = append(payload.CompletedTools, channelpkg.CLIToolProgress{
+					Name:      t.Name,
+					Label:     t.Label,
+					Status:    string(t.Status),
+					Elapsed:   t.Elapsed.Milliseconds(),
+					Iteration: t.Iteration,
+					Summary:   t.Summary,
+				})
+			}
+			if len(event.Lines) > 0 {
+				subAgents := ExtractSubAgentTree(event.Lines)
+				if len(subAgents) > 0 {
+					cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
+					for i, sa := range subAgents {
+						cliSubAgents[i] = channelpkg.CLISubAgent{
+							Role:     sa.Role,
+							Status:   sa.Status,
+							Desc:     sa.Desc,
+							Children: convertCLISubAgentTree(sa.Children),
+						}
+					}
+					payload.SubAgents = cliSubAgents
+				}
+			}
+			if len(s.Todos) > 0 {
+				payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+				for i, td := range s.Todos {
+					payload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+				}
+			}
+			if s.TokenUsage != nil {
+				payload.TokenUsage = &channelpkg.CLITokenUsage{
+					PromptTokens:     s.TokenUsage.PromptTokens,
+					CompletionTokens: s.TokenUsage.CompletionTokens,
+					TotalTokens:      s.TokenUsage.TotalTokens,
+					CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+					MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
+				}
+			}
+			cliCh.SendProgress(chatID, payload)
+			// Save snapshot + track iteration history for mid-session reconnect.
+			a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
+				return s.Iteration > prev.Iteration && prev.Iteration >= 0
+			})
+			a.lastProgressSnapshot.Store(progressKey, payload)
+		}
+		if remoteCLICh != nil {
+			payload := &channelpkg.WsProgressPayload{
+				ChatID:    progressKey,
+				Phase:     string(s.Phase),
+				Iteration: s.Iteration,
+				Thinking:  s.ThinkingContent,
+				Reasoning: s.ReasoningContent,
+			}
+			for _, t := range s.ActiveTools {
+				payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
+					Name:      t.Name,
+					Label:     t.Label,
+					Status:    string(t.Status),
+					Elapsed:   t.Elapsed.Milliseconds(),
+					Summary:   t.Summary,
+					Iteration: t.Iteration,
+				})
+			}
+			for _, t := range s.CompletedTools {
+				payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
+					Name:      t.Name,
+					Label:     t.Label,
+					Status:    string(t.Status),
+					Elapsed:   t.Elapsed.Milliseconds(),
+					Summary:   t.Summary,
+					Iteration: t.Iteration,
+				})
+			}
+			if len(event.Lines) > 0 {
+				subAgents := ExtractSubAgentTree(event.Lines)
+				if len(subAgents) > 0 {
+					wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
+					for i, sa := range subAgents {
+						wsSubAgents[i] = channelpkg.WsSubAgent{Role: sa.Role, Status: sa.Status, Desc: sa.Desc, Children: convertWsSubAgentTree(sa.Children)}
+					}
+					payload.SubAgents = wsSubAgents
+				}
+			}
+			if len(s.Todos) > 0 {
+				payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
+				for i, td := range s.Todos {
+					payload.Todos[i] = channelpkg.WsTodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+				}
+			}
+			if s.TokenUsage != nil {
+				payload.TokenUsage = &channelpkg.WsTokenUsage{
+					PromptTokens:     s.TokenUsage.PromptTokens,
+					CompletionTokens: s.TokenUsage.CompletionTokens,
+					TotalTokens:      s.TokenUsage.TotalTokens,
+					CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+					MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
+				}
+			}
+			remoteCLICh.SendProgress(chatID, payload)
+			// Store progress snapshot for remote CLI reconnect recovery.
+			// Without this, GetActiveProgress returns nil after CLI restart
+			// because only the local cliCh path stored snapshots.
+			cliPayload := &channelpkg.CLIProgressPayload{
+				ChatID:    progressKey,
+				Phase:     string(s.Phase),
+				Iteration: s.Iteration,
+				Thinking:  s.ThinkingContent,
+				Reasoning: s.ReasoningContent,
+			}
+			for _, t := range s.ActiveTools {
+				cliPayload.ActiveTools = append(cliPayload.ActiveTools, channelpkg.CLIToolProgress{
+					Name: t.Name, Label: t.Label, Status: string(t.Status),
+					Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+				})
+			}
+			for _, t := range s.CompletedTools {
+				cliPayload.CompletedTools = append(cliPayload.CompletedTools, channelpkg.CLIToolProgress{
+					Name: t.Name, Label: t.Label, Status: string(t.Status),
+					Elapsed: t.Elapsed.Milliseconds(), Iteration: t.Iteration, Summary: t.Summary,
+				})
+			}
+			if len(event.Lines) > 0 {
+				subAgents := ExtractSubAgentTree(event.Lines)
+				if len(subAgents) > 0 {
+					cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
+					for i, sa := range subAgents {
+						cliSubAgents[i] = channelpkg.CLISubAgent{
+							Role:     sa.Role,
+							Status:   sa.Status,
+							Desc:     sa.Desc,
+							Children: convertCLISubAgentTree(sa.Children),
+						}
+					}
+					cliPayload.SubAgents = cliSubAgents
+				}
+			}
+			if len(s.Todos) > 0 {
+				cliPayload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+				for i, td := range s.Todos {
+					cliPayload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+				}
+			}
+			if s.TokenUsage != nil {
+				cliPayload.TokenUsage = &channelpkg.CLITokenUsage{
+					PromptTokens:     s.TokenUsage.PromptTokens,
+					CompletionTokens: s.TokenUsage.CompletionTokens,
+					TotalTokens:      s.TokenUsage.TotalTokens,
+					CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+					MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
+				}
+			}
+			a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
+				return s.Iteration > prev.Iteration && prev.Iteration >= 0
+			})
+			a.lastProgressSnapshot.Store(progressKey, cliPayload)
+			log.WithFields(log.Fields{
+				"key":       progressKey,
+				"phase":     cliPayload.Phase,
+				"iteration": cliPayload.Iteration,
+				"active":    len(cliPayload.ActiveTools),
+				"completed": len(cliPayload.CompletedTools),
+			}).Info("remote CLI: stored progress snapshot")
+		}
+	}
+}
+
+// buildWebProgressEventHandler creates the progress event handler for the Web channel.
+// Returns nil if no Web channel is available.
+func (a *Agent) buildWebProgressEventHandler(chatID, channel string) func(*ProgressEvent) {
+	if a.channelFinder == nil {
+		return nil
+	}
+	ch, ok := a.channelFinder("web")
+	if !ok {
+		return nil
+	}
+	wc, ok := ch.(*channelpkg.WebChannel)
+	if !ok {
+		log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
+		return nil
+	}
+	progressKey := sessionKey(channel, chatID)
+	return func(event *ProgressEvent) {
+		if event == nil || event.Structured == nil {
+			return
+		}
+		s := event.Structured
+		payload := &channelpkg.WsProgressPayload{
+			Phase:     string(s.Phase),
+			Iteration: s.Iteration,
+			Thinking:  s.ThinkingContent,
+		}
+		for _, t := range s.ActiveTools {
+			payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
+				Name:      t.Name,
+				Label:     t.Label,
+				Status:    string(t.Status),
+				Elapsed:   t.Elapsed.Milliseconds(),
+				Summary:   t.Summary,
+				Iteration: t.Iteration,
+			})
+		}
+		for _, t := range s.CompletedTools {
+			payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
+				Name:      t.Name,
+				Label:     t.Label,
+				Status:    string(t.Status),
+				Elapsed:   t.Elapsed.Milliseconds(),
+				Summary:   t.Summary,
+				Iteration: t.Iteration,
+			})
+		}
+		// Parse sub-agent tree from progress lines
+		if len(event.Lines) > 0 {
+			subAgents := ExtractSubAgentTree(event.Lines)
+			if len(subAgents) > 0 {
+				wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
+				for i, sa := range subAgents {
+					wsSubAgents[i] = channelpkg.WsSubAgent{
+						Role:     sa.Role,
+						Status:   sa.Status,
+						Desc:     sa.Desc,
+						Children: convertWsSubAgentTree(sa.Children),
+					}
+				}
+				payload.SubAgents = wsSubAgents
+			}
+		}
+		// Copy todo items for web display
+		if len(s.Todos) > 0 {
+			payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
+			for i, td := range s.Todos {
+				payload.Todos[i] = channelpkg.WsTodoItem{
+					ID:   td.ID,
+					Text: td.Text,
+					Done: td.Done,
+				}
+			}
+		}
+		// Pass token usage snapshot
+		if s.TokenUsage != nil {
+			payload.TokenUsage = &channelpkg.WsTokenUsage{
+				PromptTokens:     s.TokenUsage.PromptTokens,
+				CompletionTokens: s.TokenUsage.CompletionTokens,
+				TotalTokens:      s.TokenUsage.TotalTokens,
+				CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+				MaxOutputTokens:  s.TokenUsage.MaxOutputTokens,
+			}
+		}
+
+		// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
+		wc.SendProgress(chatID, payload)
+
+		// Track iteration history: when iteration advances, snapshot the
+		// PREVIOUS iteration into the history list for mid-session reconnect.
+		cliSnapshot := payload.ToCLIProgressPayload()
+		a.recordIterationSnapshot(progressKey, func(prev *channelpkg.CLIProgressPayload) bool {
+			return s.Iteration > prev.Iteration && prev.Iteration >= 0
+		})
+		// Save current iteration snapshot
+		a.lastProgressSnapshot.Store(progressKey, cliSnapshot)
+	}
+}
+
+// buildStreamCallbacks resolves CLI and Web channels and returns stream content
+// and reasoning stream callbacks. Returns nil, nil if streaming is disabled or
+// no channels are available.
+func (a *Agent) buildStreamCallbacks(chatID, channel string) (streamContentFunc func(string), streamReasoningFunc func(string)) {
+	var cliCh *channelpkg.CLIChannel
+	var remoteCLICh *channelpkg.RemoteCLIChannel
+	if ch, ok := a.channelFinder("cli"); ok {
+		if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+			cliCh = cc
+		} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+			remoteCLICh = rc
+		}
+	}
+	var webCh *channelpkg.WebChannel
+	if ch, ok := a.channelFinder("web"); ok {
+		if wc, ok := ch.(*channelpkg.WebChannel); ok {
+			webCh = wc
+		}
+	}
+
+	streamContentFunc = func(content string) {
+		if cliCh != nil {
+			cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: sessionKey(channel, chatID), StreamContent: content})
+		}
+		if remoteCLICh != nil {
+			remoteCLICh.SendStreamContent(chatID, content, "")
+		}
+		if webCh != nil {
+			webCh.SendStreamContent(chatID, content, "")
+		}
+	}
+	streamReasoningFunc = func(content string) {
+		if cliCh != nil {
+			cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ChatID: sessionKey(channel, chatID), ReasoningStreamContent: content})
+		}
+		if remoteCLICh != nil {
+			remoteCLICh.SendStreamContent(chatID, "", content)
+		}
+		if webCh != nil {
+			webCh.SendStreamContent(chatID, "", content)
+		}
+	}
+	return streamContentFunc, streamReasoningFunc
 }

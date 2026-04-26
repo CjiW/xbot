@@ -1,11 +1,12 @@
 package tools
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"xbot/llm"
@@ -38,7 +39,7 @@ func (t *CdTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 		Path string `json:"path"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.Path == "" {
@@ -145,7 +146,7 @@ func detectProjectContext(dir string) string {
 	for _, m := range foundMarkers {
 		files = append(files, m.file)
 	}
-	sort.Strings(files)
+	slices.Sort(files)
 	seenFiles := make(map[string]bool)
 	var uniqueFiles []string
 	for _, f := range files {
@@ -288,11 +289,14 @@ func buildDirectoryTree(dir string) string {
 		items = append(items, dirEntry{name: name, isDir: e.IsDir(), size: info.Size()})
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].isDir != items[j].isDir {
-			return items[i].isDir
+	slices.SortFunc(items, func(a, b dirEntry) int {
+		if a.isDir != b.isDir {
+			if a.isDir {
+				return -1
+			}
+			return 1
 		}
-		return items[i].name < items[j].name
+		return cmp.Compare(a.name, b.name)
 	})
 
 	maxEntries := 30
@@ -343,11 +347,14 @@ func buildDirectoryTreeSandboxAPI(ctx *ToolContext, dir string) string {
 		items = append(items, dirEntry{name: name, isDir: e.IsDir, size: e.Size})
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].isDir != items[j].isDir {
-			return items[i].isDir
+	slices.SortFunc(items, func(a, b dirEntry) int {
+		if a.isDir != b.isDir {
+			if a.isDir {
+				return -1
+			}
+			return 1
 		}
-		return items[i].name < items[j].name
+		return cmp.Compare(a.name, b.name)
 	})
 
 	maxEntries := 30

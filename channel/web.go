@@ -581,6 +581,7 @@ func (p *WsProgressPayload) ToCLIProgressPayload() *CLIProgressPayload {
 			CompletionTokens: p.TokenUsage.CompletionTokens,
 			TotalTokens:      p.TokenUsage.TotalTokens,
 			CacheHitTokens:   p.TokenUsage.CacheHitTokens,
+			MaxOutputTokens:  p.TokenUsage.MaxOutputTokens,
 		}
 	}
 	for _, t := range p.Todos {
@@ -613,6 +614,7 @@ type WsTokenUsage struct {
 	CompletionTokens int64 `json:"completion_tokens,omitempty"`
 	TotalTokens      int64 `json:"total_tokens,omitempty"`
 	CacheHitTokens   int64 `json:"cache_hit_tokens,omitempty"`
+	MaxOutputTokens  int64 `json:"max_output_tokens,omitempty"`
 }
 
 // WsTodoItem represents a TODO item for web display.
@@ -987,7 +989,7 @@ func (wc *WebChannel) PushRunnerStatus(chatID, runnerName string, online bool) {
 		Type: "runner_status",
 		TS:   time.Now().Unix(),
 		Content: func() string {
-			b, _ := json.Marshal(map[string]interface{}{"runner_name": runnerName, "online": online})
+			b, _ := json.Marshal(map[string]any{"runner_name": runnerName, "online": online})
 			return string(b)
 		}(),
 	}
@@ -1002,7 +1004,7 @@ func (wc *WebChannel) PushSyncProgress(chatID, phase, message string) {
 		Type: "sync_progress",
 		TS:   time.Now().Unix(),
 		Content: func() string {
-			b, _ := json.Marshal(map[string]interface{}{"phase": phase, "message": message})
+			b, _ := json.Marshal(map[string]any{"phase": phase, "message": message})
 			return string(b)
 		}(),
 	}

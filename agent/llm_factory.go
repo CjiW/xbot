@@ -556,7 +556,7 @@ func (f *LLMFactory) GetLLMConcurrency(senderID string) int {
 // SetLLMConcurrency 设置用户的个人 LLM 并发上限配置。
 func (f *LLMFactory) SetLLMConcurrency(senderID string, personal int) error {
 	if f.settingsSvc == nil {
-		return fmt.Errorf("settings service not available")
+		return ErrSettingsUnavailable
 	}
 	return f.settingsSvc.SetSetting("feishu", senderID, "llm_max_concurrent_personal", fmt.Sprintf("%d", personal))
 }
@@ -634,151 +634,96 @@ func (f *LLMFactory) GetMaxOutputTokens(senderID string) int {
 	return 0
 }
 
-// GetLLMForModel 获取指定模型的 LLM 客户端，用于 SubAgent 使用不同于主 Agent 的模型。
+// GetLLMForModel returns the LLM client for a specific model (used by SubAgent).
 //
-// 查找优先级：
-//  1. 在用户所有订阅中查找 Model 字段精确匹配 targetModel 的订阅
-//  2. 使用当前活跃订阅的凭证 + targetModel
-//  3. 使用任意订阅的凭证 + targetModel（优先 Provider 匹配）
-//  4. Fallback 到主 Agent 的当前 LLM（忽略 targetModel）
+// Resolution strategy (no guessing, no fallback chains):
+//  1. If targetModel is a tier name (vanguard/balance/swift), resolve to the
+//     configured tier model name, then find a subscription that supports it.
+//  2. Look up the model in all subscriptions'\” cached model lists (exact match only).
+//  3. If not found in any subscription, fall back to the parent agent'\”s LLM
+//     (with its own model, NOT targetModel — avoids sending wrong model to wrong endpoint).
 //
-// 返回: (LLM客户端, 实际模型名, maxContext, thinkingMode, 是否使用了非默认模型)
+// Returns: (LLM client, actual model name, maxContext, thinkingMode, used non-default model)
 func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, string, int, string, bool) {
-	resolvedModel, _ := f.resolveTierModel(targetModel)
+	resolvedModel, fromTier := f.resolveTierModel(targetModel)
 	if resolvedModel == "" {
 		client, model, maxCtx, tm := f.GetLLM(senderID)
 		return client, model, maxCtx, tm, false
 	}
 
-	// Step 1: look up from cached model lists in DB — O(1), no API calls
+	// ── Exact match lookup: only guaranteed-correct resolution ──
 	modelMap := f.buildModelSubscriptionMap(senderID)
 	if sub, ok := modelMap[resolvedModel]; ok {
-		log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 1}).Info("[LLM] GetLLMForModel: cache hit")
 		client := f.createClientFromSub(sub, resolvedModel)
 		if client != nil {
+			source := "direct"
+			if fromTier {
+				source = "tier-exact"
+			}
+			log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "source": source}).Info("[LLM] GetLLMForModel: exact match found")
 			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
 		}
-	} else {
-		log.WithField("model", resolvedModel).Info("[LLM] GetLLMForModel: cache miss, trying subscriptions")
 	}
 
-	// Step 2: cache miss — try each subscription.
-	// First try config.json subscriptions (CLI mode), then DB subscriptions.
-	// Config subs match on Model field only (no CachedModels).
+	// ── Cache miss: try config.json subscriptions by Model field (CLI mode) ──
 	f.mu.RLock()
 	getConfigSubs := f.configSubsFn
 	f.mu.RUnlock()
-	var configSubs []config.SubscriptionConfig
 	if getConfigSubs != nil {
-		configSubs = getConfigSubs()
-	}
-	// Config subs don't have CachedModels. Search all subs by priority:
-	// 1. Exact Model field match → correct endpoint guaranteed
-	// 2. Provider guess match (e.g. "gpt-5-mini" → openai, "claude-*" → anthropic)
-	// NOT: "any valid sub" — using a random endpoint with a model that doesn't
-	// belong there causes 400 "model not supported" errors.
-	guessedProvider := guessProvider(resolvedModel)
-	var providerMatchSub *config.SubscriptionConfig
-	for i := range configSubs {
-		cs := &configSubs[i]
-		if cs.BaseURL == "" || cs.APIKey == "" {
-			continue
-		}
-		// Priority 1: exact Model match
-		if cs.Model == resolvedModel {
-			sub := configSubToLLMSubscription(*cs)
-			client := f.createClientFromSub(sub, resolvedModel)
-			if client != nil {
-				log.WithFields(log.Fields{"model": resolvedModel, "sub": cs.Name, "step": 2, "source": "config-exact"}).Info("[LLM] GetLLMForModel: found in config sub (exact)")
-				return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+		for _, cs := range getConfigSubs() {
+			if cs.BaseURL == "" || cs.APIKey == "" {
+				continue
 			}
-		}
-		// Priority 2: provider guess
-		if providerMatchSub == nil && guessedProvider != "" && strings.Contains(strings.ToLower(cs.Provider), guessedProvider) {
-			providerMatchSub = cs
-		}
-	}
-	// Try provider-matched sub
-	if providerMatchSub != nil {
-		sub := configSubToLLMSubscription(*providerMatchSub)
-		client := f.createClientFromSub(sub, resolvedModel)
-		if client != nil {
-			log.WithFields(log.Fields{"model": resolvedModel, "sub": providerMatchSub.Name, "step": 2, "source": "config-provider"}).Info("[LLM] GetLLMForModel: found via provider guess")
-			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+			if cs.Model == resolvedModel {
+				sub := configSubToLLMSubscription(cs)
+				client := f.createClientFromSub(sub, resolvedModel)
+				if client != nil {
+					log.WithFields(log.Fields{"model": resolvedModel, "sub": cs.Name, "source": "config-exact"}).Info("[LLM] GetLLMForModel: config sub exact match")
+					return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+				}
+			}
 		}
 	}
 
-	// DB subscriptions: search by CachedModels/Model match, then provider guess, then any valid sub.
+	// ── DB subscriptions: try API load for uncached subs (first-run only) ──
 	if f.subscriptionSvc != nil && senderID != "" {
 		subs, err := f.subscriptionSvc.List(senderID)
-		if err == nil && len(subs) > 0 {
-			var dbProviderSub *sqlite.LLMSubscription
+		if err == nil {
 			for _, sub := range subs {
-				if sub.BaseURL == "" || sub.APIKey == "" {
+				if sub.BaseURL == "" || sub.APIKey == "" || len(sub.CachedModels) > 0 {
+					continue // skip subs that already have a cache (already checked via modelMap)
+				}
+				client := f.createClientFromSub(sub, resolvedModel)
+				if client == nil {
 					continue
 				}
-				// Priority 1: model in CachedModels or exact Model field
-				found := sub.Model == resolvedModel
-				if !found {
-					for _, m := range sub.CachedModels {
-						if m == resolvedModel {
-							found = true
-							break
-						}
-					}
+				// First-run: load models from API to populate cache
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if loader, ok := client.(llm.ModelLoader); ok {
+					_ = loader.LoadModelsFromAPI(ctx)
 				}
-				if found {
-					client := f.createClientFromSub(sub, resolvedModel)
-					if client != nil {
-						log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 2}).Info("[LLM] GetLLMForModel: found in sub cache")
-						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
-					}
-				}
-				// No cache — try loading from API (first-run for this subscription)
-				if len(sub.CachedModels) == 0 {
-					client := f.createClientFromSub(sub, resolvedModel)
-					if client == nil {
-						continue
-					}
-					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-					if loader, ok := client.(llm.ModelLoader); ok {
-						_ = loader.LoadModelsFromAPI(ctx)
-					}
-					cancel()
-					// OnModelsLoaded callback updated DB — re-read sub to get fresh cache
-					updatedSubs, err2 := f.subscriptionSvc.List(senderID)
-					if err2 == nil {
-						for _, us := range updatedSubs {
-							if us.ID == sub.ID {
-								for _, m := range us.CachedModels {
-									if m == resolvedModel {
-										log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 2}).Info("[LLM] GetLLMForModel: found after API load")
-										return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
-									}
+				cancel()
+				// Re-read to get fresh cache
+				updatedSubs, err2 := f.subscriptionSvc.List(senderID)
+				if err2 == nil {
+					for _, us := range updatedSubs {
+						if us.ID == sub.ID {
+							for _, m := range us.CachedModels {
+								if m == resolvedModel {
+									log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "source": "api-load"}).Info("[LLM] GetLLMForModel: found after API load")
+									return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
 								}
 							}
 						}
 					}
 				}
-				// Collect fallbacks: provider guess only (no "any sub" — wrong endpoint risk)
-				if dbProviderSub == nil && guessedProvider != "" && strings.Contains(strings.ToLower(sub.Provider), guessedProvider) {
-					dbProviderSub = sub
-				}
-			}
-			// Priority 2: provider guess
-			if dbProviderSub != nil {
-				client := f.createClientFromSub(dbProviderSub, resolvedModel)
-				if client != nil {
-					log.WithFields(log.Fields{"model": resolvedModel, "sub": dbProviderSub.Name, "step": 2, "source": "db-provider"}).Info("[LLM] GetLLMForModel: found via provider guess (DB)")
-					return client, resolvedModel, dbProviderSub.MaxContext, dbProviderSub.ThinkingMode, true
-				}
 			}
 		}
 	}
 
-	// Fallback: model not found in any subscription — use default client with its OWN model
-	// (not resolvedModel, to avoid sending wrong model to wrong endpoint).
-	log.WithFields(log.Fields{"model": resolvedModel, "fallback": true}).Warn("[LLM] GetLLMForModel: model not found in any subscription, using default")
+	// ── Not found: fall back to parent agent'\''s LLM ──
+	// Use the parent'\''s model (NOT resolvedModel) to avoid sending wrong model to wrong endpoint.
+	log.WithFields(log.Fields{"model": resolvedModel, "tier": fromTier}).Warn("[LLM] GetLLMForModel: model not found in any subscription, using parent LLM")
 	client, defaultModel, maxCtx, tm := f.GetLLM(senderID)
 	return client, defaultModel, maxCtx, tm, false
 }

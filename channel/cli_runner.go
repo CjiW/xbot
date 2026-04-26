@@ -112,10 +112,10 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 		}
 
 		// 2. 创建日志回调
-		logf := func(format string, args ...interface{}) {
+		logf := func(format string, args ...any) {
 			if logFile != nil {
 				now := time.Now().Format("15:04:05")
-				fmt.Fprintf(logFile, "[%s] "+format+"\n", append([]interface{}{now}, args...)...)
+				fmt.Fprintf(logFile, "[%s] "+format+"\n", append([]any{now}, args...)...)
 			}
 		}
 

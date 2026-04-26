@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -9,54 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
-
-var cliUserScopedSettingKeys = map[string]struct{}{
-	"theme":                {},
-	"language":             {},
-	"context_mode":         {},
-	"max_iterations":       {},
-	"max_concurrency":      {},
-	"max_context_tokens":   {},
-	"enable_auto_compress": {},
-	"runner_server":        {},
-	"runner_token":         {},
-	"runner_workspace":     {},
-}
-
-var cliGlobalScopedSettingKeys = map[string]struct{}{
-	"vanguard_model":  {},
-	"balance_model":   {},
-	"swift_model":     {},
-	"sandbox_mode":    {},
-	"memory_provider": {},
-	"tavily_api_key":  {},
-	"enable_stream":   {},
-	"enable_masking":  {},
-	"default_user":    {},
-	"privileged_user": {},
-}
-
-// CLIRuntimeSettingKeys lists all setting keys that require runtime application
-// beyond DB persistence. Both serverapp and cmd/xbot-cli use this list to verify
-// every runtime-affecting key has a handler registered.
-//
-// To add a new runtime setting:
-//  1. Add the key here
-//  2. Add a handler to settingHandlerRegistry (serverapp) AND cliRuntimeHandlers (cmd/xbot-cli)
-//  3. That's it. The test TestAllRuntimeKeysHaveHandlers will catch omissions.
-var CLIRuntimeSettingKeys = []string{
-	"vanguard_model",
-	"balance_model",
-	"swift_model",
-	"sandbox_mode",
-	"memory_provider",
-	"tavily_api_key",
-	"context_mode",
-	"max_iterations",
-	"max_concurrency",
-	"max_context_tokens",
-	"enable_auto_compress",
-}
 
 // ParseSettingBool parses a boolean setting value.
 // Accepts "true", "1", "yes" (case-insensitive) as true; everything else as false.
@@ -75,21 +28,6 @@ func ParseSettingInt(value string, fallback int) int {
 	return n
 }
 
-var cliActionSettingKeys = map[string]struct{}{
-	"subscription_manage": {},
-	"runner_panel":        {},
-	"danger_zone":         {},
-}
-
-var cliSubscriptionScopedSettingKeys = map[string]struct{}{
-	"llm_provider":      {},
-	"llm_api_key":       {},
-	"llm_base_url":      {},
-	"llm_model":         {},
-	"max_output_tokens": {},
-	"thinking_mode":     {},
-}
-
 // isMaskedAPIKey detects API keys that were masked by the server for safe transport.
 // Server masks keys as "<prefix>****" (e.g. "sk-a****"). Writing masked keys
 // back to storage would destroy the real key — this function prevents that.
@@ -97,42 +35,10 @@ func isMaskedAPIKey(key string) bool {
 	return strings.HasSuffix(key, "****") && len(key) <= 20
 }
 
-func isUserScopedSettingKey(key string) bool {
-	_, ok := cliUserScopedSettingKeys[key]
-	return ok
-}
-
-func IsGlobalScopedSettingKey(key string) bool {
-	_, ok := cliGlobalScopedSettingKeys[key]
-	return ok
-}
-
-func isActionSettingKey(key string) bool {
-	_, ok := cliActionSettingKeys[key]
-	return ok
-}
-
-func isSubscriptionScopedSettingKey(key string) bool {
-	_, ok := cliSubscriptionScopedSettingKeys[key]
-	return ok
-}
-
-func cliSettingScope(key string) string {
-	if isUserScopedSettingKey(key) {
-		return "user"
-	}
-	if IsGlobalScopedSettingKey(key) {
-		return "global"
-	}
-	if isSubscriptionScopedSettingKey(key) {
-		return "subscription"
-	}
-	if isActionSettingKey(key) {
-		return "action"
-	}
-	return "unknown"
-}
-
+// Private scope-check wrappers — delegate to the unified registry in setting_keys.go.
+func isUserScopedSettingKey(key string) bool         { return IsUserScopedSettingKey(key) }
+func isSubscriptionScopedSettingKey(key string) bool { return IsSubscriptionScopedSettingKey(key) }
+func cliSettingScope(key string) string              { return SettingScopeOf(key) }
 func (m *cliModel) mergeCLISettingsValues() map[string]string {
 	values := make(map[string]string)
 	if m.channel == nil {
@@ -324,6 +230,12 @@ func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
 	// Apply the progress payload
 	m.progress = payload
 
+	// Cache token usage and max context for ready-status bar display
+	m.cacheTokenUsage(payload.TokenUsage)
+	if m.cachedMaxContextTokens == 0 {
+		m.cachedMaxContextTokens = m.resolveMaxContextTokens()
+	}
+
 	// Restore StartedAt for active tools so live elapsed timers work.
 	for i := range m.progress.ActiveTools {
 		t := &m.progress.ActiveTools[i]
@@ -378,13 +290,9 @@ func (m *cliModel) restoreProgressSnapshot(payload *CLIProgressPayload) {
 // owns iteration display entirely, and any static tool_summary from
 // ConvertMessagesToHistory would duplicate content with mismatched iteration numbers.
 func (m *cliModel) removeAllToolSummaries() {
-	filtered := m.messages[:0] // reuse backing array
-	for _, msg := range m.messages {
-		if msg.role != "tool_summary" {
-			filtered = append(filtered, msg)
-		}
-	}
-	m.messages = filtered
+	m.messages = slices.DeleteFunc(m.messages, func(msg cliMessage) bool {
+		return msg.role == "tool_summary"
+	})
 	m.renderCacheValid = false
 }
 
@@ -396,6 +304,10 @@ func (m *cliModel) removeAllToolSummaries() {
 func (m *cliModel) endAgentTurn(turnID uint64) {
 	if turnID != m.agentTurnID {
 		return // new turn already started — stale signal, ignore
+	}
+	// Persist token usage for ready-status bar before clearing progress
+	if m.progress != nil {
+		m.cacheTokenUsage(m.progress.TokenUsage)
 	}
 	m.lastCompletedTools = nil
 	m.iterationHistory = nil
@@ -1025,4 +937,45 @@ func (m *cliModel) handleUserList() {
 	}
 	sb.WriteString("\n`/user add <name>` to create · `/user del <name>` to delete")
 	m.showSystemMsg(sb.String(), feedbackInfo)
+}
+
+// cacheTokenUsage caches token usage data for the context bar display.
+// Called from all progress paths to avoid duplication.
+func (m *cliModel) cacheTokenUsage(tu *CLITokenUsage) {
+	if tu != nil && tu.PromptTokens > 0 {
+		m.lastTokenUsage = tu
+		if tu.MaxOutputTokens > 0 {
+			m.cachedMaxOutputTokens = tu.MaxOutputTokens
+		}
+	}
+}
+
+// resolveMaxContextTokens returns the max context tokens from settings values.
+// Falls back to 0 if unavailable (context usage display will be hidden).
+func (m *cliModel) resolveMaxContextTokens() int {
+	if m.channel == nil || m.channel.config.GetCurrentValues == nil {
+		return 0
+	}
+	values := m.channel.config.GetCurrentValues()
+	if v, ok := values["max_context_tokens"]; ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// resolveCompressRatio returns the compression threshold ratio from settings.
+// Falls back to 0 if unavailable (renderContextUsage will use its own default).
+func (m *cliModel) resolveCompressRatio() float64 {
+	if m.channel == nil || m.channel.config.GetCurrentValues == nil {
+		return 0
+	}
+	values := m.channel.config.GetCurrentValues()
+	if v, ok := values["compression_threshold"]; ok && v != "" {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 {
+			return f
+		}
+	}
+	return 0
 }

@@ -2,11 +2,12 @@ package tools
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func (t *LogsTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		Grep   string `json:"grep"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.Action == "" {
@@ -152,8 +153,8 @@ func (t *LogsTool) getLogFiles(logDir string) ([]logFileInfo, error) {
 	}
 
 	// 按文件名（日期）倒序排列
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Name > files[j].Name
+	slices.SortFunc(files, func(a, b logFileInfo) int {
+		return cmp.Compare(b.Name, a.Name) // newest first
 	})
 
 	return files, nil

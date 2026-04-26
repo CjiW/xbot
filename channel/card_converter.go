@@ -19,15 +19,15 @@ func ConvertFeishuCard(content string) string {
 	jsonStr := strings.TrimPrefix(content, "__FEISHU_CARD__")
 	jsonStr = strings.TrimSpace(jsonStr)
 
-	var card map[string]interface{}
+	var card map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &card); err != nil {
 		return jsonStr // fallback: return raw JSON
 	}
 
 	// Try to extract header.title.content
 	var result strings.Builder
-	if header, ok := card["header"].(map[string]interface{}); ok {
-		if title, ok := header["title"].(map[string]interface{}); ok {
+	if header, ok := card["header"].(map[string]any); ok {
+		if title, ok := header["title"].(map[string]any); ok {
 			if tc, ok := title["content"].(string); ok && tc != "" {
 				result.WriteString("# ")
 				result.WriteString(tc)
@@ -37,9 +37,9 @@ func ConvertFeishuCard(content string) string {
 	}
 
 	// Try to extract elements (simplified)
-	if elements, ok := card["elements"].([]interface{}); ok {
+	if elements, ok := card["elements"].([]any); ok {
 		for _, elem := range elements {
-			if obj, ok := elem.(map[string]interface{}); ok {
+			if obj, ok := elem.(map[string]any); ok {
 				tag, _ := obj["tag"].(string)
 				switch tag {
 				case "div":

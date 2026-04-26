@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"xbot/llm"
@@ -32,7 +32,7 @@ func (t *MemoryWriteTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 		Content string `json:"content"`
 	}](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
@@ -92,7 +92,7 @@ func (t *MemoryListTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 		return NewResult("(no memory files yet. Use memory_write to create some.)"), nil
 	}
 
-	sort.Strings(files)
+	slices.Sort(files)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Memory Files\n\nDirectory: %s\n\n", dir)
 	for _, f := range files {

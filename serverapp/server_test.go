@@ -154,6 +154,7 @@ func (b fakeBackend) SetCWD(_, _, _ string) error                               
 func (b fakeBackend) SetMaxIterations(_ int)                                         {}
 func (b fakeBackend) SetMaxConcurrency(_ int)                                        {}
 func (b fakeBackend) SetMaxContextTokens(_ int)                                      {}
+func (b fakeBackend) SetCompressionThreshold(_ float64)                              {}
 func (b fakeBackend) SetSandbox(_ tools.Sandbox, _ string)                           {}
 func (b fakeBackend) GetCardBuilder() *tools.CardBuilder                             { return nil }
 func (b fakeBackend) SetEventRouter(_ *event.Router)                                 {}
@@ -198,6 +199,7 @@ func (b fakeBackend) KillBgTask(_ string) error                                 
 func (b fakeBackend) CleanupCompletedBgTasks(_ string)                                   {}
 func (b fakeBackend) ListTenants() ([]agent.TenantInfo, error)                           { return nil, nil }
 func (b fakeBackend) GetHistory(_, _ string) ([]channel.HistoryMessage, error)           { return nil, nil }
+func (b fakeBackend) GetTokenState(_, _ string) (int64, int64, error)                    { return 0, 0, nil }
 func (b fakeBackend) TrimHistory(_, _ string, _ time.Time) error                         { return nil }
 func (b fakeBackend) ResetTokenState()                                                   {}
 func (b fakeBackend) GetChannelConfigs() (map[string]map[string]string, error)           { return nil, nil }

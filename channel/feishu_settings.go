@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -1704,14 +1705,9 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string, p
 	}
 
 	for _, e := range published {
-		found := false
-		for _, item := range local {
-			if strings.TrimPrefix(item, prefix) == e.Name {
-				found = true
-				break
-			}
-		}
-		if !found && e.Sharing == "public" {
+		if !slices.ContainsFunc(local, func(item string) bool {
+			return strings.TrimPrefix(item, prefix) == e.Name
+		}) && e.Sharing == "public" {
 			rows = append(rows, buildItemRow(e.Name, "✅ 已分享（本地已删除）",
 				actionBtn("📤 下架", "settings_unpublish", entryType, e.Name, pageState),
 			))

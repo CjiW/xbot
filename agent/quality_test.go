@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,14 +55,7 @@ func TestExtractFilePaths_AbsolutePaths(t *testing.T) {
 	text := "Read the files /workspace/xbot/agent/compress.go and /usr/local/bin/app"
 	paths := extractFilePaths(text)
 
-	found := false
-	for _, p := range paths {
-		if strings.Contains(p, "compress.go") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(paths, func(p string) bool { return strings.Contains(p, "compress.go") }) {
 		t.Errorf("expected to find compress.go, got %v", paths)
 	}
 }
@@ -79,14 +73,7 @@ func TestExtractFilePaths_TildePaths(t *testing.T) {
 	text := "Edit ~/config/settings.json"
 	paths := extractFilePaths(text)
 
-	found := false
-	for _, p := range paths {
-		if strings.Contains(p, "settings.json") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(paths, func(p string) bool { return strings.Contains(p, "settings.json") }) {
 		t.Errorf("expected to find settings.json, got %v", paths)
 	}
 }
@@ -127,14 +114,9 @@ func TestSplitToWords_BasicSplitting(t *testing.T) {
 func TestSplitToWords_CodeText(t *testing.T) {
 	words := splitToWords("handleCompress encountered nil pointer error")
 	// Stop words removed: "nil" is not a stop word, "error" is not
-	found := false
-	for _, w := range words {
-		if strings.EqualFold(w, "handleCompress") || strings.EqualFold(w, "nil") || strings.EqualFold(w, "error") {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(words, func(w string) bool {
+		return strings.EqualFold(w, "handleCompress") || strings.EqualFold(w, "nil") || strings.EqualFold(w, "error")
+	}) {
 		t.Errorf("expected to find meaningful words, got %v", words)
 	}
 }
@@ -245,13 +227,9 @@ func TestExtractDialogueFromTail_MaskedMarkerStripped(t *testing.T) {
 		}
 	}
 	// Should contain some info about the tool call (new format: **Shell**: `cat /etc/hosts`)
-	found := false
-	for _, msg := range result {
-		if strings.Contains(msg.Content, "**Shell**") && strings.Contains(msg.Content, "cat /etc/hosts") {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(result, func(msg llm.ChatMessage) bool {
+		return strings.Contains(msg.Content, "**Shell**") && strings.Contains(msg.Content, "cat /etc/hosts")
+	}) {
 		t.Error("tool call info should be preserved in stripped mask summary")
 	}
 }

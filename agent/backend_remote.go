@@ -606,6 +606,7 @@ func convertWsProgressToCLI(wp *channel.WsProgressPayload) *channel.CLIProgressP
 			CompletionTokens: wp.TokenUsage.CompletionTokens,
 			TotalTokens:      wp.TokenUsage.TotalTokens,
 			CacheHitTokens:   wp.TokenUsage.CacheHitTokens,
+			MaxOutputTokens:  wp.TokenUsage.MaxOutputTokens,
 		}
 	}
 	return payload
@@ -927,6 +928,12 @@ func (b *RemoteBackend) SetMaxConcurrency(n int) {
 func (b *RemoteBackend) SetMaxContextTokens(n int) {
 	if err := b.callRPCVoid("set_max_context_tokens", map[string]int{"n": n}); err != nil {
 		log.WithError(err).Warn("RemoteBackend: SetMaxContextTokens RPC failed")
+	}
+}
+
+func (b *RemoteBackend) SetCompressionThreshold(f float64) {
+	if err := b.callRPCVoid("set_compression_threshold", map[string]float64{"threshold": f}); err != nil {
+		log.WithError(err).Warn("RemoteBackend: SetCompressionThreshold RPC failed")
 	}
 }
 
@@ -1296,6 +1303,27 @@ func (b *RemoteBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage,
 	return result, nil
 }
 
+// GetTokenState retrieves the last API token counts from the remote server.
+func (b *RemoteBackend) GetTokenState(ch, chatID string) (promptTokens, completionTokens int64, err error) {
+	raw, err := b.callRPC("get_token_state", map[string]string{
+		"channel": ch, "chat_id": chatID,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, 0, nil
+	}
+	var result struct {
+		PromptTokens     int64 `json:"prompt_tokens"`
+		CompletionTokens int64 `json:"completion_tokens"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return 0, 0, err
+	}
+	return result.PromptTokens, result.CompletionTokens, nil
+}
+
 func (b *RemoteBackend) TrimHistory(ch, chatID string, cutoff time.Time) error {
 	if cutoff.IsZero() {
 		return nil
@@ -1357,7 +1385,7 @@ func RPCMethodList() []string {
 	return []string{
 		"get_context_mode", "set_context_mode",
 		"get_settings", "set_setting",
-		"set_max_iterations", "set_max_concurrency", "set_max_context_tokens",
+		"set_max_iterations", "set_max_concurrency", "set_max_context_tokens", "set_compression_threshold",
 		"get_default_model", "set_user_model", "switch_model",
 		"get_user_max_context", "set_user_max_context",
 		"get_user_max_output_tokens", "set_user_max_output_tokens",

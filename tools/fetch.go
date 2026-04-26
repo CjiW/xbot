@@ -67,7 +67,7 @@ func (t *FetchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 	// 解析参数
 	params, err := parseToolArgs[fetchParams](input)
 	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
+		return nil, err
 	}
 
 	if params.URL == "" {

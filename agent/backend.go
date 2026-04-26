@@ -128,6 +128,9 @@ type AgentBackend interface {
 	// SetMaxContextTokens sets the max context token limit.
 	SetMaxContextTokens(n int)
 
+	// SetCompressionThreshold sets the context compression threshold ratio.
+	SetCompressionThreshold(f float64)
+
 	// SetSandbox replaces the sandbox instance and mode at runtime.
 	SetSandbox(sb tools.Sandbox, mode string)
 
@@ -262,6 +265,10 @@ type AgentBackend interface {
 	// GetHistory retrieves session messages for a channel/chatID pair.
 	// RemoteBackend forwards via RPC; LocalBackend reads from local DB.
 	GetHistory(channel, chatID string) ([]channel.HistoryMessage, error)
+
+	// GetTokenState retrieves the last API token counts for a session.
+	// Returns (0, 0, nil) when no data is available.
+	GetTokenState(channel, chatID string) (promptTokens, completionTokens int64, err error)
 
 	// TrimHistory deletes messages newer than or equal to cutoff for a channel/chatID.
 	// Used by CLI Ctrl+K session truncation. RemoteBackend forwards via RPC.

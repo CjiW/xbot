@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	githubAPIURL = "https://api.github.com/repos/CjiW/xbot/releases/latest"
-	checkTimeout = 10 * time.Second
+	newRepoAPIURL = "https://api.github.com/repos/ai-pivot/xbot/releases/latest"
+	oldRepoAPIURL = "https://api.github.com/repos/CjiW/xbot/releases/latest"
+	checkTimeout  = 10 * time.Second
 )
 
 // githubRelease represents the GitHub API response for a release.
@@ -70,6 +71,10 @@ func isNewer(a, b string) bool {
 // CheckUpdate queries GitHub Releases API for the latest version and compares
 // with the local build version. Returns nil if the check fails or version is a
 // dev build (in which case the caller should silently ignore).
+//
+// Migration: tries the new repo (ai-pivot/xbot) first. If the new repo has no
+// releases yet, falls back to the old repo (CjiW/xbot) so existing users don't
+// lose update notifications during the transition.
 func CheckUpdate(ctx context.Context) *UpdateInfo {
 	// Skip if version is completely empty
 	if Version == "" {
@@ -79,7 +84,27 @@ func CheckUpdate(ctx context.Context) *UpdateInfo {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIURL, nil)
+	release := fetchLatestRelease(ctx, newRepoAPIURL)
+	if release == nil {
+		release = fetchLatestRelease(ctx, oldRepoAPIURL)
+	}
+	if release == nil || release.TagName == "" {
+		return nil
+	}
+
+	hasUpdate := isNewer(Version, release.TagName)
+	return &UpdateInfo{
+		Current:   Version,
+		Latest:    release.TagName,
+		URL:       release.HTMLURL,
+		HasUpdate: hasUpdate,
+	}
+}
+
+// fetchLatestRelease queries a single GitHub repo's latest release API.
+// Returns nil on any error (network, non-200, parse failure).
+func fetchLatestRelease(ctx context.Context, apiURL string) *githubRelease {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil
 	}
@@ -106,15 +131,5 @@ func CheckUpdate(ctx context.Context) *UpdateInfo {
 		return nil
 	}
 
-	if release.TagName == "" {
-		return nil
-	}
-
-	hasUpdate := isNewer(Version, release.TagName)
-	return &UpdateInfo{
-		Current:   Version,
-		Latest:    release.TagName,
-		URL:       release.HTMLURL,
-		HasUpdate: hasUpdate,
-	}
+	return &release
 }

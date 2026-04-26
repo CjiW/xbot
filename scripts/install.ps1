@@ -15,7 +15,7 @@
 .PARAMETER Port
     Server port for server-client mode (default 8082).
 .EXAMPLE
-    irm https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.ps1 | iex
+    irm https://raw.githubusercontent.com/ai-pivot/xbot/master/scripts/install.ps1 | iex
 .EXAMPLE
     .\install.ps1 -Version v0.1.0
 .EXAMPLE
@@ -32,7 +32,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$REPO = "CjiW/xbot"
+$REPO = "ai-pivot/xbot"
 $BINARY = "xbot-cli.exe"
 $SERVICE_NAME = "xbot-server"
 $DEFAULT_PORT = 8082

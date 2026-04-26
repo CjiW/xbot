@@ -676,7 +676,7 @@ func main() {
 		switch os.Args[1] {
 		case "install":
 			fmt.Println("install 子命令已不再主推，请使用 scripts/install.sh")
-			fmt.Println("例如: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash")
+			fmt.Println("例如: curl -fsSL https://raw.githubusercontent.com/ai-pivot/xbot/master/scripts/install.sh | bash")
 			return
 		case "serve":
 			if err := serverapp.Run(os.Args[2:]); err != nil {

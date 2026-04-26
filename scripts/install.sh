@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="CjiW/xbot"
+REPO="ai-pivot/xbot"
 BINARY="xbot-cli"
 # Default to user-local install (no sudo required)
 INSTALL_PATH="${INSTALL_PATH:-$HOME/.local/bin}"

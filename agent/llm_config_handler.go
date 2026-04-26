@@ -22,6 +22,7 @@ const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key
                   DeepSeek/OpenAI reasoning:
                     - enabled: 强制开启
                     - disabled: 强制关闭
+                    - {"thinking":{"type":"enabled"},"reasoning_effort":"high"}: 指定思考强度 (high/max)
                   智谱 GLM:
                     - {"type":"enabled","clear_thinking":false}: 保留式思考（多轮推理连贯）
                   Anthropic Claude:
@@ -37,6 +38,9 @@ const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key
 
   # DeepSeek R1 (Thinking Mode)
   /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-reasoner thinking_mode=enabled
+
+  # DeepSeek R1 with reasoning_effort (控制思考强度)
+  /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-reasoner thinking_mode={"thinking":{"type":"enabled"},"reasoning_effort":"high"}
 
   # 智谱 GLM-5/GLM-4.7 (深度思考)
   /set-llm provider=openai base_url=https://open.bigmodel.cn/api/paas/v4 api_key=xxx model=glm-5 thinking_mode=enabled

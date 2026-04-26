@@ -506,6 +506,8 @@ func localeZH() *UILocale {
 					{Label: "开启", Value: "enabled"},
 					{Label: "开启（保留历史推理）", Value: `{"type":"enabled","clear_thinking":false}`},
 					{Label: "关闭", Value: "disabled"},
+					{Label: "DeepSeek: effort=high", Value: `{"thinking":{"type":"enabled"},"reasoning_effort":"high"}`},
+					{Label: "DeepSeek: effort=max", Value: `{"thinking":{"type":"enabled"},"reasoning_effort":"max"}`},
 				},
 			},
 			{
@@ -885,6 +887,8 @@ func localeEN() *UILocale {
 					{Label: "Enabled", Value: "enabled"},
 					{Label: "Enabled (Preserved)", Value: `{"type":"enabled","clear_thinking":false}`},
 					{Label: "Disabled", Value: "disabled"},
+					{Label: "DeepSeek: effort=high", Value: `{"thinking":{"type":"enabled"},"reasoning_effort":"high"}`},
+					{Label: "DeepSeek: effort=max", Value: `{"thinking":{"type":"enabled"},"reasoning_effort":"max"}`},
 				},
 			},
 			{
@@ -1264,6 +1268,8 @@ func localeJA() *UILocale {
 					{Label: "有効", Value: "enabled"},
 					{Label: "有効（推論保持）", Value: `{"type":"enabled","clear_thinking":false}`},
 					{Label: "無効", Value: "disabled"},
+					{Label: "DeepSeek: effort=high", Value: `{"thinking":{"type":"enabled"},"reasoning_effort":"high"}`},
+					{Label: "DeepSeek: effort=max", Value: `{"thinking":{"type":"enabled"},"reasoning_effort":"max"}`},
 				},
 			},
 			{

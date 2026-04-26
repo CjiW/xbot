@@ -229,7 +229,7 @@ func TestTokenTracker_DetectTruncation_EmptyMessages(t *testing.T) {
 // EstimateTotal
 // ----------------------------------------------------------------
 
-func TestTokenTracker_EstimateTotal_APIPlusCompletion(t *testing.T) {
+func TestTokenTracker_EstimateTotal_APIPrompt(t *testing.T) {
 	tt := NewTokenTracker(0, 0)
 	tt.RecordLLMCall(1000, 200, 5)
 
@@ -237,15 +237,16 @@ func TestTokenTracker_EstimateTotal_APIPlusCompletion(t *testing.T) {
 	msgs := makeMessages(5)
 	total, source := tt.EstimateTotal(msgs, testModel)
 
-	if total != 1200 {
-		t.Errorf("expected total=1200 (1000+200), got %d", total)
+	// Total should be promptTokens only — completionTokens are output tokens, not context.
+	if total != 1000 {
+		t.Errorf("expected total=1000 (prompt only), got %d", total)
 	}
-	if source != "api+completion" {
-		t.Errorf("expected source='api+completion', got %q", source)
+	if source != "api_prompt" {
+		t.Errorf("expected source='api_prompt', got %q", source)
 	}
 }
 
-func TestTokenTracker_EstimateTotal_APIPlusCompletionPlusToolDelta(t *testing.T) {
+func TestTokenTracker_EstimateTotal_APIPromptPlusToolDelta(t *testing.T) {
 	tt := NewTokenTracker(0, 0)
 	tt.RecordLLMCall(1000, 200, 3)
 
@@ -253,15 +254,16 @@ func TestTokenTracker_EstimateTotal_APIPlusCompletionPlusToolDelta(t *testing.T)
 	msgs := makeMessages(6)
 	total, source := tt.EstimateTotal(msgs, testModel)
 
-	if total <= 1200 {
-		t.Errorf("expected total > 1200 (with tool delta), got %d", total)
+	// Total should be promptTokens + tool delta (not including completionTokens)
+	if total <= 1000 {
+		t.Errorf("expected total > 1000 (with tool delta), got %d", total)
 	}
-	if source != "api+completion+tool_delta" {
-		t.Errorf("expected source='api+completion+tool_delta', got %q", source)
+	if source != "api_prompt+tool_delta" {
+		t.Errorf("expected source='api_prompt+tool_delta', got %q", source)
 	}
 }
 
-func TestTokenTracker_EstimateTotal_APIPlusCompletionExactBoundary(t *testing.T) {
+func TestTokenTracker_EstimateTotal_APIPromptExactBoundary(t *testing.T) {
 	tt := NewTokenTracker(0, 0)
 	tt.RecordLLMCall(1000, 200, 5)
 
@@ -269,11 +271,11 @@ func TestTokenTracker_EstimateTotal_APIPlusCompletionExactBoundary(t *testing.T)
 	msgs := makeMessages(6)
 	total, source := tt.EstimateTotal(msgs, testModel)
 
-	if total != 1200 {
-		t.Errorf("expected total=1200 (no delta), got %d", total)
+	if total != 1000 {
+		t.Errorf("expected total=1000 (prompt only, no delta), got %d", total)
 	}
-	if source != "api+completion" {
-		t.Errorf("expected source='api+completion', got %q", source)
+	if source != "api_prompt" {
+		t.Errorf("expected source='api_prompt', got %q", source)
 	}
 }
 

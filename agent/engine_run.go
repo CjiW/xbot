@@ -151,8 +151,11 @@ func (s *runState) initProgress() {
 			s.structuredProgress.TokenUsage = &TokenUsageSnapshot{
 				PromptTokens:     s.tokenTracker.PromptTokens(),
 				CompletionTokens: s.tokenTracker.CompletionTokens(),
-				TotalTokens:      s.tokenTracker.PromptTokens() + s.tokenTracker.CompletionTokens(),
-				MaxOutputTokens:  int64(s.cfg.MaxOutputTokens),
+				// TotalTokens represents the current context fill (input tokens only).
+				// Do NOT add CompletionTokens — those are output tokens from the
+				// previous Run's API response, NOT part of the current prompt.
+				TotalTokens:     s.tokenTracker.PromptTokens(),
+				MaxOutputTokens: int64(s.cfg.MaxOutputTokens),
 			}
 		}
 	}
@@ -391,9 +394,11 @@ func (s *runState) updateTokenUsage() {
 	s.structuredProgress.TokenUsage = &TokenUsageSnapshot{
 		PromptTokens:     s.tokenTracker.PromptTokens(),
 		CompletionTokens: s.tokenTracker.CompletionTokens(),
-		TotalTokens:      s.tokenTracker.PromptTokens() + s.tokenTracker.CompletionTokens(),
-		CacheHitTokens:   int64(s.localCachedTokens),
-		MaxOutputTokens:  int64(s.cfg.MaxOutputTokens),
+		// TotalTokens = current context fill (prompt tokens only).
+		// CompletionTokens are output tokens, not part of context.
+		TotalTokens:     s.tokenTracker.PromptTokens(),
+		CacheHitTokens:  int64(s.localCachedTokens),
+		MaxOutputTokens: int64(s.cfg.MaxOutputTokens),
 	}
 }
 

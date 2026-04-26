@@ -1570,7 +1570,7 @@ func TestRun_TokenUsageInProgress(t *testing.T) {
 	if capturedSnapshot.CompletionTokens != 300 {
 		t.Errorf("CompletionTokens = %d, want 300", capturedSnapshot.CompletionTokens)
 	}
-	if capturedSnapshot.TotalTokens != 1800 {
-		t.Errorf("TotalTokens = %d, want 1800", capturedSnapshot.TotalTokens)
+	if capturedSnapshot.TotalTokens != 1500 {
+		t.Errorf("TotalTokens = %d, want 1500 (context fill = prompt tokens only)", capturedSnapshot.TotalTokens)
 	}
 }

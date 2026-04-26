@@ -810,22 +810,13 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 	return leftText
 }
 
-// formatTokenCount 格式化 Token 使用量为紧凑字符串
+// formatTokenCount formats token usage for the fallback status line (when context bar is unavailable).
+// Shows prompt tokens (context fill) as the primary metric.
 func formatTokenCount(tu *CLITokenUsage) string {
-	if tu.TotalTokens < 1000 {
-		return fmt.Sprintf("tokens: %d", tu.TotalTokens)
+	if tu.PromptTokens < 1000 {
+		return fmt.Sprintf("ctx: %d tokens", tu.PromptTokens)
 	}
-	parts := []string{}
-	if tu.PromptTokens > 0 {
-		parts = append(parts, fmt.Sprintf("in:%d", tu.PromptTokens))
-	}
-	if tu.CompletionTokens > 0 {
-		parts = append(parts, fmt.Sprintf("out:%d", tu.CompletionTokens))
-	}
-	if len(parts) > 0 {
-		return "tokens: " + strings.Join(parts, " ") + fmt.Sprintf(" = %d", tu.TotalTokens)
-	}
-	return fmt.Sprintf("tokens: %d", tu.TotalTokens)
+	return fmt.Sprintf("ctx: %s", formatTokenCompact(tu.PromptTokens))
 }
 
 // Pre-created styles for context bar (avoid per-frame allocation).

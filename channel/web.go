@@ -463,6 +463,7 @@ type wsMessage struct {
 	SenderID        string             `json:"sender_id,omitempty"`
 	SenderName      string             `json:"sender_name,omitempty"`
 	ChatType        string             `json:"chat_type,omitempty"`
+	SessionReset    bool               `json:"session_reset,omitempty"` // signals /new — CLI should clear context usage bar
 	// RPC response fields (used when Type == "rpc_response")
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
@@ -903,6 +904,7 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		ProgressHistory: msg.Metadata["progress_history"],
 		Channel:         msg.Channel,
 		ChatID:          msg.ChatID,
+		SessionReset:    msg.Metadata != nil && msg.Metadata["session_reset"] == "true",
 	}
 
 	targetClientID := msg.ChatID

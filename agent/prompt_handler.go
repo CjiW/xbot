@@ -139,9 +139,21 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 		a.maskStore.Clear()
 	}
 
+	// Clear token state so the context usage bar resets on /new.
+	// Without this, the next Run() would restore stale token counts from DB
+	// and the CLI progress bar would show the old session's usage.
+	if memSvc := tenantSession.MemoryService(); memSvc != nil {
+		if err := memSvc.SetTokenState(ctx, tenantSession.TenantID(), 0, 0); err != nil {
+			log.Ctx(ctx).WithError(err).WithField("tenant_id", tenantSession.TenantID()).Warn("Failed to clear token state on /new")
+		}
+	}
+
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
 		Content: "会话已重置，记忆已归档。",
+		Metadata: map[string]string{
+			"session_reset": "true",
+		},
 	}, nil
 }

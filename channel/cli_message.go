@@ -702,6 +702,13 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.renderCacheValid = false
 		m.updateViewportContent()
 
+		// §11.5 Session reset: clear token usage bar after /new
+		if msg.Metadata != nil && msg.Metadata["session_reset"] == "true" {
+			m.lastTokenUsage = nil
+			m.ctxBarCacheKey = ""
+			m.ctxBarCache = ""
+		}
+
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
 		if msg.WaitingUser {
 			var items []askItem

@@ -149,7 +149,7 @@ func (t *FetchTool) fetchURL(ctx *ToolContext, targetURL string) (*http.Response
 	}
 
 	// 设置合理的 User-Agent
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; xbot/1.0; +https://github.com/CjiW/xbot)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; xbot/1.0; +https://github.com/ai-pivot/xbot)")
 
 	// 不发送 Authorization header
 	req.Header.Del("Authorization")

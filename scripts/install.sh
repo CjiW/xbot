@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="CjiW/xbot"
+REPO="ai-pivot/xbot"
+FALLBACK_REPO="CjiW/xbot"
 BINARY="xbot-cli"
 # Default to user-local install (no sudo required)
 INSTALL_PATH="${INSTALL_PATH:-$HOME/.local/bin}"
@@ -47,6 +48,9 @@ resolve_version() {
     fi
     local tag
     tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$tag" ]; then
+        tag=$(curl -fsSL "https://api.github.com/repos/${FALLBACK_REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    fi
     [ -n "$tag" ] || error "Failed to determine latest version. Set VERSION env var explicitly."
     echo "$tag"
 }
@@ -255,6 +259,9 @@ download_web_dist() {
     fi
     if curl -fSL ${curl_progress} "$dist_url" | tar xzf - -C "$target_dir" 2>/dev/null; then
         info "Web UI installed to ${target_dir} ✓"
+    elif curl -fSL ${curl_progress} "https://github.com/${FALLBACK_REPO}/releases/download/${version}/xbot-web-dist.tar.gz" | tar xzf - -C "$target_dir" 2>/dev/null; then
+        warn "Web UI downloaded from fallback repo ${FALLBACK_REPO}"
+        info "Web UI installed to ${target_dir} ✓"
     else
         warn "Failed to download Web UI frontend. The server will run in API-only mode."
         warn "You can manually download it later from: ${dist_url}"
@@ -416,13 +423,22 @@ main() {
     if [ -t 2 ]; then
         curl_progress="--progress-bar"
     fi
-    if ! curl -fSL ${curl_progress} -o "${TMPDIR}/${BINARY}" "$DOWNLOAD_URL"; then
-        error "Download failed. Check the version and platform."
+    # Try new repo first; fall back to old repo if release not found
+    # (during migration from CjiW/xbot → ai-pivot/xbot)
+    if ! curl -fSL ${curl_progress} -o "${TMPDIR}/${BINARY}" "$DOWNLOAD_URL" 2>/dev/null; then
+        FALLBACK_URL="https://github.com/${FALLBACK_REPO}/releases/download/${VERSION}/xbot-cli-${PLATFORM}"
+        warn "Release not found on ${REPO}, trying fallback ${FALLBACK_REPO}..."
+        DOWNLOAD_URL="$FALLBACK_URL"
+        if ! curl -fSL ${curl_progress} -o "${TMPDIR}/${BINARY}" "$DOWNLOAD_URL"; then
+            error "Download failed from both repos. Check the version and platform."
+        fi
     fi
 
     if command -v shasum >/dev/null 2>&1; then
         info "Verifying checksum..."
-        curl -fsSL "https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt" -o "${TMPDIR}/checksums.txt" 2>/dev/null || warn "Checksum file not found, skipping verification."
+        curl -fsSL "https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt" -o "${TMPDIR}/checksums.txt" 2>/dev/null \
+            || curl -fsSL "https://github.com/${FALLBACK_REPO}/releases/download/${VERSION}/checksums.txt" -o "${TMPDIR}/checksums.txt" 2>/dev/null \
+            || warn "Checksum file not found, skipping verification."
         if [ -f "${TMPDIR}/checksums.txt" ]; then
             expected=$(grep "xbot-cli-${PLATFORM}" "${TMPDIR}/checksums.txt" | awk '{print $1}')
             actual=$(shasum -a 256 "${TMPDIR}/${BINARY}" | awk '{print $1}')

@@ -36,10 +36,10 @@
 
 ```bash
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ai-pivot/xbot/master/scripts/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/ai-pivot/xbot/master/scripts/install.ps1 | iex
 ```
 
 指定版本或安装路径：
@@ -154,7 +154,7 @@ xbot-cli
 ## 从源码构建
 
 ```bash
-git clone https://github.com/CjiW/xbot.git && cd xbot
+git clone https://github.com/ai-pivot/xbot.git && cd xbot
 make build          # 构建 xbot (server + runner)
 make run            # 构建并运行 server
 ```

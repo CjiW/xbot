@@ -32,10 +32,10 @@ weight: 0
 
 ```bash
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ai-pivot/xbot/master/scripts/install.sh | bash
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/ai-pivot/xbot/master/scripts/install.ps1 | iex
 ```
 
 安装完成后运行 `xbot-cli`，首次会弹出 Setup 向导引导你配置 API Key。

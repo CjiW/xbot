@@ -657,12 +657,28 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 		// 不发送任何 thinking 参数，让模型自己决定
 	default:
 		// JSON 格式的 thinking 参数
+		// Supports two formats:
+		//   1. Flat thinking object: {"type": "enabled"} → set as "thinking" param
+		//   2. Nested with extras:   {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+		//      → "thinking" object goes to "thinking" param, other keys become top-level params
+		//   3. Arbitrary key-values: {"reasoning_effort": "high"} → each key is a top-level param
 		if len(thinkingMode) > 0 && thinkingMode[0] == '{' {
 			var customParams map[string]any
 			if err := json.Unmarshal([]byte(thinkingMode), &customParams); err == nil {
-				if _, hasType := customParams["type"]; hasType {
+				if thinkingObj, hasThinking := customParams["thinking"]; hasThinking {
+					// Format 2: explicit "thinking" key + optional top-level params
+					opts = append(opts, option.WithJSONSet("thinking", thinkingObj))
+					for key, value := range customParams {
+						if key == "thinking" {
+							continue
+						}
+						opts = append(opts, option.WithJSONSet(key, value))
+					}
+				} else if _, hasType := customParams["type"]; hasType {
+					// Format 1: flat thinking object
 					opts = append(opts, option.WithJSONSet("thinking", customParams))
 				} else {
+					// Format 3: arbitrary key-values
 					for key, value := range customParams {
 						opts = append(opts, option.WithJSONSet(key, value))
 					}

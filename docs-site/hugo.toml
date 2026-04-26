@@ -13,7 +13,7 @@ pygmentsCodeFences = true
 
 [params]
   geekdocToC = 3
-  geekdocRepo = "https://github.com/CjiW/xbot"
+  geekdocRepo = "https://github.com/ai-pivot/xbot"
   geekdocEditPath = "edit/master/docs-site"
 
 [markup]

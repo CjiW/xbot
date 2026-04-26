@@ -120,6 +120,7 @@ type wsIncomingMessage struct {
 	Error           string                     `json:"error,omitempty"`
 	Channel         string                     `json:"channel,omitempty"`
 	ChatID          string                     `json:"chat_id,omitempty"`
+	SessionReset    bool                       `json:"session_reset,omitempty"`
 }
 
 // wsOutgoingMessage represents a message sent to the server.
@@ -466,6 +467,9 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			}
 			if msg.ProgressHistory != "" {
 				outMsg.Metadata["progress_history"] = msg.ProgressHistory
+			}
+			if msg.SessionReset {
+				outMsg.Metadata["session_reset"] = "true"
 			}
 			b.outboundMu.RLock()
 			cb := b.outboundCb

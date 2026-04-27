@@ -2,6 +2,9 @@
   <strong>xbot</strong> — 自托管 AI Agent，接入你的飞书 / QQ / 终端 / 浏览器
 </p>
 
+> [!WARNING]
+**项目已迁移**：本仓库已迁移至 [ai-pivot/xbot](https://github.com/ai-pivot/xbot)，后续开发和 Issue 请移步新仓库。此仓库不再维护。
+
 <p align="center">
 <img alt="Streaming" src="docs-site/static/img/cli/streaming.gif" width="720">
 </p>
